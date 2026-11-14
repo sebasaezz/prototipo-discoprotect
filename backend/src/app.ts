@@ -1,4 +1,4 @@
-import Fastify, { type FastifyRequest } from 'fastify';
+import Fastify, { LogController, type FastifyRequest } from 'fastify';
 import { authenticate, issueSession, requireMembership, requireRole } from './auth.js';
 import type { Pins } from './config.js';
 import type { Db } from './db.js';
@@ -6,7 +6,7 @@ import { ApiError, parse } from './errors.js';
 import * as records from './records.js';
 
 export function createApp(db: Db, pins: Pins, logging = false) {
-  const app = Fastify({ logger: logging, logController: { disableRequestLogging: true }, bodyLimit: 32 * 1024 });
+  const app = Fastify({ logger: logging, logController: new LogController({ disableRequestLogging: true }), bodyLimit: 32 * 1024 });
   const session = (request: FastifyRequest) => authenticate(db, request.headers.authorization);
   const attendee = (request: FastifyRequest) => {
     const current = session(request);
