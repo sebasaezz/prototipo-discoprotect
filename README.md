@@ -1,6 +1,6 @@
 # Discoprotect
 
-Prototipo universitario de seguridad para eventos masivos. H0–H1 incluyen el NFC de identificación, dos pantallas Android y una API local con datos ficticios. AppPersonal consulta fichas locales durante H1. H2 incorporará la consulta al servidor.
+Prototipo universitario de seguridad para eventos masivos. AppPersonal lee el identificador NFC, cierra la conexión con AppAsistente y consulta la ficha actualizada en el servidor. La demo local sigue disponible desde la configuración.
 
 ## Backend
 
@@ -30,7 +30,7 @@ Para escuchar en LAN, configura `HOST=0.0.0.0` y `PORT` en `.env`. Permite el pu
 JDK 21, SDK Android 36 y Gradle Wrapper 8.13. Configura `ANDROID_HOME` o `sdk.dir` en un `local.properties` de uso local. Las apps mantienen AGP 8.13.0, Kotlin 2.2.20, Compose BOM 2025.10.00, bytecode Java 17 y Android mínimo API 26.
 
 ```sh
-./gradlew :protocol:test :emitter:assembleDebug :reader:assembleDebug :emitter:lintDebug :reader:lintDebug
+./gradlew :protocol:test :emitter:assembleDebug :reader:assembleDebug :reader:testDebugUnitTest :emitter:lintDebug :reader:lintDebug
 ```
 
 En Windows usa `./gradlew.bat`. Si la ruta incluye tildes y falla el proceso JVM de pruebas, ejecuta desde una ruta ASCII o crea un alias con una letra libre:
@@ -39,7 +39,7 @@ En Windows usa `./gradlew.bat`. Si la ruta incluye tildes y falla el proceso JVM
 subst T: "$PWD"
 Push-Location T:\
 try {
-    ./gradlew.bat :protocol:test :emitter:assembleDebug :reader:assembleDebug :emitter:lintDebug :reader:lintDebug
+    ./gradlew.bat :protocol:test :emitter:assembleDebug :reader:assembleDebug :reader:testDebugUnitTest :emitter:lintDebug :reader:lintDebug
 } finally {
     Pop-Location
     subst T: /D
@@ -55,6 +55,8 @@ Consulta los seriales con `adb devices -l`. Instala cada APK con `adb -s <SERIAL
 
 [Contrato NFC y checklist Samsung](docs/nfc-contract.md) · [Design System](docs/design-system.md)
 
+[Guion H2 para Windows y los Samsung](docs/h2-lan.md)
+
 ## Continuidad
 
-[Arquitectura y preparación de H2](docs/architecture.md) · [Modelo de datos](docs/data-model.md) · [Roadmap H0–H10](docs/roadmap.md)
+[Arquitectura de H2](docs/architecture.md) · [Modelo de datos](docs/data-model.md) · [Roadmap H0–H10](docs/roadmap.md)

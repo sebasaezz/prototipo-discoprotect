@@ -14,17 +14,14 @@ data class NfcDebug(
     val elapsedMs: Long = 0,
 )
 
-sealed interface ReaderState {
-    data object Ready : ReaderState
-    data object Reading : ReaderState
-    data class ProfileFound(val profile: HealthProfile) : ReaderState
-    data class UnknownPerson(val id: String) : ReaderState
-    data class Error(val message: String) : ReaderState
+internal sealed interface NfcOutcome {
+    data class Identity(val id: String) : NfcOutcome
+    data class Failure(val message: String) : NfcOutcome
 }
 
-data class ReadResult(val state: ReaderState, val debug: NfcDebug)
+internal data class ReadResult(val outcome: NfcOutcome, val debug: NfcDebug)
 
-class NfcReader(private val repository: HealthRepository = HealthRepository()) {
+internal class NfcReader {
     fun read(tag: Tag): ReadResult {
         val started = SystemClock.elapsedRealtime()
         var debug = NfcDebug(tagDetected = true)
@@ -53,11 +50,12 @@ class NfcReader(private val repository: HealthRepository = HealthRepository()) {
                 if (failure == null) failure = "Could not close the NFC connection. Try again."
             }
         }
-        // Resolve health information only after closing the RF connection.
-        val state = if (failure != null) ReaderState.Error(failure)
-        else if (id != null) repository.find(id)?.let(ReaderState::ProfileFound) ?: ReaderState.UnknownPerson(id)
-        else ReaderState.Error("No person ID received.")
-        return ReadResult(state, debug.copy(elapsedMs = SystemClock.elapsedRealtime() - started))
+        val outcome = when {
+            failure != null -> NfcOutcome.Failure(failure)
+            id != null -> NfcOutcome.Identity(id)
+            else -> NfcOutcome.Failure("No person ID received.")
+        }
+        return ReadResult(outcome, debug.copy(elapsedMs = SystemClock.elapsedRealtime() - started))
     }
 
     private class ReadFailure(message: String) : Exception(message)

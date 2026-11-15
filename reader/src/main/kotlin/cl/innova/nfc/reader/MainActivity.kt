@@ -9,25 +9,93 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModelProvider
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
-    private val executor = Executors.newSingleThreadExecutor()
-    private val busy = AtomicBoolean(false)
-    private val generation = AtomicInteger(0)
+    private val nfcDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    private val generation = AtomicInteger()
     private val reader = NfcReader()
+    private lateinit var controller: ReaderController
     private var adapter: NfcAdapter? = null
-    private var state by mutableStateOf<ReaderState>(ReaderState.Ready)
-    private var debug by mutableStateOf(NfcDebug())
+    private var nfc by mutableStateOf(NfcAvailability.Missing)
+    private var readerModeEnabled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge(statusBarStyle = SystemBarStyle.light(0, 0), navigationBarStyle = SystemBarStyle.light(0, 0))
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(0, 0),
+            navigationBarStyle = SystemBarStyle.light(0, 0),
+        )
         adapter = NfcAdapter.getDefaultAdapter(this)
-        setContent { ReaderScreen(state, debug, ::reset, ::openNfcSettings, adapter?.isEnabled == true) }
+        controller = ViewModelProvider(this)[ReaderViewModel::class.java].controller
+        setContent {
+            val state by controller.state.collectAsState()
+            ReaderScreen(state, nfc, controller, ::openNfcSettings)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        controller.resume()
+        val current = generation.incrementAndGet()
+        val device = adapter
+        if (device == null) {
+            nfc = NfcAvailability.Missing
+            return
+        }
+        if (!device.isEnabled) {
+            nfc = NfcAvailability.Disabled
+            return
+        }
+
+        try {
+            device.enableReaderMode(this, { tag ->
+                if (generation.get() == current) {
+                    runOnUiThread {
+                        if (generation.get() == current && nfc == NfcAvailability.Ready) {
+                            controller.scan {
+                                withContext(nfcDispatcher) { reader.read(tag) }
+                            }
+                        }
+                    }
+                }
+            }, NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK, null)
+            readerModeEnabled = true
+            nfc = NfcAvailability.Ready
+        } catch (_: SecurityException) {
+            nfc = NfcAvailability.Error
+        } catch (_: IllegalStateException) {
+            nfc = NfcAvailability.Error
+        }
+    }
+
+    override fun onPause() {
+        generation.incrementAndGet()
+        controller.pause()
+        if (readerModeEnabled) {
+            readerModeEnabled = false
+            try {
+                adapter?.disableReaderMode(this)
+            } catch (_: IllegalStateException) {
+                nfc = NfcAvailability.Error
+            } catch (_: SecurityException) {
+                nfc = NfcAvailability.Error
+            }
+        }
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        nfcDispatcher.close()
+        super.onDestroy()
     }
 
     private fun openNfcSettings() {
@@ -37,55 +105,6 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
         }
     }
-
-    override fun onResume() {
-        super.onResume()
-        val current = generation.incrementAndGet()
-        val nfc = adapter
-        if (nfc == null) { state = ReaderState.Error("This device has no NFC adapter."); return }
-        if (!nfc.isEnabled) { state = ReaderState.Error("Enable NFC in device settings, then return here."); return }
-        if (state is ReaderState.Error || state == ReaderState.Reading) reset()
-        try {
-            nfc.enableReaderMode(this, { tag ->
-                if (generation.get() == current && busy.compareAndSet(false, true)) {
-                    executor.execute {
-                        try {
-                            if (generation.get() == current) {
-                                runOnUiThread {
-                                    if (generation.get() == current) {
-                                        state = ReaderState.Reading
-                                        debug = NfcDebug(tagDetected = true)
-                                    }
-                                }
-                                val result = reader.read(tag)
-                                runOnUiThread {
-                                    if (generation.get() == current) {
-                                        state = result.state
-                                        debug = result.debug
-                                    }
-                                }
-                            }
-                        } finally { busy.set(false) }
-                    }
-                }
-            }, NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK, null)
-        } catch (_: SecurityException) {
-            state = ReaderState.Error("NFC access is unavailable. Check device settings.")
-        } catch (_: IllegalStateException) {
-            state = ReaderState.Error("Could not enable NFC reader mode. Return to this screen to retry.")
-        }
-    }
-
-    override fun onPause() {
-        generation.incrementAndGet()
-        adapter?.disableReaderMode(this)
-        super.onPause()
-    }
-
-    override fun onDestroy() { executor.shutdown(); super.onDestroy() }
-
-    private fun reset() {
-        state = ReaderState.Ready
-        debug = NfcDebug()
-    }
 }
+
+internal enum class NfcAvailability { Ready, Missing, Disabled, Error }
