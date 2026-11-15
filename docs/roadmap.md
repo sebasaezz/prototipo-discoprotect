@@ -1,6 +1,6 @@
 # Roadmap H0–H10
 
-El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre. La definición preparatoria de cuentas y credenciales dinámicas está en el [handoff H4](h4-handoff.md).
+El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre. La [matriz H4](h4-integration.md#matriz-física) define la aceptación física pendiente.
 
 | Hito y estado | Objetivo, componentes y dependencias | Entregable y aceptación | Pruebas y riesgos |
 | --- | --- | --- | --- |
@@ -8,7 +8,7 @@ El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre
 | H1 · Implementado, NFC físico validado por el usuario | Base REST/SQLite y diseño Android. Depende de H0 y Node LTS. | Actualizar ficha, reiniciar y resolver por NFC usando una sesión de guardia. Apps NFC locales con apariencia nueva. | API, persistencia, autorización, build y lint. Revisión de ambas apps en emulador sin adaptador NFC. Validar los estados con hardware en dispositivos. Riesgos de sesiones demo y configuraciones LAN. |
 | H2 · Implementado, validación física integrada confirmada por el usuario | Conectar lectura de AppPersonal a la API H1. | Tras leer NFC, mostrar la ficha actualizada del servidor y distinguir fallback local explícito. | Escaneo entre dos Samsung y caída de LAN. Riesgos de latencia y resultados desactualizados. |
 | H3 · Implementado y validado físicamente por el usuario el 2026-11-15 | Edición de ficha y contactos desde AppAsistente. Depende de H2. | Guardar desde AppAsistente y recuperar el cambio por NFC en AppPersonal. | Flujos completos, errores y conflictos de versiones. Riesgo de edición concurrente. |
-| H4 · Pendiente | Sesión seleccionable y credenciales dinámicas. Depende de H3. | Cambiar de cuenta y obtener su ficha por NFC. | Alternar identidades y verificar consistencia HCE al reanudar. Riesgo de credencial anterior. |
+| H4 · Implementado, pendiente de validación física integrada | Sesión seleccionable y credenciales dinámicas. Depende de H3. | Cambiar de cuenta y obtener su ficha por NFC. | Alternar identidades y verificar consistencia HCE al reanudar. Riesgo de credencial anterior. |
 | H5 · Pendiente | SOS persistente, zona manual, guardia y vista web básica. Depende de H4, API y LAN. | Una pulsación prolongada crea un incidente visible por ambas superficies de operación. | Pulsación, cancelación, reenvío y pérdida de red. Riesgos de duplicación y zona desconocida. |
 | H6 · Pendiente | Atención, transiciones y sincronización. Depende de H5. | Un guardia asigna, atiende y resuelve. Asistente y GestiónWeb reciben los estados. | Transiciones, concurrencia, reconexión y resincronización. Riesgo de eventos fuera de orden. |
 | H7 · Pendiente | Triaje con IA, fallback y corrección humana. Depende de H5–H6. | Categoría, urgencia, resumen y evidencias inciertas sin bloquear SOS. | Respuestas válidas, timeout, fallback y revisión humana. Riesgo de clasificación errónea. |

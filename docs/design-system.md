@@ -4,6 +4,8 @@ Discoprotect usa una interfaz clara, plana y centrada en la tarea. La marca y el
 
 En AppAsistente, la navegación separa identificación NFC, ficha, contactos y conexión. El formulario presenta errores junto a cada entrada, y la revisión de conflictos muestra los datos vigentes antes de habilitar otro guardado.
 
+En H4, Identificación separa el estado del hardware del estado de emisión. El nombre activo es el confirmado por el servidor. Conexión y edición usan un diálogo Material 3 para elegir cuenta, confirmar el cambio y advertir si hay un borrador.
+
 ## Color
 
 | Token | Valor | Aplicación |

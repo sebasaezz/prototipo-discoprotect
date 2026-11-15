@@ -1,6 +1,6 @@
 # Discoprotect
 
-Prototipo universitario de seguridad para eventos masivos. AppPersonal lee el identificador NFC, cierra la conexión con AppAsistente y consulta la ficha actualizada en el servidor. La demo local sigue disponible desde la configuración del lector. AppAsistente consulta y modifica la ficha y los contactos de Antonia mediante el mismo servidor.
+Prototipo universitario de seguridad para eventos masivos. AppPersonal lee el identificador NFC, cierra la conexión con AppAsistente y consulta la ficha actualizada en el servidor. La demo local sigue disponible desde la configuración del lector. AppAsistente verifica una de las tres cuentas demo, emite su credencial NFC vigente y permite editar la ficha y los contactos de esa cuenta mediante el mismo servidor.
 
 ## Backend
 
@@ -55,10 +55,10 @@ Consulta los seriales con `adb devices -l`. Instala cada APK con `adb -s <SERIAL
 
 [Contrato NFC y checklist Samsung](docs/nfc-contract.md) · [Design System](docs/design-system.md)
 
-[Guion H3 para editar y leer por NFC](docs/h3-integration.md) · [Guion H2 para Windows y los Samsung](docs/h2-lan.md)
+[Guion H4 para las tres cuentas y los Samsung](docs/h4-integration.md) · [Guion histórico H3](docs/h3-integration.md) · [Guion H2 para Windows y los Samsung](docs/h2-lan.md)
 
 ## Continuidad
 
-[Checkpoint H3 del 15 de noviembre de 2026](docs/checkpoints/h3-2026-11-15.md) · [Handoff H4](docs/h4-handoff.md) · [Instrucciones para agentes](AGENTS.md)
+[Checkpoint H3 del 15 de noviembre de 2026](docs/checkpoints/h3-2026-11-15.md) · [Análisis previo a H4](docs/h4-handoff.md) · [Instrucciones para agentes](AGENTS.md)
 
 [Arquitectura de las apps](docs/architecture.md) · [Modelo de datos](docs/data-model.md) · [Roadmap H0–H10](docs/roadmap.md)

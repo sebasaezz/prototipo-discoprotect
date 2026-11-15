@@ -1,6 +1,6 @@
 # Handoff H4 · Cuentas y credenciales NFC dinámicas
 
-H4 está pendiente. Al recibir un encargo independiente, parte de una rama que contenga el H3 revisado. El [checkpoint](checkpoints/h3-2026-11-15.md) registra la evidencia y las referencias Git. El objetivo es seleccionar Antonia, Martín o Sofía y emitir solo la credencial activa que corresponde a la selección validada.
+Este documento conserva las alternativas evaluadas antes de implementar H4. La [decisión y matriz vigentes](h4-integration.md) describen la implementación, pendiente de validación física integrada. El [checkpoint](checkpoints/h3-2026-11-15.md) registra la evidencia y las referencias Git. El objetivo es seleccionar Antonia, Martín o Sofía y emitir solo la credencial activa que corresponde a la selección validada.
 
 ## Punto de partida en H3
 
@@ -24,7 +24,7 @@ H4 está pendiente. Al recibir un encargo independiente, parte de una rama que c
 | Registro local duradero vinculado a origen, persona, expiración y generación | Puede recuperar una selección tras reinicio si la política lo permite. | Persistir un ID no prueba que su credencial siga activa. Debe definirse revalidación, limpieza atómica y comportamiento cuando HCE inicia antes que la UI. Evitar persistir el Bearer y leer disco dentro del callback. |
 | Habilitar o deshabilitar el componente o el enrutamiento HCE | Puede apoyar la disponibilidad visible del servicio cuando no hay identidad. | El enrutamiento del sistema puede cambiar con latencia y no sustituye el control de identidad en GET. Verificar tiempos, reactivación y Secure NFC en Samsung. |
 
-La política de recuperación tras muerte del proceso, la posible emisión durante una caída de LAN y el código de rechazo cuando no hay identidad siguen abiertos. La aceptación exige que cualquier política elegida impida emitir la cuenta equivocada.
+H4 eligió el registro en memoria, emisión offline solo hasta el vencimiento y rechazo `6A82` sin identidad. La aceptación exige que cualquier política elegida impida emitir la cuenta equivocada.
 
 ## Matriz de aceptación
 
