@@ -8,7 +8,7 @@
 | `emitter` | Servicio HCE independiente, identificación NFC y edición de ficha y contactos de AppAsistente. |
 | `reader` | Reader Mode, IsoDep, conexión al servidor y presentación de fichas de AppPersonal. |
 | `android-ui` | Fuentes Compose compartidas por ambas apps. Mantiene los tres módulos Gradle originales. |
-| ackend | API REST Fastify, validación Zod, sesiones ficticias, migraciones y SQLite. |
+| `backend` | API REST Fastify, validación Zod, sesiones ficticias, migraciones y SQLite. |
 | GestiónWeb | Interfaz futura de organizadores, prevista en H8. |
 
 AppAsistente transmite el ID por NFC. AppPersonal cierra IsoDep antes de resolverlo. El backend y SQLite son la fuente autoritativa para el modo conectado.
