@@ -12,7 +12,7 @@ Los identificadores se tratan como cadenas opacas, los tiempos se guardan en UTC
 | EventMembership | Una membresía por persona y evento. Roles `ATTENDEE`, `STAFF` y `ORGANIZER`. |
 | DemoSession | Hash SHA-256 de un token aleatorio, cuenta, rol y vencimiento. La base guarda el hash; el valor Bearer se entrega al crear la sesión. |
 
-La versión representa la ficha y sus contactos. Toda mutación exitosa aumenta la versión y actualiza la fecha. La resolución NFC devuelve ambos en una sola lectura consistente. El seed inserta los cinco perfiles y tres fichas ficticias. Las ejecuciones posteriores preservan ediciones y eliminaciones de contactos. La restauración reinicia las cinco cuentas de prueba, el evento demo y los registros relacionados por claves foráneas, incluidas las sesiones.
+La versión representa la ficha y sus contactos. Toda mutación exitosa aumenta la versión y actualiza la fecha. La resolución NFC devuelve ambos en una sola lectura consistente. El seed inserta los cinco perfiles y tres fichas ficticias. Las ejecuciones posteriores preservan ediciones y eliminaciones de contactos de las fichas existentes. La versión y los datos persistidos se usan durante la operación normal. El seed sirve para provisionar registros demo ausentes, como una membresía eliminada durante una prueba. La restauración reinicia las cinco cuentas de prueba, el evento demo y los registros relacionados por claves foráneas, incluidas las sesiones.
 
 ## Ubicación futura
 

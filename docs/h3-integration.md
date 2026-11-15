@@ -1,5 +1,7 @@
 # Validar H3 en Windows y los Samsung
 
+El usuario aprobó la validación física el 15 de noviembre de 2026. Usa este guion para repetirla y el [checkpoint](checkpoints/h3-2026-11-15.md#validación-física-confirmada-por-el-usuario) para consultar los resultados reportados.
+
 ## A. Conectar AppAsistente
 
 1. Prepara el backend siguiendo [H2 en Windows](h2-lan.md#preparar-el-servidor). Usa una base de demostración, `HOST=0.0.0.0`, un PIN ficticio de guardia y una red que permita el tráfico entre dispositivos. H3 usa la misma API y el mismo SQLite.

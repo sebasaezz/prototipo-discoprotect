@@ -1,6 +1,6 @@
 # Arquitectura
 
-## H0–H1
+## Componentes vigentes
 
 | Componente | Responsabilidad |
 | --- | --- |
@@ -8,11 +8,12 @@
 | `emitter` | Servicio HCE independiente, identificación NFC y edición de ficha y contactos de AppAsistente. |
 | `reader` | Reader Mode, IsoDep, conexión al servidor y presentación de fichas de AppPersonal. |
 | `android-ui` | Fuentes Compose compartidas por ambas apps. Mantiene los tres módulos Gradle originales. |
-| `backend` | API REST Fastify, validación Zod, sesiones ficticias, migraciones y SQLite. |
+| ackend | API REST Fastify, validación Zod, sesiones ficticias, migraciones y SQLite. |
+| GestiónWeb | Interfaz futura de organizadores, prevista en H8. |
 
 AppAsistente transmite el ID por NFC. AppPersonal cierra IsoDep antes de resolverlo. El backend y SQLite son la fuente autoritativa para el modo conectado.
 
-En el backend `main.ts` abre la base y arranca el proceso. `app.ts` define las rutas. `auth.ts` controla la sesión, el rol y la pertenencia. `records.ts` valida y opera sobre los datos. `db.ts` ejecuta transacciones y migraciones. La CLI permite inicializar y restaurar la demo.
+En el backend `main.ts` abre la base y arranca el proceso. `app.ts` define las rutas. `auth.ts` controla la sesión, el rol y la pertenencia. `records.ts` valida y opera sobre los datos. `db.ts` ejecuta transacciones y migraciones. La CLI permite inicializar y restaurar la demo. El proyecto fija Fastify 5.12.8 y Zod 4.6.7, usa TypeScript ~5.9.3 y SQLite mediante `node:sqlite`. `package-lock.json` fija las dependencias instaladas por `npm ci`. Las dos apps usan OkHttp 4.12.0 y Kotlin Serialization JSON 1.9.0. El [README](../README.md) especifica la toolchain Android y los comandos de arranque.
 
 ## H2
 
@@ -28,7 +29,7 @@ En el backend `main.ts` abre la base y arranca el proceso. `app.ts` define las r
 
 `AttendeeViewModel` y `AttendeeController` coordinan la sesión, la navegación y las escrituras. Los borradores viven en el ViewModel durante la rotación, separados de los datos confirmados. Las escrituras usan la versión del borrador. Ante 409 se carga el estado vigente y el usuario decide si descarta o vuelve a editar con esa versión. Tras un resultado incierto, se bloquea la escritura hasta consultar el estado del servidor. Las operaciones previas al cierre de sesión o a un cambio de origen se cancelan y sus resultados se descartan.
 
-`AttendeeScreen` organiza Identificación, Mi ficha, Contactos y Conexión. `EditScreen` presenta los formularios y la revisión del conflicto. El servicio HCE sigue atendiendo APDU independientemente de la Activity, la sesión y la red. H4 podrá reutilizar la sesión y la verificación de credenciales cuando se diseñe la selección de cuentas.
+`AttendeeScreen` organiza Identificación, Mi ficha, Contactos y Conexión. `EditScreen` presenta los formularios y la revisión del conflicto. El servicio HCE sigue atendiendo APDU independientemente de la Activity, la sesión y la red. La [preparación H4](h4-handoff.md) describe cómo evaluar la coordinación entre sesión y emisión HCE.
 
 ## Extensiones previstas
 

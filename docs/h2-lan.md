@@ -1,5 +1,7 @@
 # H2 en Windows y los Samsung
 
+H2 fue validado físicamente por el usuario. Este guion conserva la preparación común de LAN y las comprobaciones de regresión. Los resultados figuran en el [checkpoint](checkpoints/h3-2026-11-15.md#validación-física-confirmada-por-el-usuario).
+
 ## Preparar el servidor
 
 Desde el repositorio, abre PowerShell en `backend/`. Crea `.env` si todavía no existe:
