@@ -11,9 +11,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+
+import androidx.lifecycle.ViewModelProvider
 
 internal data class Diagnostics(
     val available: Boolean = false,
@@ -24,12 +27,17 @@ internal data class Diagnostics(
 )
 
 class MainActivity : ComponentActivity() {
+    private lateinit var controller: AttendeeController
     private var diagnostics by mutableStateOf(Diagnostics())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(statusBarStyle = SystemBarStyle.light(0, 0), navigationBarStyle = SystemBarStyle.light(0, 0))
-        setContent { EmitterScreen(diagnostics, ::refresh, ::openNfcSettings) }
+        controller = ViewModelProvider(this)[AttendeeViewModel::class.java].controller
+        setContent {
+            val state by controller.state.collectAsState()
+            AttendeeScreen(state, controller, diagnostics, ::refresh, ::openNfcSettings)
+        }
     }
 
     private fun openNfcSettings() {
@@ -40,7 +48,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() { super.onResume(); refresh() }
+    override fun onResume() {
+        super.onResume()
+        controller.resume()
+        refresh()
+    }
 
     private fun refresh() {
         val adapter = NfcAdapter.getDefaultAdapter(this)

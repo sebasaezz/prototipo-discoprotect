@@ -45,4 +45,4 @@ Invoke-WebRequest "$api/nfc/resolve" -Method Post -Headers $attendeeHeaders -Con
 
 La sesión de guardia obtiene la ficha y sus contactos; la de asistente obtiene 403. La sesión previa al reinicio sigue siendo válida si está dentro de sus ocho horas. Usa PowerShell 7 para `-MaskInput` y `-SkipHttpErrorCheck`.
 
-La demostración de Android se realiza por separado con la [checklist física](nfc-contract.md). Para ejecutar la lectura NFC conectada con datos actualizados, sigue el [guion integrado de H2](h2-lan.md).
+La demostración de Android se realiza por separado con la [checklist física](nfc-contract.md). Para diagnosticar la lectura NFC conectada, sigue el [guion H2](h2-lan.md). Para la demostración actual de edición desde AppAsistente y lectura en AppPersonal, sigue el [guion H3](h3-integration.md).
