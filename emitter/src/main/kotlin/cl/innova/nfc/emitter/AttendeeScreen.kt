@@ -22,11 +22,14 @@ import java.util.Locale
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun AttendeeScreen(
-    state: AttendeeState, actions: AttendeeController, diagnostics: Diagnostics,
+    state: AttendeeState, identity: ShareableIdentity?, actions: AttendeeController, diagnostics: Diagnostics,
     onRefreshNfc: () -> Unit, onNfcSettings: () -> Unit,
 ) {
     var confirmDiscard by rememberSaveable { mutableStateOf(false) }
     val draft = state.draft
+    var showAccounts by remember { mutableStateOf(false) }
+    var pendingAccount by remember { mutableStateOf<DemoAccount?>(null) }
+    val chooseAccount = { showAccounts = true }
     fun leaveEditor() {
         if (state.task != null) return
         if (draft?.dirty == true || state.review != null) confirmDiscard = true else actions.discard()
@@ -53,7 +56,7 @@ internal fun AttendeeScreen(
                     }
                 }
 
-                if (state.section != Section.Identification || draft != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
                     state.task?.let {
                         Status(it.label, Tone.Info)
                         LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -65,21 +68,58 @@ internal fun AttendeeScreen(
                 }
 
                 if (draft != null) {
-                    EditScreen(state, draft, actions, ::leaveEditor)
+                    EditScreen(state, draft, actions, ::leaveEditor, chooseAccount)
                 } else {
                     when (state.section) {
-                        Section.Identification -> {
-                            if (state.identityMismatch) {
-                                Status("La sesión del servidor no coincide con la credencial NFC fija de Antonia.", Tone.Warning)
-                            }
-                            EmitterScreen(diagnostics, onRefreshNfc, onNfcSettings)
-                        }
+                        Section.Identification -> EmitterScreen(
+                            diagnostics, identity, state.reachability, onRefreshNfc, onNfcSettings,
+                            onChoose = { actions.navigate(Section.Connection) },
+                        )
                         Section.Card -> CardScreen(state, actions)
                         Section.Contacts -> ContactsScreen(state, actions)
-                        Section.Connection -> ConnectionScreen(state, actions)
+                        Section.Connection -> ConnectionScreen(state, identity, actions, chooseAccount)
                     }
                 }
             }
+        }
+        if (showAccounts) {
+            AlertDialog(
+                onDismissRequest = { showAccounts = false },
+                title = { Text("Elegir cuenta de demostración") },
+                text = {
+                    Column {
+                        DemoAccount.entries.forEach { account ->
+                            TextButton(
+                                onClick = {
+                                    showAccounts = false
+                                    if (draft != null || state.selectedAccount != null && state.selectedAccount != account) {
+                                        pendingAccount = account
+                                    } else actions.selectAccount(account)
+                                },
+                                enabled = identity?.person?.account != account.key,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                            ) { Text(account.label) }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showAccounts = false },
+                    modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancelar") } },
+            )
+        }
+        pendingAccount?.let { account ->
+            AlertDialog(
+                onDismissRequest = { pendingAccount = null },
+                title = { Text("¿Cambiar de cuenta?") },
+                text = { Text(if (draft != null)
+                    "Se descartará el borrador actual y se deshabilitará la emisión hasta verificar la cuenta elegida."
+                    else "La emisión se deshabilitará hasta verificar la cuenta elegida.") },
+                confirmButton = {
+                    Button(onClick = { pendingAccount = null; actions.selectAccount(account) },
+                        modifier = Modifier.heightIn(min = 48.dp)) { Text("Confirmar cambio") }
+                },
+                dismissButton = { TextButton(onClick = { pendingAccount = null },
+                    modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancelar") } },
+            )
         }
         if (confirmDiscard && draft != null) {
             AlertDialog(onDismissRequest = { confirmDiscard = false },
@@ -99,7 +139,9 @@ internal fun AttendeeScreen(
 }
 
 @Composable
-private fun ConnectionScreen(state: AttendeeState, actions: AttendeeController) {
+private fun ConnectionScreen(
+    state: AttendeeState, identity: ShareableIdentity?, actions: AttendeeController, onChoose: () -> Unit,
+) {
     var input by rememberSaveable(state.address) { mutableStateOf(state.address) }
     val sameAddress = attendeeServerAddress(input, BuildConfig.DEBUG)?.toString() == state.address
     val idle = state.task == null
@@ -124,18 +166,31 @@ private fun ConnectionScreen(state: AttendeeState, actions: AttendeeController) 
         enabled = idle && input.isNotBlank(), modifier = Modifier.heightIn(min = 48.dp)) {
         Text("Comprobar conexión")
     }
-    if (state.person != null) {
-        Field("Sesión de demostración", state.person.name)
-        Status("Credencial NFC de Antonia verificada", Tone.Success)
+    if (identity != null) {
+        Field("Cuenta activa", identity.person.name)
+        Status("Credencial NFC verificada", Tone.Success)
         Button(onClick = { actions.navigate(Section.Card) }, modifier = Modifier.heightIn(min = 48.dp)) {
             Text("Ir a Mi ficha")
         }
-        TextButton(onClick = actions::logout, modifier = Modifier.heightIn(min = 48.dp)) { Text("Cerrar sesión") }
-    } else if (sameAddress && state.reachability == Reachability.Connected) {
-        Button(onClick = actions::login, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
-            Text("Iniciar sesión como Antonia")
+    } else {
+        val selected = state.selectedAccount
+        if (selected == null) Status("Sin cuenta seleccionada", Tone.Info)
+        else Field("Cuenta elegida · Sin verificar", selected.label)
+    }
+    if (sameAddress && state.address.isNotBlank()) {
+        Button(onClick = onChoose, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text(if (state.selectedAccount == null) "Elegir cuenta" else "Cambiar cuenta")
         }
-        Text("Cuenta ficticia de demostración.", style = MaterialTheme.typography.bodyMedium)
+        if (state.selectedAccount != null && identity == null && idle) {
+            OutlinedButton(onClick = actions::retryLogin, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("Reintentar verificación")
+            }
+        }
+    }
+    if (state.selectedAccount != null) {
+        TextButton(onClick = actions::logout, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text(if (identity != null) "Cerrar sesión" else "Cancelar selección")
+        }
     }
 }
 
@@ -200,7 +255,7 @@ private fun ContactsScreen(state: AttendeeState, actions: AttendeeController) {
 private fun DataAvailability(state: AttendeeState, actions: AttendeeController) {
     if (state.task != null) return
     if (state.person == null) {
-        Status("Inicia sesión como Antonia para consultar la ficha", Tone.Info)
+        Status("Elige una cuenta y verifícala para consultar la ficha", Tone.Info)
         Button(onClick = { actions.navigate(Section.Connection) }, modifier = Modifier.heightIn(min = 48.dp)) {
             Text("Ir a Conexión")
         }

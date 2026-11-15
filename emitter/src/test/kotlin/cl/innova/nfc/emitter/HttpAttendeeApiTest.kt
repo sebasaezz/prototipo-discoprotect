@@ -1,6 +1,7 @@
 package cl.innova.nfc.emitter
 
 import cl.innova.nfc.protocol.CardSession
+import cl.innova.nfc.protocol.NfcId
 import cl.innova.nfc.protocol.NfcProtocol
 import java.net.InetAddress
 import java.time.Instant
@@ -21,7 +22,7 @@ class HttpAttendeeApiTest {
     private val token = "a".repeat(43)
     private val expiry = "2090-01-01T00:00:00Z"
     private val person = Person("a", "antonia", "Antonia Reyes", 22)
-    private val session = AttendeeSession(token, Instant.parse(expiry), person)
+    private val session = AttendeeSession(token, Instant.parse(expiry), person, requireNotNull(NfcId.parse(NfcProtocol.DEMO_PERSON_ID)))
     private val identity = """{"person":{"id":"a","account":"antonia","name":"Antonia Reyes","age":22},"role":"ATTENDEE"}"""
     private val credential = """{"token":"${NfcProtocol.DEMO_PERSON_ID}","active":true}"""
     private val card = """{"version":3,"updatedAt":"2026-11-15T14:00:00Z","bloodType":"A−","allergies":["Látex"],"conditions":["Asma"],"medications":["Inhalador"]}"""
@@ -63,11 +64,11 @@ class HttpAttendeeApiTest {
         }
     }
 
-    @Test fun `Antonia logs in and proves account and active fixed credential`() = runBlocking {
+    @Test fun `Antonia logs in and proves account and active credential`() = runBlocking {
         reply(login())
         reply(identity)
         reply(credential)
-        val active = api.login()
+        val active = api.login(DemoAccount.Antonia)
         assertEquals(person, active.person)
         assertEquals(token, active.token)
         assertEquals(session.expiresAt, active.expiresAt)
@@ -77,18 +78,65 @@ class HttpAttendeeApiTest {
         Unit
     }
 
-    @Test fun `unrelated role account credential or inactive credential block sessions`() = runBlocking {
+    @Test fun `three accounts use the credential returned by REST`() = runBlocking {
+        DemoAccount.entries.forEach { account ->
+            val mock = demoSession(account, Instant.parse(expiry))
+            reply(login())
+            reply("""{"person":{"id":"${mock.person.id}","account":"${account.key}","name":"Nombre confirmado","age":null},"role":"ATTENDEE"}""")
+            reply("""{"token":"${mock.nfcId.hex.lowercase()}","active":true}""")
+            var fetching = false
+            val result = api.login(account) { fetching = true }
+            assertTrue(fetching)
+            assertEquals("Nombre confirmado", result.person.name)
+            assertEquals(mock.nfcId.hex, result.nfcId.hex)
+            assertEquals("""{"account":"${account.key}"}""", verify("POST", "demo/sessions", false).body.readUtf8())
+            verify("GET", "me")
+            verify("GET", "me/nfc-credential")
+        }
+    }
+
+    @Test fun `valid credential contents are taken from the server, not the seed`() = runBlocking {
+        val alternate = "ABCDEF0123456789".repeat(2)
+        reply(login())
+        reply(identity)
+        reply(credential.replace(NfcProtocol.DEMO_PERSON_ID, alternate))
+        assertEquals(alternate, api.login(DemoAccount.Antonia).nfcId.hex)
+    }
+
+    @Test fun `wrong role account and malformed credentials block verified session`() = runBlocking {
         for (replies in listOf(listOf(login("STAFF")), listOf(login(), identity.replace("antonia", "martin")),
             listOf(login(), identity.replace("ATTENDEE", "STAFF")),
-            listOf(login(), identity, credential.replace("true", "false")),
-            listOf(login(), identity, credential.replace(NfcProtocol.DEMO_PERSON_ID, "0".repeat(32))))) {
+            listOf(login(), identity, credential.replace(NfcProtocol.DEMO_PERSON_ID, "G".repeat(32))),
+            listOf(login(), identity, credential.replace(NfcProtocol.DEMO_PERSON_ID, "A".repeat(31))))) {
             replies.forEach { reply(it) }
-            expect(FailureKind.Identity) { api.login() }
+            expect(FailureKind.Identity) { api.login(DemoAccount.Antonia) }
         }
         assertTrue((0 until server.requestCount).none { request().path == "/api/v1/me/emergency-card" })
-        val hce = CardSession()
-        NfcProtocol.parseSelectResponse(hce.process(NfcProtocol.selectAid()))
-        assertEquals(NfcProtocol.DEMO_PERSON_ID, NfcProtocol.parsePersonIdResponse(hce.process(NfcProtocol.getPersonId())))
+    }
+
+    @Test fun `inactive and missing credentials are distinguished from expired session or malformed JSON`() = runBlocking {
+        reply(login())
+        reply(identity)
+        reply(credential.replace("true", "false"))
+        expect(FailureKind.NoCredential) { api.login(DemoAccount.Antonia) }
+        reply(login())
+        reply(identity)
+        reply("{}", 404)
+        expect(FailureKind.NoCredential) { api.login(DemoAccount.Antonia) }
+        reply(login().replace(expiry, "2000-01-01T00:00:00Z"))
+        expect(FailureKind.Expired) { api.login(DemoAccount.Antonia) }
+        reply(login())
+        reply("{")
+        expect(FailureKind.Response) { api.login(DemoAccount.Antonia) }
+    }
+
+    @Test fun `a failed login cannot enable any HCE response`() = runBlocking {
+        reply(login("STAFF"))
+        val registry = HceIdentityStore()
+        val hce = CardSession { registry.current()?.credential }
+        expect(FailureKind.Identity) { api.login(DemoAccount.Antonia) }
+        assertEquals("6A82", NfcProtocol.toHex(hce.process(NfcProtocol.selectAid())))
+        assertEquals("6A82", NfcProtocol.toHex(hce.process(NfcProtocol.getPersonId())))
     }
 
     @Test fun `card preserves fields and sends UTF-8 null type and separate lists`() = runBlocking {

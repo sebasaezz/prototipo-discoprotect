@@ -1,9 +1,10 @@
 package cl.innova.nfc.emitter
 
-import cl.innova.nfc.protocol.NfcProtocol
+import cl.innova.nfc.protocol.NfcId
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.URI
+import java.time.Clock
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -39,22 +40,27 @@ internal enum class FailureKind(val message: String) {
     Offline("No se pudo conectar. Revisa la dirección, el Wi-Fi y el firewall del PC."),
     Timeout("El servidor tardó demasiado en responder."),
     Invalid("El servidor rechazó los datos. Revisa los campos."),
-    Expired("La sesión dejó de ser válida. Vuelve a iniciar sesión como Antonia."),
+    Expired("La sesión dejó de ser válida. Vuelve a verificar la cuenta."),
     Forbidden("La sesión no tiene permiso para esta operación."),
     Missing("La ficha o el contacto solicitado ya no está disponible."),
     Conflict("La ficha cambió en el servidor. Revisa la versión vigente antes de guardar."),
-    Identity("La sesión o la credencial no coincide con el perfil NFC de Antonia."),
+    Identity("La identidad o el identificador recibido no es válido para la cuenta elegida."),
+    NoCredential("La cuenta no tiene una credencial NFC activa."),
     Response("La respuesta no corresponde al contrato de Discoprotect."),
     Server("El servidor no pudo completar la consulta."),
     Changed("La ficha se actualizó durante la consulta. Vuelve a cargarla."),
 }
 internal class AttendeeFailure(val kind: FailureKind) : Exception(kind.name)
 
-internal class AttendeeSession(val token: String, val expiresAt: Instant, val person: Person)
+internal enum class DemoAccount(val key: String, val label: String) {
+    Antonia("antonia", "Antonia Reyes"), Martin("martin", "Martín Ejemplo"), Sofia("sofia", "Sofía Ficticia"),
+}
+
+internal class AttendeeSession(val token: String, val expiresAt: Instant, val person: Person, val nfcId: NfcId)
 
 internal interface AttendeeApi {
     suspend fun health()
-    suspend fun login(): AttendeeSession
+    suspend fun login(account: DemoAccount, onCredential: () -> Unit = {}): AttendeeSession
     suspend fun card(session: AttendeeSession): EmergencyCard
     suspend fun contacts(session: AttendeeSession): List<Contact>
     suspend fun replaceCard(session: AttendeeSession, version: Long, fields: CardFields): EmergencyCard
@@ -62,30 +68,37 @@ internal interface AttendeeApi {
     suspend fun deleteContact(session: AttendeeSession, version: Long, id: String): Long
 }
 
-internal class HttpAttendeeApi(private val address: HttpUrl, private val client: OkHttpClient) : AttendeeApi {
+internal class HttpAttendeeApi(
+    private val address: HttpUrl,
+    private val client: OkHttpClient,
+    private val clock: Clock = Clock.systemUTC(),
+) : AttendeeApi {
     override suspend fun health() {
         val result = get<Health>("health")
         checkReply(result.status == "ok" && result.database == "ok", FailureKind.Server)
     }
 
-    override suspend fun login(): AttendeeSession {
-        val result = send<SessionReply>("POST", "demo/sessions", null, json.encodeToString(Login("antonia")))
+    override suspend fun login(account: DemoAccount, onCredential: () -> Unit): AttendeeSession {
+        val result = send<SessionReply>("POST", "demo/sessions", null, json.encodeToString(Login(account.key)))
         checkReply(result.role == "ATTENDEE", FailureKind.Identity)
         checkReply(result.token.matches(Regex("[A-Za-z0-9_-]{43}")))
         val expires = parseInstant(result.expiresAt)
+        checkReply(expires.isAfter(clock.instant()), FailureKind.Expired)
         val identity = get<Identity>("me", result.token)
-        checkReply(identity.role == "ATTENDEE" && identity.person.account == "antonia", FailureKind.Identity)
+        checkReply(identity.role == "ATTENDEE" && identity.person.account == account.key, FailureKind.Identity)
         checkReply(identity.person.id.isNotBlank() && identity.person.name.isNotBlank() &&
             (identity.person.age == null || identity.person.age >= 0))
+        onCredential()
         val credential = try {
             get<Credential>("me/nfc-credential", result.token)
         } catch (error: AttendeeFailure) {
-            if (error.kind == FailureKind.Missing) throw AttendeeFailure(FailureKind.Identity)
+            if (error.kind == FailureKind.Missing) throw AttendeeFailure(FailureKind.NoCredential)
             throw error
         }
-        checkReply(credential.active && credential.token.equals(NfcProtocol.DEMO_PERSON_ID, ignoreCase = true),
-            FailureKind.Identity)
-        return AttendeeSession(result.token, expires, identity.person)
+        checkReply(credential.active, FailureKind.NoCredential)
+        val id = NfcId.parse(credential.token) ?: throw AttendeeFailure(FailureKind.Identity)
+        checkReply(expires.isAfter(clock.instant()), FailureKind.Expired)
+        return AttendeeSession(result.token, expires, identity.person, id)
     }
 
     override suspend fun card(session: AttendeeSession): EmergencyCard =

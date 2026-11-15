@@ -17,7 +17,8 @@ internal enum class Section(val label: String) {
     Identification("Identificación"), Card("Mi ficha"), Contacts("Contactos"), Connection("Conexión"),
 }
 internal enum class Task(val label: String) {
-    Checking("Comprobando el servidor"), SigningIn("Verificando la sesión de Antonia"),
+    Checking("Comprobando el servidor"), SigningIn("Verificando sesión"),
+    Switching("Cambiando de cuenta y verificando sesión"), Credential("Recuperando credencial NFC"),
     Loading("Cargando desde el servidor"), Saving("Guardando en el servidor"),
 }
 internal enum class Reachability { Unchecked, Connected, Offline }
@@ -51,7 +52,8 @@ internal data class AttendeeState(
     val section: Section = Section.Identification,
     val reachability: Reachability = Reachability.Unchecked,
     val person: Person? = null,
-    val identityMismatch: Boolean = false,
+    val selectedAccount: DemoAccount? = null,
+    val sharingGeneration: Long? = null,
     val snapshot: EmergencySnapshot? = null,
     val fresh: Boolean = false,
     val task: Task? = null,
@@ -72,6 +74,7 @@ internal class AttendeeController(
     private val storeUrl: (String) -> Unit,
     private val apiFor: (HttpUrl) -> AttendeeApi,
     private val clock: Clock = Clock.systemUTC(),
+    val sharing: HceIdentityStore = HceIdentityStore(clock),
 ) {
     private var target = storedAddress?.let { attendeeServerAddress(it, allowHttp) }
     private var api = target?.let(apiFor)
@@ -80,6 +83,7 @@ internal class AttendeeController(
     private var operation: Job? = null
     private var expiry: Job? = null
     private var generation = 0L
+    private val identityOwner = Any().also(sharing::claim)
     private val mutable = MutableStateFlow(AttendeeState(address = target?.toString().orEmpty()))
     val state = mutable.asStateFlow()
     private var ui: AttendeeState
@@ -100,38 +104,73 @@ internal class AttendeeController(
             return
         }
         if (address != target) {
-            cancelWork()
             clearSession()
+            cancelWork()
             target = address
             api = apiFor(address)
             storeUrl(address.toString())
-            ui = ui.copy(address = address.toString(), identityMismatch = false, confirmation = null)
+            ui = ui.copy(address = address.toString(), selectedAccount = null,
+                reachability = Reachability.Unchecked, confirmation = null)
         }
         refresh()
     }
 
-    fun login() {
+    /** Account changes are confirmed by the UI before entering this method. */
+    fun selectAccount(account: DemoAccount) {
+        beginLogin(account, keepDraft = false)
+    }
+
+    fun retryLogin() {
+        val account = ui.selectedAccount ?: return
+        if (ui.task == null && validSession() == null) beginLogin(account, keepDraft = true)
+    }
+
+    private fun beginLogin(account: DemoAccount, keepDraft: Boolean) {
         val remote = api ?: return
-        if (ui.task != null || session != null) return
-        work(Task.SigningIn) {
-            val active = remote.login()
+        val origin = target ?: return
+        if (session?.person?.account == account.key && validSession() != null) return
+        val switching = ui.selectedAccount != null && ui.selectedAccount != account
+        val pending = clearSession() ?: return
+        cancelWork()
+        if (!keepDraft) draftOwner = null
+        ui = ui.copy(selectedAccount = account, confirmation = null,
+            section = if (switching) Section.Connection else ui.section,
+            draft = ui.draft.takeIf { keepDraft }, review = ui.review.takeIf { keepDraft })
+        work(if (switching) Task.Switching else Task.SigningIn) {
+            val active = remote.login(account) {
+                requireCurrent()
+                ui = ui.copy(task = Task.Credential)
+            }
             current()
-            if (!active.expiresAt.isAfter(clock.instant())) throw AttendeeFailure(FailureKind.Expired)
-            if (draftOwner != null && draftOwner != active.person.id) throw AttendeeFailure(FailureKind.Identity)
+            if (active.person.account != account.key || active.person.id.isBlank() ||
+                draftOwner != null && draftOwner != active.person.id) throw AttendeeFailure(FailureKind.Identity)
+            val identity = sharing.publish(pending, active, origin) ?: throw AttendeeFailure(FailureKind.Expired)
             session = active
+            ui = ui.copy(person = identity.person, sharingGeneration = identity.credential.generation,
+                reachability = Reachability.Connected, task = Task.Loading)
             expiry = scope.launch {
-                val ttl = Duration.between(clock.instant(), active.expiresAt).coerceAtMost(Duration.ofHours(8))
-                delay(ttl.toMillis().coerceAtLeast(0))
+                delay(Duration.between(clock.instant(), identity.expiresAt).toMillis().coerceAtLeast(0))
                 if (session === active) {
                     val uncertain = ui.task == Task.Saving && ui.draft != null
                     cancelWork()
                     expire(uncertain)
                 }
             }
-            ui = ui.copy(person = active.person, identityMismatch = false, reachability = Reachability.Connected,
-                task = Task.Loading)
             load(remote, active)
         }
+    }
+
+    fun visibleIdentity(state: AttendeeState, slot: IdentitySlot): ShareableIdentity? =
+        sharing.current(slot)?.takeIf {
+            slot.owner === identityOwner && state.sharingGeneration == it.credential.generation &&
+                state.person == it.person
+        }
+
+    fun presentation(state: AttendeeState, slot: IdentitySlot, identity: ShareableIdentity?): AttendeeState {
+        if (slot.owner !== identityOwner) return AttendeeState(address = state.address, section = state.section)
+        return if (state.person != null && identity == null)
+            state.copy(person = null, snapshot = null, fresh = false, confirmation = null)
+        else state
     }
 
     fun refresh() {
@@ -147,8 +186,8 @@ internal class AttendeeController(
     }
 
     fun logout() {
-        cancelWork()
         clearSession()
+        cancelWork()
         draftOwner = null
         ui = AttendeeState(address = ui.address, section = Section.Connection, reachability = ui.reachability)
     }
@@ -256,12 +295,22 @@ internal class AttendeeController(
     }
 
     fun resume() {
+        if (!sharing.owns(identityOwner)) {
+            logout()
+            sharing.claim(identityOwner)
+        }
         validSession()
+    }
+
+    fun close() {
+        clearSession()
+        cancelWork()
+        draftOwner = null
     }
 
     private fun validSession(): AttendeeSession? {
         val active = session ?: return null
-        if (active.expiresAt.isAfter(clock.instant())) return active
+        if (active.expiresAt.isAfter(clock.instant()) && visibleIdentity(ui, sharing.state.value) != null) return active
         val uncertain = ui.task == Task.Saving && ui.draft != null
         cancelWork()
         expire(uncertain)
@@ -274,11 +323,13 @@ internal class AttendeeController(
             review = if (uncertain) Review.Uncertain else ui.draft?.let { ui.review ?: Review.Conflict })
     }
 
-    private fun clearSession() {
+    private fun clearSession(): IdentitySlot? {
+        val pending = sharing.invalidate(identityOwner)
         expiry?.cancel()
         expiry = null
         session = null
-        ui = ui.copy(person = null, snapshot = null, fresh = false)
+        ui = ui.copy(person = null, sharingGeneration = null, snapshot = null, fresh = false)
+        return pending
     }
 
     private suspend fun Operation.load(remote: AttendeeApi, active: AttendeeSession) {
@@ -319,7 +370,6 @@ internal class AttendeeController(
             return
         }
         ui = ui.copy(notice = kind.message,
-            identityMismatch = ui.identityMismatch || kind == FailureKind.Identity,
             reachability = reachabilityAfter(kind),
             fresh = if (kind == FailureKind.Invalid) ui.fresh else false)
     }
@@ -355,7 +405,11 @@ internal class AttendeeController(
         val isCurrent get() = id == generation
         suspend fun current() {
             coroutineContext.ensureActive()
-            if (!isCurrent) throw CancellationException()
+            requireCurrent()
+        }
+
+        fun requireCurrent() {
+            if (!isCurrent || !sharing.owns(identityOwner)) throw CancellationException()
         }
     }
 

@@ -10,7 +10,10 @@ import androidx.compose.ui.unit.dp
 import cl.discoprotect.ui.*
 
 @Composable
-internal fun EditScreen(state: AttendeeState, draft: EditDraft, actions: AttendeeController, onCancel: () -> Unit) {
+internal fun EditScreen(
+    state: AttendeeState, draft: EditDraft, actions: AttendeeController,
+    onCancel: () -> Unit, onChooseAccount: () -> Unit,
+) {
     val idle = state.task == null
     val enabled = idle && state.review == null
     val canSave = state.canSave && draft.dirty
@@ -18,8 +21,8 @@ internal fun EditScreen(state: AttendeeState, draft: EditDraft, actions: Attende
         ReviewPanel(state.review, state.snapshot, draft, actions, idle)
     } else if (!state.fresh && idle) {
         if (state.person == null) {
-            Button(onClick = actions::login, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text("Volver a iniciar sesión como Antonia")
+            Button(onClick = actions::retryLogin, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("Volver a verificar la cuenta")
             }
         } else {
             Button(onClick = actions::refresh, modifier = Modifier.heightIn(min = 48.dp)) {
@@ -53,6 +56,9 @@ internal fun EditScreen(state: AttendeeState, draft: EditDraft, actions: Attende
 
     TextButton(onClick = onCancel, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
         Text(if (state.review != null) "Cerrar borrador" else "Cancelar")
+    }
+    TextButton(onClick = onChooseAccount, modifier = Modifier.heightIn(min = 48.dp)) {
+        Text("Cambiar cuenta")
     }
 }
 

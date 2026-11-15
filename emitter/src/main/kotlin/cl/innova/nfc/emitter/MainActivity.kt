@@ -36,7 +36,10 @@ class MainActivity : ComponentActivity() {
         controller = ViewModelProvider(this)[AttendeeViewModel::class.java].controller
         setContent {
             val state by controller.state.collectAsState()
-            AttendeeScreen(state, controller, diagnostics, ::refresh, ::openNfcSettings)
+            val slot by controller.sharing.state.collectAsState()
+            val identity = controller.visibleIdentity(state, slot)
+            AttendeeScreen(controller.presentation(state, slot, identity), identity, controller,
+                diagnostics, ::refresh, ::openNfcSettings)
         }
     }
 
