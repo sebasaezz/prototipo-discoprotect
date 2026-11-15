@@ -11,7 +11,7 @@
 | `backend` | API REST Fastify, validación Zod, sesiones ficticias, migraciones y SQLite. |
 | GestiónWeb | Interfaz futura de organizadores, prevista en H8. |
 
-AppAsistente transmite el ID por NFC. AppPersonal cierra IsoDep antes de resolverlo. El backend y SQLite son la fuente autoritativa para el modo conectado.
+AppAsistente transmite por NFC el ID de la cuenta vigente verificada. AppPersonal cierra IsoDep antes de resolverlo. El backend y SQLite son la fuente autoritativa para el modo conectado.
 
 En el backend `main.ts` abre la base y arranca el proceso. `app.ts` define las rutas. `auth.ts` controla la sesión, el rol y la pertenencia. `records.ts` valida y opera sobre los datos. `db.ts` ejecuta transacciones y migraciones. La CLI permite inicializar y restaurar la demo. El proyecto fija Fastify 5.12.8 y Zod 4.6.7, usa TypeScript ~5.9.3 y SQLite mediante `node:sqlite`. `package-lock.json` fija las dependencias instaladas por `npm ci`. Las dos apps usan OkHttp 4.12.0 y Kotlin Serialization JSON 1.9.0. El [README](../README.md) especifica la toolchain Android y los comandos de arranque.
 
@@ -25,11 +25,17 @@ En el backend `main.ts` abre la base y arranca el proceso. `app.ts` define las r
 
 ## H3
 
-`HttpAttendeeApi` usa el patrón OkHttp y Kotlin Serialization de H2, con contratos propios del asistente. Antes de entregar la sesión comprueba el rol, la cuenta `antonia` y la coincidencia entre la credencial activa del servidor y el ID que ya emite HCE. El token vive en memoria y se persiste solo el origen del servidor. `EmergencyRepository` comprueba la versión de la ficha antes y después de consultar contactos para obtener una vista consistente.
+`HttpAttendeeApi` usa el patrón OkHttp y Kotlin Serialization de H2, con contratos propios del asistente. En H3, la sesión estaba limitada a `antonia` y comprobaba la coincidencia con el ID fijo. El token vive en memoria y se persiste solo el origen del servidor. `EmergencyRepository` comprueba la versión de la ficha antes y después de consultar contactos para obtener una vista consistente.
 
 `AttendeeViewModel` y `AttendeeController` coordinan la sesión, la navegación y las escrituras. Los borradores viven en el ViewModel durante la rotación, separados de los datos confirmados. Las escrituras usan la versión del borrador. Ante 409 se carga el estado vigente y el usuario decide si descarta o vuelve a editar con esa versión. Tras un resultado incierto, se bloquea la escritura hasta consultar el estado del servidor. Las operaciones previas al cierre de sesión o a un cambio de origen se cancelan y sus resultados se descartan.
 
-`AttendeeScreen` organiza Identificación, Mi ficha, Contactos y Conexión. `EditScreen` presenta los formularios y la revisión del conflicto. El servicio HCE sigue atendiendo APDU independientemente de la Activity, la sesión y la red. La [preparación H4](h4-handoff.md) describe cómo evaluar la coordinación entre sesión y emisión HCE.
+`AttendeeScreen` organiza Identificación, Mi ficha, Contactos y Conexión. `EditScreen` presenta los formularios y la revisión del conflicto. El servicio HCE sigue atendiendo APDU independientemente de la Activity y de la red.
+
+## H4
+
+`HttpAttendeeApi` acepta una de las tres cuentas demo, verifica el rol y la identidad de retorno, y convierte la credencial activa a 16 bytes. `AttendeeController` invalida primero el registro HCE al confirmar un cambio y cancela las operaciones obsoletas. La ficha, los contactos y las escrituras versionadas quedan ligados al Bearer verificado de esa cuenta.
+
+`HceIdentityStore` contiene un único estado atómico. `PersonCardService` usa la misma fuente que la UI y confirma la vigencia en cada APDU. `CardSession` vincula SELECT y GET a la misma generación. El registro y el Bearer desaparecen con el proceso. El [guion H4](h4-integration.md) detalla expiración, política offline y pruebas. El [handoff](h4-handoff.md) conserva el análisis anterior a la implementación.
 
 ## Extensiones previstas
 

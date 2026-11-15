@@ -76,23 +76,43 @@ object NfcProtocol {
     fun toHex(bytes: ByteArray): String = bytes.joinToString("") { "%02X".format(it.toInt() and 0xFF) }
 }
 
-/** One selection state per RF session; reset when the link is deactivated. */
-class CardSession {
-    private var selected = false
+/** Validated once, outside the NFC callback. Bytes are private and copied into each reply. */
+class NfcId private constructor(val hex: String, private val bytes: ByteArray) {
+    internal fun response(): ByteArray = NfcProtocol.response(NfcProtocol.SUCCESS, bytes)
 
-    fun reset() { selected = false }
+    companion object {
+        fun parse(hex: String): NfcId? {
+            if (hex.length != NfcProtocol.PERSON_ID_LENGTH * 2 ||
+                hex.any { it !in "0123456789abcdefABCDEF" }) return null
+            return NfcId(hex.uppercase(), NfcProtocol.fromHex(hex))
+        }
+    }
+}
+
+class CardCredential(val generation: Long, val id: NfcId)
+
+/** The source returns the same immutable credential object while its generation is valid. */
+class CardSession(private val current: () -> CardCredential?) {
+    private var selected: CardCredential? = null
+
+    fun reset() { selected = null }
 
     fun process(apdu: ByteArray): ByteArray = when (val command = NfcProtocol.parseCommand(apdu)) {
         NfcProtocol.Command.Select -> {
-            selected = true
-            NfcProtocol.response(NfcProtocol.SUCCESS)
+            selected = current()
+            NfcProtocol.response(if (selected != null) NfcProtocol.SUCCESS else NfcProtocol.NOT_FOUND)
         }
-        NfcProtocol.Command.GetPersonId -> if (selected) {
-            NfcProtocol.response(NfcProtocol.SUCCESS, NfcProtocol.fromHex(NfcProtocol.DEMO_PERSON_ID))
-        } else NfcProtocol.response(NfcProtocol.NOT_FOUND)
+        NfcProtocol.Command.GetPersonId -> {
+            val active = current()
+            if (active != null && active === selected) active.id.response()
+            else {
+                reset()
+                NfcProtocol.response(NfcProtocol.NOT_FOUND)
+            }
+        }
         is NfcProtocol.Command.Rejected -> {
             // A rejected SELECT must not preserve an earlier application selection.
-            if (apdu.size >= 2 && apdu[1] == 0xA4.toByte()) selected = false
+            if (apdu.size >= 2 && apdu[1] == 0xA4.toByte()) reset()
             NfcProtocol.response(command.status)
         }
     }

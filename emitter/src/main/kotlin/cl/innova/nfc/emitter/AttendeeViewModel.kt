@@ -14,5 +14,11 @@ internal class AttendeeViewModel(application: Application) : AndroidViewModel(ap
         storedAddress = prefs.getString("server_address", null),
         storeUrl = { prefs.edit { putString("server_address", it) } },
         apiFor = { HttpAttendeeApi(it, client) },
+        sharing = ProcessHceIdentity.store,
     )
+
+    override fun onCleared() {
+        controller.close()
+        super.onCleared()
+    }
 }

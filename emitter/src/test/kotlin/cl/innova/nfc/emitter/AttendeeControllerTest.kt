@@ -19,7 +19,7 @@ class AttendeeControllerTest {
     private val now = Instant.parse("2026-11-15T14:00:00Z")
     private val original = EmergencyCard(1, now.toString(), "O+", listOf("Penicilina"), listOf("Asma"), listOf("Inhalador"))
     private val relative = Contact("t0", "María", "Madre", "+56 9 0000 0001")
-    private val active = AttendeeSession("demo", now.plusSeconds(3600), Person("a", "antonia", "Antonia Reyes", 22))
+    private val active = demoSession(DemoAccount.Antonia, now.plusSeconds(3600))
     private val url = "http://192.168.1.42:3000"
 
     @Test fun `saves full card and preserves untouched fields despite duplicate presses`() = runTest {
@@ -176,7 +176,7 @@ class AttendeeControllerTest {
         app.save()
         assertEquals(listOf(1L), backend.writes)
         backend.rejectWrite = null
-        app.login()
+        app.retryLogin()
         runCurrent()
         assertEquals(Review.Conflict, app.state.value.review)
         assertFalse(app.state.value.canSave)
@@ -207,7 +207,7 @@ class AttendeeControllerTest {
         app.logout()
         app.connect("http://192.168.1.43:3000")
         runCurrent()
-        app.login()
+        app.selectAccount(DemoAccount.Antonia)
         runCurrent()
         late.resume(Unit)
         runCurrent()
@@ -221,7 +221,7 @@ class AttendeeControllerTest {
         val backend = Fake().apply { rejectLogin = true }
         val app = ready(backend)
         app.editCard()
-        assertTrue(app.state.value.identityMismatch)
+        assertEquals(FailureKind.Identity.message, app.state.value.notice)
         assertNull(app.state.value.person)
         assertNull(app.state.value.draft)
     }
@@ -243,7 +243,7 @@ class AttendeeControllerTest {
         AttendeeController(backgroundScope, true, null, {}, { api }, Clock.fixed(now, ZoneOffset.UTC)).also {
             it.connect(url)
             runCurrent()
-            it.login()
+            it.selectAccount(DemoAccount.Antonia)
             runCurrent()
             it.navigate(Section.Card)
         }
@@ -257,8 +257,9 @@ class AttendeeControllerTest {
         var pauseWrite: (suspend () -> Unit)? = null
         val writes = mutableListOf<Long>()
         override suspend fun health() = Unit
-        override suspend fun login(): AttendeeSession {
+        override suspend fun login(account: DemoAccount, onCredential: () -> Unit): AttendeeSession {
             if (rejectLogin) throw AttendeeFailure(FailureKind.Identity)
+            onCredential()
             return active
         }
         override suspend fun card(session: AttendeeSession) = record

@@ -6,7 +6,7 @@ import cl.innova.nfc.protocol.CardSession
 import cl.innova.nfc.protocol.NfcProtocol
 
 class PersonCardService : HostApduService() {
-    private val session = CardSession()
+    private val session = CardSession { ProcessHceIdentity.store.current()?.credential }
 
     override fun processCommandApdu(commandApdu: ByteArray?, extras: Bundle?): ByteArray =
         commandApdu?.let(session::process) ?: NfcProtocol.response(NfcProtocol.WRONG_LENGTH)
