@@ -2,6 +2,8 @@
 
 Discoprotect usa una interfaz clara, plana y centrada en la tarea. La marca y el rol encabezan ambas pantallas. Asistente prioriza disponibilidad e instrucciones de NFC. Personal prioriza estado de lectura, identidad y alergias. Los diagnósticos se muestran a petición. Usa bordes discretos y espacio entre bloques para mantener una jerarquía clara.
 
+En AppAsistente, la navegación separa identificación NFC, ficha, contactos y conexión. El formulario presenta errores junto a cada entrada, y la revisión de conflictos muestra los datos vigentes antes de habilitar otro guardado.
+
 ## Color
 
 | Token | Valor | Aplicación |

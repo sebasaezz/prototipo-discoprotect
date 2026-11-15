@@ -19,6 +19,8 @@ El repositorio de E4 partió de `39ca32d`, un README. El punto de restauración 
 
 El código de protocolo, sus pruebas JVM, `PersonCardService`, `NfcReader` y el XML HCE se importaron directamente y se verificaron por hash. Los manifiestos muestran los nombres nuevos de las apps. El lector conserva la lógica de Reader Mode y ciclo de vida. Las seis pruebas JVM y ambos APK se verificaron desde una copia exacta del commit histórico. En la ruta original de Windows se reprodujo `ClassNotFoundException` en el proceso de pruebas. Una ruta ASCII evita esa incidencia sin cambiar versiones.
 
+En H3 la UI de AppAsistente verifica que la cuenta sea Antonia y la credencial activa coincida con el ID fijo. El servicio HCE sigue operando de forma independiente, incluso sin sesión o Wi-Fi. La prueba de edición y lectura se describe en el [guion H3](h3-integration.md).
+
 ## Checklist física
 
 1. Instala AppAsistente en Galaxy S22 y AppPersonal en Galaxy S25. Los modelos previstos proceden del README de E2. Comprueba versiones y seriales con `adb devices -l` antes de instalar.

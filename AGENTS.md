@@ -10,12 +10,14 @@ Prototipo universitario de seguridad para eventos masivos. AppAsistente y AppPer
 - Usa datos ficticios y configuración por entorno. Excluye credenciales y fichas de los logs. Mantén documentación y pruebas sincronizadas con los contratos.
 - AppPersonal consulta el backend tras cerrar IsoDep. La demo local se activa explícitamente. Mantén PIN y token fuera del almacenamiento persistente y del logging. El HTTP sin TLS se habilita solo en debug.
 
+AppAsistente solo edita la ficha de Antonia en H3. Verifica la identidad y la credencial fija antes de habilitar la edición. Conserva por separado los borradores en memoria y la última versión confirmada por la API; ante 409 o un resultado incierto exige revisión explícita.
+
 ## NFC
 
 - Preserva HCE, Reader Mode, IsoDep, AID, APDU y pruebas existentes. El [contrato NFC](docs/nfc-contract.md) detalla los bytes y la verificación física.
 - La respuesta NFC contiene únicamente el identificador opaco y el código de estado. HCE funciona sin depender de la Activity.
 - Evita red o bloqueos en `processCommandApdu()`. Cierra IsoDep antes de resolver la ficha. Conserva los diagnósticos y la protección frente a resultados obsoletos al salir de Reader Mode.
-- Ejecuta `./gradlew :protocol:test :emitter:assembleDebug :reader:assembleDebug :reader:testDebugUnitTest :emitter:lintDebug :reader:lintDebug` para cambios Android y `npm test` desde `backend/` para cambios de API o datos. Registra por separado las verificaciones automáticas, visuales y físicas.
+- Ejecuta `./gradlew :protocol:test :emitter:testDebugUnitTest :emitter:assembleDebug :reader:assembleDebug :reader:testDebugUnitTest :emitter:lintDebug :reader:lintDebug` para cambios Android y `npm test` desde `backend/` para cambios de API o datos. Registra por separado las verificaciones automáticas, visuales y físicas.
 
 ## Diseño y Git
 
