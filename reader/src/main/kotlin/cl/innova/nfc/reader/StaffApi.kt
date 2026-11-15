@@ -1,5 +1,7 @@
 package cl.innova.nfc.reader
 
+import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.IncidentList
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.URI
@@ -43,6 +45,7 @@ internal interface StaffApi {
     suspend fun health()
     suspend fun login(pin: String): StaffSession
     suspend fun events(session: StaffSession): List<StaffEvent>
+    suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident>
     suspend fun resolve(session: StaffSession, event: StaffEvent, token: String): HealthProfile
 }
 
@@ -65,6 +68,16 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
             StaffEvent(it.id, it.name, it.venue)
         }
 
+    override suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident> {
+        requireReply(event.id.isNotBlank() && event.id !in setOf(".", ".."))
+        val url = address.newBuilder().addPathSegments("api/v1/events")
+            .addPathSegment(event.id).addPathSegment("incidents").build()
+        return exchange<IncidentList>(url, session).incidents.also { incidents ->
+            requireReply(incidents.all { it.validFor(event.id) } &&
+                incidents.distinctBy { it.id }.size == incidents.size)
+        }
+    }
+
     override suspend fun resolve(session: StaffSession, event: StaffEvent, token: String): HealthProfile {
         if (!token.matches(Regex("[a-fA-F0-9]{32}"))) throw ApiFailure(ApiProblem.InvalidId)
         val reply = exchange<ProfileReply>("nfc/resolve", session, json.encodeToString(ResolveBody(token, event.id)))
@@ -79,9 +92,12 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
             card.conditions, card.medications, contacts, instant(card.updatedAt), card.version)
     }
 
-    private suspend inline fun <reified T> exchange(path: String, session: StaffSession? = null, payload: String? = null): T {
+    private suspend inline fun <reified T> exchange(path: String, session: StaffSession? = null, payload: String? = null): T =
+        exchange(address.newBuilder().addPathSegments("api/v1/$path").build(), session, payload)
+
+    private suspend inline fun <reified T> exchange(url: HttpUrl, session: StaffSession? = null, payload: String? = null): T {
         val request = Request.Builder()
-            .url(address.newBuilder().addPathSegments("api/v1/$path").build())
+            .url(url)
             .header("Accept", "application/json")
             .header("Cache-Control", "no-store")
         if (session != null) request.header("Authorization", "Bearer ${session.token}")

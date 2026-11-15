@@ -75,6 +75,7 @@ internal fun AttendeeScreen(
                             diagnostics, identity, state.reachability, onRefreshNfc, onNfcSettings,
                             onChoose = { actions.navigate(Section.Connection) },
                         )
+                        Section.Sos -> SosScreen(state, actions)
                         Section.Card -> CardScreen(state, actions)
                         Section.Contacts -> ContactsScreen(state, actions)
                         Section.Connection -> ConnectionScreen(state, identity, actions, chooseAccount)

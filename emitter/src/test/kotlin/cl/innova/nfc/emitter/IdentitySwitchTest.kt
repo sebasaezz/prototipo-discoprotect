@@ -342,7 +342,7 @@ class IdentitySwitchTest {
             AttendeeController(scope.backgroundScope, true, origin, { saved.add(it) }, { backend }, clock, registry)
     }
 
-    private inner class FakeApi : AttendeeApi {
+    private inner class FakeApi : H4AttendeeApi() {
         var waitFor: suspend (DemoAccount) -> Unit = {}
         var beforeWrite: suspend () -> Unit = {}
         var loginError: FailureKind? = null

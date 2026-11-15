@@ -2,6 +2,8 @@
 
 Prototipo universitario de seguridad para eventos masivos. AppPersonal lee el identificador NFC, cierra la conexión con AppAsistente y consulta la ficha actualizada en el servidor. La demo local sigue disponible desde la configuración del lector. AppAsistente verifica una de las tres cuentas demo, emite su credencial NFC vigente y permite editar la ficha y los contactos de esa cuenta mediante el mismo servidor.
 
+H5 agrega solicitudes SOS con zona manual en AppAsistente y consulta de incidentes en AppPersonal y en la web de organizadores. Los registros se conservan en SQLite. El usuario validó físicamente H5 el 15 de noviembre de 2026. H6, gestión operativa de incidentes, es el siguiente hito. [Checkpoint H5](docs/checkpoints/h5-2026-11-15.md) · [Guion H5](docs/h5-integration.md)
+
 ## Backend
 
 El backend usa Node.js 22.13.0 o posterior y npm, según `backend/package.json`. La instalación reproducible usa el lockfile. Desde el repositorio:
@@ -24,6 +26,20 @@ Para restaurar, detén el servidor, comprueba que `DATABASE_PATH` apunte a la ba
 Para escuchar en LAN, configura `HOST=0.0.0.0` y `PORT` en `.env`. Permite el puerto en el firewall de red privada y usa la IP LAN del computador para las consultas. HTTP de desarrollo está destinado a datos ficticios en una LAN aislada. Fuera de ese entorno se requiere HTTPS y controles adicionales.
 
 [Contrato API](docs/api-contract.md) · [Guion de demostración con reinicio](docs/demo-runbook.md)
+
+## Web de organizadores
+
+Con Fastify iniciado y `DEMO_ORGANIZER_PIN` configurado en el backend, ejecuta desde la raíz en Windows:
+
+```powershell
+Set-Location web
+npm.cmd ci
+npm.cmd test
+npm.cmd run build
+npm.cmd run dev
+```
+
+Abre `http://127.0.0.1:5173` en el PC. Vite reenvía `/api/v1` a `http://127.0.0.1:3000`. Si Fastify escucha en otro puerto u origen, define `DISCOPROTECT_API_ORIGIN` en la terminal antes de arrancar Vite. Usa el PIN del entorno del servidor. [Preparación de la demo](docs/h5-integration.md)
 
 ## Android
 

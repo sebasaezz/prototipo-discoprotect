@@ -1,9 +1,12 @@
 package cl.innova.nfc.reader
 
 import cl.innova.nfc.protocol.NfcProtocol
+import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.IncidentStatus
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.UUID
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -26,6 +29,60 @@ class ReaderControllerTest {
     private val debug = NfcDebug(true, true, "Success", nfcId, 20)
     private val original = HealthProfile("Antonia", 22, "O+", listOf("Látex"), emptyList(), emptyList(),
         emptyList(), now, 2)
+
+    @Test fun `incident list requires a staff event, never scans and refreshes serially`() = runTest {
+        val backend = FakeApi().apply { availableEvents = listOf(eventA, eventB) }
+        val screen = controller(backend)
+        screen.openIncidents()
+        authenticate(screen)
+        screen.openIncidents()
+        assertFalse(screen.state.value.incidentsVisible)
+        screen.selectEvent(eventA.id)
+        val incident = incident(eventA)
+        backend.onIncidents = { active, event ->
+            assertSame(session, active)
+            assertEquals(eventA, event)
+            listOf(incident)
+        }
+        screen.openIncidents()
+        screen.refreshIncidents()
+        screen.scan { error("Incidentes no requiere una lectura") }
+        runCurrent()
+        assertEquals(listOf(incident), screen.state.value.incidents)
+        assertEquals(1, backend.incidentCalls)
+        assertEquals(0, backend.resolveCount)
+        backend.onIncidents = { _, _ -> throw ApiFailure(ApiProblem.Unauthorized) }
+        screen.refreshIncidents()
+        runCurrent()
+        assertFalse(screen.state.value.signedIn)
+        assertFalse(screen.state.value.incidentsVisible)
+        assertNull(screen.state.value.incidents)
+    }
+
+    @Test fun `a response from a previous event cannot replace the current list`() = runTest {
+        val backend = FakeApi().apply { availableEvents = listOf(eventA, eventB) }
+        val screen = controller(backend)
+        authenticate(screen)
+        val first = incident(eventA)
+        val second = incident(eventB)
+        lateinit var late: Continuation<List<Incident>>
+        backend.onIncidents = { _, selected ->
+            if (selected == eventA) suspendCoroutine { late = it } else listOf(second)
+        }
+        screen.selectEvent(eventA.id)
+        screen.openIncidents()
+        runCurrent()
+        screen.selectEvent(eventB.id)
+        runCurrent()
+        late.resume(listOf(first))
+        runCurrent()
+        assertEquals(listOf(second), screen.state.value.incidents)
+        backend.onIncidents = { _, _ -> throw ApiFailure(ApiProblem.Forbidden) }
+        screen.refreshIncidents()
+        runCurrent()
+        assertNull(screen.state.value.incidents)
+        assertEquals(ApiProblem.Forbidden, screen.state.value.incidentProblem)
+    }
 
     @Test fun `event selection and updates after closing NFC`() = runTest {
         val backend = FakeApi().apply { availableEvents = listOf(eventA, eventB) }
@@ -201,13 +258,22 @@ class ReaderControllerTest {
 
     private fun readIdentity() = ReadResult(NfcOutcome.Identity(nfcId), debug)
 
+    private fun incident(event: StaffEvent) = Incident(UUID.randomUUID().toString(), event.id, "Antonia Reyes",
+        null, null, "Cerca de la fila", IncidentStatus.OPEN, now.toString(), now.toString())
+
     private inner class FakeApi : StaffApi {
         var availableEvents = listOf(eventA)
         var resolveCount = 0
+        var incidentCalls = 0
+        var onIncidents: suspend (StaffSession, StaffEvent) -> List<Incident> = { _, _ -> emptyList() }
         var onResolve: suspend (StaffSession, StaffEvent, String) -> HealthProfile = { _, _, _ -> original }
         override suspend fun health() = Unit
         override suspend fun login(pin: String) = session
         override suspend fun events(session: StaffSession) = availableEvents
+        override suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident> {
+            incidentCalls++
+            return onIncidents(session, event)
+        }
         override suspend fun resolve(session: StaffSession, event: StaffEvent, token: String): HealthProfile {
             resolveCount++
             return onResolve(session, event, token)

@@ -3,6 +3,7 @@ import { authenticate, issueSession, requireMembership, requireRole } from './au
 import type { Pins } from './config.js';
 import type { Db } from './db.js';
 import { ApiError, parse } from './errors.js';
+import * as incidents from './incidents.js';
 import * as records from './records.js';
 
 export function createApp(db: Db, pins: Pins, logging = false) {
@@ -60,6 +61,39 @@ export function createApp(db: Db, pins: Pins, logging = false) {
       db, attendee(request), parse(records.contactId, request.params).id, parse(records.version, request.body).version));
     api.get('/me/nfc-credential', async request => records.ownCredential(db, attendee(request)));
     api.get('/events', async request => ({ events: records.events(db, session(request).personId) }));
+    api.get('/events/:eventId/zones', async request => {
+      const current = session(request);
+      const { eventId } = parse(records.eventId, request.params);
+      requireMembership(db, current, eventId);
+      return { zones: incidents.zones(db, eventId) };
+    });
+    api.post('/events/:eventId/incidents', async (request, reply) => {
+      const current = session(request);
+      requireRole(current, 'ATTENDEE');
+      const { eventId } = parse(records.eventId, request.params);
+      const result = incidents.createIncident(db, current, eventId, parse(incidents.createInput, request.body));
+      return reply.code(result.created ? 201 : 200).send(result.incident);
+    });
+    api.get('/me/incidents', async request => {
+      const current = session(request);
+      requireRole(current, 'ATTENDEE');
+      const { eventId } = parse(records.eventId, request.query);
+      requireMembership(db, current, eventId);
+      return { incidents: incidents.ownIncidents(db, eventId, current.personId) };
+    });
+    api.get('/events/:eventId/incidents', async request => {
+      const current = session(request);
+      if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
+      const { eventId } = parse(records.eventId, request.params);
+      requireMembership(db, current, eventId);
+      return { incidents: incidents.eventIncidents(db, eventId) };
+    });
+    api.post('/me/incidents/:id/cancel', async request => {
+      const current = session(request);
+      requireRole(current, 'ATTENDEE');
+      const { id } = parse(incidents.incidentId, request.params);
+      return incidents.cancelIncident(db, current, id);
+    });
     api.patch('/events/:eventId', async request => {
       const current = session(request);
       requireRole(current, 'ORGANIZER');

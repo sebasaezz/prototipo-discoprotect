@@ -28,6 +28,39 @@ class HttpAttendeeApiTest {
     private val card = """{"version":3,"updatedAt":"2026-11-15T14:00:00Z","bloodType":"A−","allergies":["Látex"],"conditions":["Asma"],"medications":["Inhalador"]}"""
     private val contact = """{"id":"new","name":"María","relationship":"Tía","phone":"+56 (9) 1234-5678"}"""
 
+    @Test fun `SOS uses event and owner routes with a stable idempotency body after timeout`() = runBlocking {
+        val clientId = "34522603-54fe-4ea1-af0b-39699c9515d2"
+        val id = "34522603-54fe-4ea1-af0b-39699c9515d3"
+        val attempt = SosAttempt.Create("festival", SosRequest(clientId, null, "Cerca del acceso"))
+        val incident = """{"id":"$id","eventId":"festival","requesterPersonId":"a","requesterName":"Antonia Reyes",
+            "zoneId":null,"zoneName":null,"locationText":"Cerca del acceso","status":"OPEN","clientRequestId":"$clientId",
+            "createdAt":"2026-11-15T14:00:00Z","updatedAt":"2026-11-15T14:00:00Z"}"""
+        reply("""{"events":[{"id":"festival","name":"Festival","venue":"Recinto","role":"ATTENDEE"}]}""")
+        assertEquals("festival", api.events(session).single().id)
+        verify("GET", "events")
+        reply("""{"zones":[{"id":"escenario","name":"Escenario"}]}""")
+        assertEquals("escenario", api.zones(session, "festival").single().id)
+        verify("GET", "events/festival/zones")
+
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        expect(FailureKind.Timeout) { api.createSos(session, attempt) }
+        val sent = verify("POST", "events/festival/incidents").body.readUtf8()
+        assertEquals("""{"clientRequestId":"$clientId","zoneId":null,"locationText":"Cerca del acceso"}""", sent)
+        reply(incident)
+        assertEquals(id, api.createSos(session, attempt).id)
+        assertEquals(sent, verify("POST", "events/festival/incidents").body.readUtf8())
+        reply("""{"incidents":[$incident]}""")
+        assertEquals(id, api.incidents(session, "festival").single().id)
+        verify("GET", "me/incidents?eventId=festival")
+        reply(incident.replace("OPEN", "CANCELLED"))
+        assertEquals("CANCELLED", api.cancelSos(session, SosAttempt.Cancel("festival", id)).status.name)
+        verify("POST", "me/incidents/$id/cancel")
+        reply("""{"incidents":[${incident.replace("\"a\"", "\"otro\"")}]}""")
+        expect(FailureKind.Response) { api.incidents(session, "festival") }
+        reply("{}", 401)
+        expect(FailureKind.Expired) { api.incidents(session, "festival") }
+    }
+
     @Before fun start() {
         server.start(InetAddress.getLoopbackAddress(), 0)
         api = HttpAttendeeApi(server.url("/"), http)

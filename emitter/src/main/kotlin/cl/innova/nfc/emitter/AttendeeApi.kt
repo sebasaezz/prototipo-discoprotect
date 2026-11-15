@@ -1,6 +1,9 @@
 package cl.innova.nfc.emitter
 
 import cl.innova.nfc.protocol.NfcId
+import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.IncidentList
+import cl.discoprotect.ui.isIncidentUuid
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.URI
@@ -66,6 +69,11 @@ internal interface AttendeeApi {
     suspend fun replaceCard(session: AttendeeSession, version: Long, fields: CardFields): EmergencyCard
     suspend fun saveContact(session: AttendeeSession, version: Long, id: String?, fields: ContactFields): Long
     suspend fun deleteContact(session: AttendeeSession, version: Long, id: String): Long
+    suspend fun events(session: AttendeeSession): List<SosEvent>
+    suspend fun zones(session: AttendeeSession, eventId: String): List<SosZone>
+    suspend fun incidents(session: AttendeeSession, eventId: String): List<Incident>
+    suspend fun createSos(session: AttendeeSession, attempt: SosAttempt.Create): Incident
+    suspend fun cancelSos(session: AttendeeSession, attempt: SosAttempt.Cancel): Incident
 }
 
 internal class HttpAttendeeApi(
@@ -126,6 +134,47 @@ internal class HttpAttendeeApi(
     override suspend fun deleteContact(session: AttendeeSession, version: Long, id: String): Long =
         send<VersionReply>("DELETE", "me/contacts", session.token, json.encodeToString(VersionWrite(version)), id)
             .cardVersion.also { checkReply(it == version + 1) }
+
+    override suspend fun events(session: AttendeeSession): List<SosEvent> =
+        get<SosEvents>("events", session.token).events.filter { it.role == "ATTENDEE" }.also { events ->
+            checkReply(events.all { it.id.validSegment() && it.name.isNotBlank() && it.venue.isNotBlank() } &&
+                events.distinctBy { it.id }.size == events.size)
+        }
+
+    override suspend fun zones(session: AttendeeSession, eventId: String): List<SosZone> =
+        exchange<SosZones>(Request.Builder().url(sosEventEndpoint(eventId, "zones")), session.token).zones.also { zones ->
+            checkReply(zones.all { it.id.isNotBlank() && it.name.isNotBlank() } &&
+                zones.distinctBy { it.id }.size == zones.size)
+        }
+
+    override suspend fun incidents(session: AttendeeSession, eventId: String): List<Incident> {
+        val url = endpoint("me/incidents").newBuilder().addQueryParameter("eventId", eventId).build()
+        return exchange<IncidentList>(Request.Builder().url(url), session.token).incidents.also { incidents ->
+            checkReply(incidents.distinctBy { it.id }.size == incidents.size)
+            incidents.forEach { it.validated(session, eventId) }
+        }
+    }
+
+    override suspend fun createSos(session: AttendeeSession, attempt: SosAttempt.Create): Incident =
+        exchange<Incident>(Request.Builder().url(sosEventEndpoint(attempt.eventId, "incidents"))
+            .post(json.encodeToString(attempt.body).toRequestBody(jsonMedia)), session.token)
+            .validated(session, attempt.eventId).also { checkReply(attempt.matches(it)) }
+
+    override suspend fun cancelSos(session: AttendeeSession, attempt: SosAttempt.Cancel): Incident {
+        checkReply(isIncidentUuid(attempt.id), FailureKind.Invalid)
+        return exchange<Incident>(Request.Builder().url(endpoint("me/incidents/${attempt.id}/cancel"))
+            .post(ByteArray(0).toRequestBody()), session.token).validated(session, attempt.eventId)
+            .also { checkReply(attempt.matches(it)) }
+    }
+
+    private fun Incident.validated(session: AttendeeSession, eventId: String) = also {
+        checkReply(validFor(eventId) && requesterPersonId == session.person.id && clientRequestId?.let(::isIncidentUuid) == true)
+    }
+
+    private fun sosEventEndpoint(eventId: String, resource: String): HttpUrl {
+        checkReply(eventId.validSegment(), FailureKind.Invalid)
+        return endpoint("events").newBuilder().addPathSegment(eventId).addPathSegment(resource).build()
+    }
 
     private fun EmergencyCard.validated() = also {
         checkReply(version in 1..MAX_WRITE_VERSION + 1 && fields.valid())
@@ -212,6 +261,7 @@ private fun parseInstant(value: String): Instant =
     runCatching { Instant.parse(value) }.getOrElse { throw AttendeeFailure(FailureKind.Response) }
 private fun IOException.failure() =
     AttendeeFailure(if (this is InterruptedIOException) FailureKind.Timeout else FailureKind.Offline)
+private fun String.validSegment() = isNotBlank() && this !in setOf(".", "..")
 
 @Serializable private class Health(val status: String, val database: String)
 @Serializable private class Login(val account: String)
@@ -219,6 +269,8 @@ private fun IOException.failure() =
 @Serializable private class Identity(val person: Person, val role: String)
 @Serializable private class Credential(val token: String, val active: Boolean)
 @Serializable private class Contacts(val contacts: List<Contact>)
+@Serializable private class SosEvents(val events: List<SosEvent>)
+@Serializable private class SosZones(val zones: List<SosZone>)
 @Serializable private class ContactSaved(val contact: Contact, val cardVersion: Long)
 @Serializable private class VersionReply(val cardVersion: Long)
 @Serializable private class VersionWrite(val version: Long)

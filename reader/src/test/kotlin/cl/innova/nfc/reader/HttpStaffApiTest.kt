@@ -107,6 +107,25 @@ class HttpStaffApiTest {
         assertEquals("""{"token":"${NfcProtocol.DEMO_PERSON_ID}","eventId":"demo-festival"}""", request.body.readUtf8())
     }
 
+    @Test fun `event incidents send a Bearer without an NFC token and reject another event`() = runBlocking {
+        val list = """{"incidents":[{"id":"34522603-54fe-4ea1-af0b-39699c9515d2","eventId":"demo-festival",
+            "requesterName":"Antonia Reyes","zoneId":null,"zoneName":null,"locationText":"Cerca de la fila",
+            "status":"OPEN","createdAt":"2026-11-15T14:00:00Z","updatedAt":"2026-11-15T14:00:00Z"}]}"""
+        reply(list)
+        val incident = api.incidents(session, event).single()
+        assertEquals("Antonia Reyes", incident.requesterName)
+        assertNull(incident.zoneName)
+        assertEquals("Cerca de la fila", incident.locationText)
+        val request = request()
+        assertEquals("GET /api/v1/events/demo-festival/incidents HTTP/1.1", request.requestLine)
+        assertEquals("Bearer $token", request.getHeader("Authorization"))
+        assertEquals(0, request.bodySize)
+        reply(list.replace("demo-festival", "other"))
+        fails(ApiProblem.InvalidResponse) { api.incidents(session, event) }
+        reply("{}", 401)
+        fails(ApiProblem.Unauthorized) { api.incidents(session, event) }
+    }
+
     @Test fun `resolution preserves HTTP errors without issuing a request for a malformed ID`() = runBlocking {
         val statuses = mapOf(401 to ApiProblem.Unauthorized, 403 to ApiProblem.Forbidden,
             404 to ApiProblem.NotFound, 500 to ApiProblem.Server)

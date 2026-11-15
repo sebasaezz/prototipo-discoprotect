@@ -19,7 +19,7 @@ En H4, Identificación separa el estado del hardware del estado de emisión. El 
 | Éxito | #EAF5EE / #205638 | Compatibilidad y ficha encontrada. |
 | Información | #E9F0FA / #254C81 | Lectura en progreso. |
 | Advertencia | #FFF1DC / #774600 | Función desactivada e identidad desconocida. |
-| Error | #FCEBED / #832234 | Errores NFC y alergias. Acción crítica futura #9D2435 con blanco. |
+| Error | #FCEBED / #832234 | Errores NFC y alergias. El botón SOS usa #9D2435 con blanco. |
 | Contorno / divisor | #786C84 / #DDD5E5 | Controles esenciales y separadores de apoyo. |
 
 ## Tipografía, espaciado y formas
@@ -32,4 +32,6 @@ Los estados se identifican por texto y color. El estado NFC incluye una región 
 
 El contraste calculado de los pares principales es 12.38:1 para blanco sobre morado, 5.45:1 para texto oscuro sobre lavanda y 15.43:1 para texto oscuro sobre la superficie. Los cuatro pares de estado superan 7:1. El contorno esencial sobre blanco alcanza 4.91:1.
 
-Android define colores, tipografía, formas, espaciado y componentes compartidos en `android-ui/src/main/kotlin/cl/discoprotect/ui/Design.kt`. Las apps usan Material 3 en modo claro con los colores de marca. GestiónWeb reutilizará los valores como variables CSS y usará Roboto o Inter, controles con foco visible y estados con texto. La futura UI web conservará la jerarquía de tareas y la densidad apropiada a cada pantalla.
+Android define colores, tipografía, formas, espaciado y componentes compartidos en `android-ui/src/main/kotlin/cl/discoprotect/ui/Design.kt`. Las apps usan Material 3 en modo claro con los colores de marca. La web de incidentes reutiliza los valores en CSS, con fuente Roboto o del sistema, controles con foco visible y estados con texto.
+
+SOS tiene su propio destino. La pulsación de 1,5 segundos muestra progreso y la acción accesible abre un diálogo de confirmación. Los estados de envío, incertidumbre, recepción y cancelación tienen etiquetas. Las tarjetas Android y la tabla web exponen el mismo ID del incidente, zona o ubicación desconocida y estado textual.
