@@ -59,6 +59,6 @@ Consulta los seriales con `adb devices -l`. Instala cada APK con `adb -s <SERIAL
 
 ## Continuidad
 
-[Checkpoint H3 del 15 de noviembre de 2026](docs/checkpoints/h3-2026-11-15.md) · [Análisis previo a H4](docs/h4-handoff.md) · [Instrucciones para agentes](AGENTS.md)
+[Checkpoint H4 del 15 de noviembre de 2026](docs/checkpoints/h4-2026-11-15.md) · [Checkpoint H3 del 15 de noviembre de 2026](docs/checkpoints/h3-2026-11-15.md) · [Análisis previo a H4](docs/h4-handoff.md) · [Instrucciones para agentes](AGENTS.md)
 
 [Arquitectura de las apps](docs/architecture.md) · [Modelo de datos](docs/data-model.md) · [Roadmap H0–H10](docs/roadmap.md)

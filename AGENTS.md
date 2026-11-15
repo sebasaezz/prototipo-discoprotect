@@ -4,8 +4,8 @@ Prototipo universitario para mejorar la seguridad y la respuesta ante incidentes
 
 ## Retomar el proyecto
 
-- H0 está implementado y validado en hardware. H1 está implementado. H2 y H3 están implementados y validados físicamente por el usuario. H3 se validó el 15 de noviembre de 2026. H4 está implementado con aceptación física pendiente. H5–H10 están pendientes.
-- Empieza por el [checkpoint H3](docs/checkpoints/h3-2026-11-15.md) y el [roadmap](docs/roadmap.md). El [guion H4](docs/h4-integration.md) explica cómo validar las cuentas dinámicas.
+- H0 está implementado y validado en hardware. H1 está implementado. H2 y H3 están implementados y validados físicamente por el usuario. H3 se validó el 15 de noviembre de 2026. H4 se implementó y validó físicamente el 15 de noviembre de 2026. H5 es el siguiente hito. H5–H10 están pendientes.
+- Empieza por el [checkpoint H4](docs/checkpoints/h4-2026-11-15.md) y el [roadmap](docs/roadmap.md). El [checkpoint H3](docs/checkpoints/h3-2026-11-15.md) conserva la evidencia anterior. El [guion H4](docs/h4-integration.md) explica cómo validar las cuentas dinámicas.
 - Consulta la [arquitectura](docs/architecture.md), el [contrato API](docs/api-contract.md), el [modelo de datos](docs/data-model.md) y el [contrato NFC](docs/nfc-contract.md) antes de modificar esas áreas. Usa el [README](README.md) para ejecutar el proyecto y el [checkpoint](docs/checkpoints/h3-2026-11-15.md#pruebas-automatizadas) para reproducir las pruebas. Separa resultados automatizados, visuales y físicos.
 - Para continuar, verifica la revisión y el SHA de la base remota. Usa una rama de trabajo que contenga los hitos integrados, preserva cambios ajenos, revisa `git diff` y `git status`, y conserva la fusión como paso de revisión.
 

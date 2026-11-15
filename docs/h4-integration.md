@@ -1,6 +1,6 @@
 # H4 · Guion de integración
 
-H4 está implementado, pendiente de aceptación física. Usa el Galaxy S22 como AppAsistente, el S25 como AppPersonal y Fastify/SQLite en un PC Windows. Usa únicamente cuentas y datos ficticios.
+H4 se implementó y validó físicamente el 15 de noviembre de 2026. Consulta los resultados en el [checkpoint H4](checkpoints/h4-2026-11-15.md). Usa el Galaxy S22 como AppAsistente, el S25 como AppPersonal y Fastify/SQLite en un PC Windows. Usa únicamente cuentas y datos ficticios.
 
 ## Identidad dinámica y ciclo de vida
 
