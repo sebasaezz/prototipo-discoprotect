@@ -3,6 +3,7 @@ package cl.innova.nfc.reader
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -10,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -33,12 +35,13 @@ internal fun ConnectionSetup(state: ReaderUiState, actions: ReaderController) {
             Text("Servidor", style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(
                 value = address,
-                onValueChange = { address = it },
+                onValueChange = { address = it.filterNot { char -> char == '\n' || char == '\r' } },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Dirección del servidor") },
                 placeholder = { Text(if (BuildConfig.DEBUG) "http://IP-del-PC:3000" else "https://servidor") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+                maxLines = 3,
                 enabled = idle,
             )
             if (!sameAddress || state.server == ServerState.Unconfigured) {
