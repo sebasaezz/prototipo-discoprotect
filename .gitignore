@@ -1,0 +1,15 @@
+.gradle/
+.kotlin/
+**/build/
+local.properties
+.idea/
+*.iml
+.tools/
+
+backend/node_modules/
+backend/dist/
+backend/data/
+backend/.env
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
