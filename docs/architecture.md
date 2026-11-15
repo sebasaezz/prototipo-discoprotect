@@ -5,11 +5,11 @@
 | Componente | Responsabilidad |
 | --- | --- |
 | `protocol` | Construcción y análisis de APDU y sesión de tarjeta pura JVM. |
-| `emitter` | Servicio HCE independiente, identificación NFC y edición de ficha y contactos de AppAsistente. |
-| `reader` | Reader Mode, IsoDep, conexión al servidor y presentación de fichas de AppPersonal. |
+| `emitter` | Servicio HCE independiente, identificación NFC, edición de ficha y contactos y solicitudes SOS. |
+| `reader` | Reader Mode, IsoDep, fichas y consulta de incidentes por evento. |
 | `android-ui` | Fuentes Compose compartidas por ambas apps. Mantiene los tres módulos Gradle originales. |
 | `backend` | API REST Fastify, validación Zod, sesiones ficticias, migraciones y SQLite. |
-| GestiónWeb | Interfaz futura de organizadores, prevista en H8. |
+| `web` | Consulta de incidentes para el organizador en React, TypeScript y Vite. |
 
 AppAsistente transmite por NFC el ID de la cuenta vigente verificada. AppPersonal cierra IsoDep antes de resolverlo. El backend y SQLite son la fuente autoritativa para el modo conectado.
 
@@ -37,6 +37,12 @@ En el backend `main.ts` abre la base y arranca el proceso. `app.ts` define las r
 
 `HceIdentityStore` contiene un único estado atómico. `PersonCardService` usa la misma fuente que la UI y confirma la vigencia en cada APDU. `CardSession` vincula SELECT y GET a la misma generación. El registro y el Bearer desaparecen con el proceso. El [guion H4](h4-integration.md) detalla expiración, política offline y pruebas. El [handoff](h4-handoff.md) conserva el análisis anterior a la implementación.
 
+## H5
+
+`incidents.ts` encapsula la escritura transaccional y las consultas. La API deriva la identidad de la sesión y exige el rol y la membresía del evento. AppAsistente usa el Bearer de H4 y el control de generación existente. AppPersonal consulta incidentes con la sesión de guardia y el evento activo. Ambos clientes ignoran respuestas de consultas invalidadas por cambios de sesión o contexto.
+
+La web solicita una sesión de organizador con PIN y conserva el Bearer en estado React. El proxy local de Vite permite usar rutas del mismo origen en el navegador. AppPersonal y la web obtienen la misma vista operativa de la API y permiten actualización manual. [Guion H5](h5-integration.md)
+
 ## Extensiones previstas
 
-GestiónWeb será un cliente React/TypeScript/Vite. El servidor persistirá cambios de incidentes antes de difundirlos por WebSocket, con resincronización posterior a desconexiones. La clasificación asistida por IA será un servicio desacoplado y el registro de SOS seguirá disponible si la clasificación falla. El [modelo de datos](data-model.md) recoge las entidades futuras para ubicaciones dentro del recinto.
+H6 contempla sincronización de cambios persistidos y recuperación tras desconexiones. La clasificación asistida por IA de H7 será un servicio desacoplado. La gestión administrativa se incorpora en H8. El [modelo de datos](data-model.md) recoge las entidades futuras para ubicaciones dentro del recinto.
