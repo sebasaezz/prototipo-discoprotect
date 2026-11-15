@@ -57,7 +57,8 @@ internal fun EditScreen(
     TextButton(onClick = onCancel, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
         Text(if (state.review != null) "Cerrar borrador" else "Cancelar")
     }
-    TextButton(onClick = onChooseAccount, modifier = Modifier.heightIn(min = 48.dp)) {
+    TextButton(onClick = onChooseAccount, enabled = state.canChangeAccount,
+        modifier = Modifier.heightIn(min = 48.dp)) {
         Text("Cambiar cuenta")
     }
 }

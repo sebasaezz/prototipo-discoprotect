@@ -29,7 +29,7 @@ internal fun AttendeeScreen(
     val draft = state.draft
     var showAccounts by remember { mutableStateOf(false) }
     var pendingAccount by remember { mutableStateOf<DemoAccount?>(null) }
-    val chooseAccount = { showAccounts = true }
+    val chooseAccount = { if (state.canChangeAccount) showAccounts = true }
     fun leaveEditor() {
         if (state.task != null) return
         if (draft?.dirty == true || state.review != null) confirmDiscard = true else actions.discard()
@@ -96,7 +96,7 @@ internal fun AttendeeScreen(
                                         pendingAccount = account
                                     } else actions.selectAccount(account)
                                 },
-                                enabled = identity?.person?.account != account.key,
+                                enabled = state.canChangeAccount && identity?.person?.account != account.key,
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                             ) { Text(account.label) }
                         }
@@ -115,6 +115,7 @@ internal fun AttendeeScreen(
                     else "La emisión se deshabilitará hasta verificar la cuenta elegida.") },
                 confirmButton = {
                     Button(onClick = { pendingAccount = null; actions.selectAccount(account) },
+                        enabled = state.canChangeAccount,
                         modifier = Modifier.heightIn(min = 48.dp)) { Text("Confirmar cambio") }
                 },
                 dismissButton = { TextButton(onClick = { pendingAccount = null },
@@ -178,7 +179,8 @@ private fun ConnectionScreen(
         else Field("Cuenta elegida · Sin verificar", selected.label)
     }
     if (sameAddress && state.address.isNotBlank()) {
-        Button(onClick = onChoose, modifier = Modifier.heightIn(min = 48.dp)) {
+        Button(onClick = onChoose, enabled = state.canChangeAccount,
+            modifier = Modifier.heightIn(min = 48.dp)) {
             Text(if (state.selectedAccount == null) "Elegir cuenta" else "Cambiar cuenta")
         }
         if (state.selectedAccount != null && identity == null && idle) {

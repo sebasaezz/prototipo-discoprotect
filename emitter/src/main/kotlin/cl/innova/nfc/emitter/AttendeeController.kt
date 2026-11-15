@@ -65,6 +65,7 @@ internal data class AttendeeState(
     val editable get() = person != null && fresh && task == null &&
         snapshot?.card?.version?.let { it in 1L..MAX_WRITE_VERSION } == true
     val canSave get() = editable && review == null
+    val canChangeAccount get() = task != Task.Saving
 }
 
 internal class AttendeeController(
@@ -117,6 +118,7 @@ internal class AttendeeController(
 
     /** Account changes are confirmed by the UI before entering this method. */
     fun selectAccount(account: DemoAccount) {
+        if (!ui.canChangeAccount) return
         beginLogin(account, keepDraft = false)
     }
 

@@ -9,6 +9,7 @@ import java.time.ZoneOffset
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -184,6 +185,75 @@ class IdentitySwitchTest {
         assertTrue(test.saved.isEmpty())
     }
 
+    @Test fun accountChangeIsBlockedWhileSavingCard() = runTest {
+        assertAccountChangeBlockedDuringWrite {
+            editCard()
+            val fields = (state.value.draft as EditDraft.Card).fields
+            updateCard(fields.copy(allergies = listOf("Polen")))
+        }
+    }
+
+    @Test fun accountChangeIsBlockedWhileCreatingContact() = runTest {
+        assertAccountChangeBlockedDuringWrite {
+            editContact(null)
+            updateContact(ContactFields("Nuevo contacto", "Amigo", "123"))
+        }
+    }
+
+    @Test fun accountChangeIsBlockedWhileEditingContact() = runTest {
+        assertAccountChangeBlockedDuringWrite {
+            editContact(DemoAccount.Antonia.key)
+            updateContact(ContactFields("Contacto editado", "Familiar", "456"))
+        }
+    }
+
+    @Test fun accountChangeIsBlockedWhileDeletingContact() = runTest {
+        assertAccountChangeBlockedDuringWrite {
+            requestRemoval(DemoAccount.Antonia.key)
+        }
+    }
+
+    private fun TestScope.assertAccountChangeBlockedDuringWrite(prepare: AttendeeController.() -> Unit) {
+        val test = environment()
+        val screen = test.screen
+        screen.selectAccount(DemoAccount.Antonia)
+        runCurrent()
+        val identity = requireNotNull(test.store.current())
+
+        val completeWrite = CompletableDeferred<Unit>()
+        val writeStarted = CompletableDeferred<Unit>()
+        test.backend.beforeWrite = {
+            writeStarted.complete(Unit)
+            completeWrite.await()
+        }
+        screen.prepare()
+        val draft = requireNotNull(screen.state.value.draft)
+        assertTrue(screen.state.value.canChangeAccount)
+        screen.save()
+        runCurrent()
+        assertTrue(writeStarted.isCompleted)
+        assertEquals(Task.Saving, screen.state.value.task)
+        assertFalse(screen.state.value.canChangeAccount)
+
+        screen.selectAccount(DemoAccount.Martin)
+        runCurrent()
+        assertEquals(Task.Saving, screen.state.value.task)
+        assertEquals(DemoAccount.Antonia, screen.state.value.selectedAccount)
+        assertSame(draft, screen.state.value.draft)
+        assertSame(identity, test.store.current())
+
+        completeWrite.complete(Unit)
+        runCurrent()
+        assertTrue(screen.state.value.canChangeAccount)
+        assertNull(screen.state.value.draft)
+        assertEquals(2L, screen.state.value.snapshot?.card?.version)
+
+        screen.selectAccount(DemoAccount.Martin)
+        runCurrent()
+        assertActive(test, DemoAccount.Martin)
+        assertEquals(10L, screen.state.value.snapshot?.card?.version)
+    }
+
     @Test fun accountChangeDiscardsDraftAndMaintainsIndependentVersionsAndContacts() = runTest {
         val test = environment()
         val screen = test.screen
@@ -192,6 +262,7 @@ class IdentitySwitchTest {
         screen.editCard()
         val a = (screen.state.value.draft as EditDraft.Card).fields
         screen.updateCard(a.copy(allergies = listOf("Borrador de Antonia")))
+        assertTrue(screen.state.value.canChangeAccount)
         screen.selectAccount(DemoAccount.Martin)
         assertNull(screen.state.value.draft)
         assertNull(screen.state.value.snapshot)
@@ -273,6 +344,7 @@ class IdentitySwitchTest {
 
     private inner class FakeApi : AttendeeApi {
         var waitFor: suspend (DemoAccount) -> Unit = {}
+        var beforeWrite: suspend () -> Unit = {}
         var loginError: FailureKind? = null
         var offline = false
         private val cards = DemoAccount.entries.associate { account ->
@@ -313,6 +385,7 @@ class IdentitySwitchTest {
             return next.version
         }
         private suspend fun advance(session: AttendeeSession, version: Long): EmergencyCard {
+            beforeWrite()
             assertEquals("http-${session.person.account}", session.token)
             val before = card(session)
             if (version != before.version) throw AttendeeFailure(FailureKind.Conflict)
