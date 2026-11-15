@@ -4,8 +4,8 @@ Prototipo universitario para mejorar la seguridad y la respuesta ante incidentes
 
 ## Retomar el proyecto
 
-- H0 está implementado y validado en hardware. H1 está implementado. H2–H4 están implementados y validados físicamente por el usuario. H3 y H4 se validaron el 15 de noviembre de 2026. H5 está implementado, pendiente de validación física integrada. H6–H10 están pendientes.
-- Consulta el [guion H5](docs/h5-integration.md), el [roadmap](docs/roadmap.md) y los checkpoints [H4](docs/checkpoints/h4-2026-11-15.md) y [H3](docs/checkpoints/h3-2026-11-15.md). El [guion H4](docs/h4-integration.md) explica cómo validar las cuentas dinámicas.
+- H0 está implementado y validado en hardware. H1 está implementado. H2–H4 están implementados y validados físicamente por el usuario. H3 y H4 se validaron el 15 de noviembre de 2026. H5 está implementado y fue validado físicamente por el usuario el 15 de noviembre de 2026. H6 es el siguiente hito. H6–H10 están pendientes.
+- Retoma desde el [checkpoint H5](docs/checkpoints/h5-2026-11-15.md), el [guion H5](docs/h5-integration.md) y el [roadmap](docs/roadmap.md#plan-de-ejecución-h6h10--visión-integral). Conserva como referencia los checkpoints [H4](docs/checkpoints/h4-2026-11-15.md) y [H3](docs/checkpoints/h3-2026-11-15.md). El [guion H4](docs/h4-integration.md) explica cómo validar las cuentas dinámicas.
 - Consulta la [arquitectura](docs/architecture.md), el [contrato API](docs/api-contract.md), el [modelo de datos](docs/data-model.md) y el [contrato NFC](docs/nfc-contract.md) antes de modificar esas áreas. Usa el [README](README.md) para ejecutar el proyecto y el [checkpoint](docs/checkpoints/h3-2026-11-15.md#pruebas-automatizadas) para reproducir las pruebas. Separa resultados automatizados, visuales y físicos.
 - Para continuar, verifica la revisión y el SHA de la base remota. Usa una rama de trabajo que contenga los hitos integrados, preserva cambios ajenos, revisa `git diff` y `git status`, y conserva la fusión como paso de revisión.
 

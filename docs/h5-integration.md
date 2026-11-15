@@ -1,6 +1,6 @@
 # H5 · Guion de integración
 
-**Implementado, pendiente de validación física integrada.** Usa Galaxy S22 como AppAsistente, Galaxy S25 como AppPersonal y un PC Windows con Fastify, SQLite y navegador. Usa datos ficticios en una LAN controlada. El SOS de esta demostración se dirige al personal del evento y no contacta a servicios públicos de emergencia.
+**Implementado y validado físicamente por el usuario el 15 de noviembre de 2026.** El [checkpoint H5](checkpoints/h5-2026-11-15.md) registra las 27 comprobaciones aprobadas. Usa Galaxy S22 como AppAsistente, Galaxy S25 como AppPersonal y un PC Windows con Fastify, SQLite y navegador. Usa datos ficticios en una LAN controlada. El SOS de esta demostración se dirige al personal del evento y no contacta a servicios públicos de emergencia.
 
 ## Preparar Windows y los teléfonos
 
@@ -58,4 +58,3 @@ Ejecuta `npm.cmd test` y `npm.cmd run build` en `backend/` y `web/`. En la raíz
 | Backend | 9 pruebas aprobadas y compilación correcta. La prueba incremental usa un SQLite temporal con una ficha modificada antes de aplicar H5. |
 | Android | 11 pruebas NFC, 43 de AppAsistente y 19 de AppPersonal aprobadas. Se generaron los dos APK debug. Lint registró 0 errores y 6 advertencias en AppAsistente, 0 errores y 4 advertencias en AppPersonal. Los manifiestos combinados permiten HTTP en debug y lo impiden en release. |
 | Web | 3 pruebas de acceso y render estático aprobadas y compilación correcta. Una prueba HTTP del proxy de Vite contra Fastify con SQLite temporal recuperó el mismo ID para guardia y organizador. |
-| Revisión visual y hardware | Pendientes en los Samsung y el navegador del PC. |

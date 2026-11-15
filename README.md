@@ -2,7 +2,7 @@
 
 Prototipo universitario de seguridad para eventos masivos. AppPersonal lee el identificador NFC, cierra la conexión con AppAsistente y consulta la ficha actualizada en el servidor. La demo local sigue disponible desde la configuración del lector. AppAsistente verifica una de las tres cuentas demo, emite su credencial NFC vigente y permite editar la ficha y los contactos de esa cuenta mediante el mismo servidor.
 
-H5 agrega solicitudes SOS con zona manual en AppAsistente y consulta de incidentes en AppPersonal y en la web de organizadores. Los registros se conservan en SQLite. La validación física integrada está pendiente. [Guion H5](docs/h5-integration.md)
+H5 agrega solicitudes SOS con zona manual en AppAsistente y consulta de incidentes en AppPersonal y en la web de organizadores. Los registros se conservan en SQLite. El usuario validó físicamente H5 el 15 de noviembre de 2026. H6, gestión operativa de incidentes, es el siguiente hito. [Checkpoint H5](docs/checkpoints/h5-2026-11-15.md) · [Guion H5](docs/h5-integration.md)
 
 ## Backend
 
