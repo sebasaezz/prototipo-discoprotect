@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -29,7 +30,7 @@ test('health, foreign keys, migrations and repeatable seed', async t => {
   const { app, db } = await fixture(t);
   migrate(db);
   seed(db);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 1);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 2);
   assert.equal(db.prepare('SELECT count(*) AS n FROM people').get()?.n, 5);
   assert.equal(db.prepare('SELECT count(*) AS n FROM emergency_contacts').get()?.n, 3);
   assert.equal(db.prepare('SELECT count(*) AS n FROM nfc_credentials WHERE length(token) = 16').get()?.n, 3);
@@ -159,4 +160,114 @@ test('credentials fail closed, expiration and organizer event scope', async t =>
   assert.equal(badCard.json().error.code, 'INVALID_INPUT');
   db.exec('UPDATE demo_sessions SET expires_at = 0');
   assert.equal((await app.inject({ url: prefix + '/me', headers })).statusCode, 401);
+});
+
+const eventIncidents = `${prefix}/events/${eventId}/incidents`;
+const ownIncidents = `${prefix}/me/incidents?eventId=${eventId}`;
+
+test('SOS survives the upgrade from 001 and a restart on the same database', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'discoprotect-h5-'));
+  const path = join(dir, 'upgrade.sqlite');
+  let db = openDb(path);
+  db.exec(readFileSync(new URL('../../migrations/001_initial.sql', import.meta.url), 'utf8'));
+  db.exec(`CREATE TABLE schema_migrations (filename TEXT PRIMARY KEY, applied_at TEXT NOT NULL) STRICT;
+    INSERT INTO schema_migrations VALUES ('001_initial.sql', '2026-11-15T00:00:00.000Z');
+    INSERT INTO people VALUES ('demo-antonia', 'antonia', 'Antonia Reyes', 22, 'prior', 'prior');
+    INSERT INTO emergency_cards VALUES ('card-demo-antonia', 'demo-antonia', 'O+', '["Látex"]', '[]', '[]', 'prior', 7);`);
+  migrate(db);
+  seed(db);
+  seed(db);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM zones').get()?.n, 5);
+  assert.equal(db.prepare("SELECT version FROM emergency_cards WHERE person_id = 'demo-antonia'").get()?.version, 7);
+  let app = createApp(db, pins);
+  t.after(async () => {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true });
+  });
+  const session = await app.inject({ method: 'POST', url: prefix + '/demo/sessions', payload: { account: 'antonia' } });
+  const headers = { authorization: 'Bearer ' + session.json().token };
+  const payload = { clientRequestId: randomUUID(), zoneId: 'escenario', locationText: '  Junto a la salida  ' };
+  const created = await app.inject({ method: 'POST', url: eventIncidents, headers, payload });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal(created.json().locationText, 'Junto a la salida');
+  assert.equal(created.json().zoneName, 'Escenario');
+  await app.close();
+  db.close();
+  db = openDb(path);
+  migrate(db);
+  app = createApp(db, pins);
+  assert.deepEqual((await app.inject({ url: ownIncidents, headers })).json(), { incidents: [created.json()] });
+  const replay = await app.inject({ method: 'POST', url: eventIncidents, headers, payload });
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.json(), created.json());
+});
+
+test('SOS deduplicates concurrent retries, rejects conflicts and enforces cancellation ownership', async t => {
+  const { app, db, login } = await fixture(t);
+  const headers = await login();
+  const martin = await login('martin');
+  const payload = { clientRequestId: randomUUID(), zoneId: null, locationText: ' ' };
+  const send = (body = payload) => app.inject({ method: 'POST', url: eventIncidents, headers, payload: body });
+  const retries = await Promise.all([send(), send(), send()]);
+  assert.deepEqual(retries.map(response => response.statusCode).sort(), [200, 200, 201]);
+  const incident = retries[0].json();
+  assert.ok(retries.every(response => response.json().id === incident.id));
+  assert.equal(incident.zoneName, null);
+  assert.equal(incident.locationText, null);
+  assert.equal((await send({ ...payload, locationText: 'Otro lugar' })).json().error.code, 'REQUEST_CONFLICT');
+  assert.deepEqual((await app.inject({ url: ownIncidents, headers: martin })).json(), { incidents: [] });
+  const url = `${prefix}/me/incidents/${incident.id}/cancel`;
+  assert.equal((await app.inject({ method: 'POST', url, headers: martin })).statusCode, 404);
+  const cancelled = await app.inject({ method: 'POST', url, headers });
+  assert.equal(cancelled.statusCode, 200);
+  assert.equal(cancelled.json().status, 'CANCELLED');
+  assert.equal((await send()).json().status, 'CANCELLED');
+  assert.equal((await app.inject({ method: 'POST', url, headers })).json().error.code, 'INCIDENT_NOT_OPEN');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM incidents').get()?.n, 1);
+});
+
+test('SOS validates role, session, event and zone and limits the operational view', async t => {
+  const { app, db, login } = await fixture(t);
+  const headers = await login();
+  const staff = await login('guardia', pins.STAFF);
+  const organizer = await login('organizador', pins.ORGANIZER);
+  db.exec(`INSERT INTO events SELECT 'otro', name, venue, starts_at, ends_at, status FROM events WHERE id = 'demo-festival';
+    INSERT INTO zones VALUES ('otro', 'otra-zona', 'Otra zona');
+    INSERT INTO event_memberships VALUES ('other-attendee', 'otro', 'demo-antonia', 'ATTENDEE');`);
+  const zones = prefix + '/events/' + eventId + '/zones';
+  assert.equal((await app.inject({ url: zones, headers })).json().zones.length, 5);
+  assert.equal((await app.inject({ url: prefix + '/events/otro/zones', headers: staff })).statusCode, 403);
+  const payload = { clientRequestId: randomUUID(), zoneId: 'escenario' };
+  const send = (body: object, authorization = headers, url = eventIncidents) =>
+    app.inject({ method: 'POST', url, headers: authorization, payload: body });
+  for (const invalid of [
+    { ...payload, clientRequestId: 'invalid' }, { ...payload, zoneId: 'otra-zona' },
+    { ...payload, requesterPersonId: 'demo-martin' }, { ...payload, locationText: 'x'.repeat(161) },
+  ]) assert.equal((await send(invalid)).statusCode, 400);
+  assert.equal((await send(payload, staff)).statusCode, 403);
+  assert.equal((await send(payload, organizer)).statusCode, 403);
+  assert.equal((await app.inject({ url: eventIncidents, headers })).statusCode, 403);
+  assert.equal((await app.inject({ url: ownIncidents, headers: organizer })).statusCode, 403);
+  assert.equal((await app.inject({ url: prefix + '/me/incidents', headers })).statusCode, 400);
+  const created = await send(payload);
+  assert.equal(created.statusCode, 201);
+  const otherUrl = prefix + '/events/otro/incidents';
+  assert.equal((await send({ ...payload, zoneId: 'otra-zona' }, headers, otherUrl)).statusCode, 409);
+  const other = await send({ clientRequestId: randomUUID(), zoneId: 'otra-zona' }, headers, otherUrl);
+  assert.equal(other.statusCode, 201);
+  for (const roleHeaders of [staff, organizer]) {
+    assert.equal((await app.inject({ url: otherUrl, headers: roleHeaders })).statusCode, 403);
+    const { incidents } = (await app.inject({ url: eventIncidents, headers: roleHeaders })).json();
+    assert.equal(incidents.length, 1);
+    const { clientRequestId, requesterPersonId, ...summary } = created.json();
+    assert.deepEqual(incidents[0], summary);
+    assert.equal((await app.inject({ method: 'POST', url: `${prefix}/me/incidents/${summary.id}/cancel`, headers: roleHeaders })).statusCode, 403);
+  }
+  db.exec("DELETE FROM event_memberships WHERE id = 'other-attendee'");
+  assert.equal((await app.inject({ url: prefix + '/me/incidents?eventId=otro', headers })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'POST', url: `${prefix}/me/incidents/${other.json().id}/cancel`, headers })).statusCode, 403);
+  db.exec('UPDATE demo_sessions SET expires_at = 0');
+  assert.equal((await send(payload)).statusCode, 401);
+  assert.equal((await app.inject({ url: eventIncidents, headers: staff })).statusCode, 401);
 });

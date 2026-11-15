@@ -19,6 +19,12 @@ function insertDemo(db: Db) {
   db.prepare(`INSERT INTO events VALUES ('demo-festival', 'Festival Demo', 'Recinto ficticio', ?, ?, 'ACTIVE')
     ON CONFLICT(id) DO NOTHING`).run('2026-11-14T22:00:00.000Z', '2026-11-15T06:00:00.000Z');
 
+  const addZone = db.prepare("INSERT INTO zones VALUES ('demo-festival', ?, ?) ON CONFLICT(event_id, id) DO NOTHING");
+  for (const [id, name] of [
+    ['acceso', 'Acceso principal'], ['escenario', 'Escenario'], ['comida', 'Zona de comida'],
+    ['banos', 'Baños'], ['general', 'Sector general'],
+  ] as const) addZone.run(id, name);
+
   profiles.forEach((profile, index) => {
     const id = `demo-${profile.key}`;
     addPerson.run(id, profile.key, profile.name, profile.age, now, now);
