@@ -17,15 +17,43 @@ import java.util.Locale
 @Composable
 internal fun ReaderScreen(state: ReaderUiState, nfc: NfcAvailability, actions: ReaderController, onSettings: () -> Unit) {
     DiscoprotectTheme {
-        key(state.configuring, state.scan is ScanState.Found) {
+        key(state.configuring, state.incidentsVisible, state.scan is ScanState.Found) {
             NfcPage("Personal") {
                 if (state.configuring) {
                     ConnectionSetup(state, actions)
+                } else if (state.incidentsVisible) {
+                    IncidentsPage(state, actions)
                 } else {
                     ReadingPage(state, nfc, actions, onSettings)
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
+    Heading("Incidentes", "Solicitudes SOS registradas en el evento.")
+    EventSelector(state, actions::selectEvent)
+    OutlinedButton(onClick = actions::refreshIncidents, enabled = !state.incidentsLoading,
+        modifier = Modifier.heightIn(min = 48.dp)) {
+        Text("Actualizar incidentes")
+    }
+    if (state.incidentsLoading) {
+        Status("Consultando incidentes", Tone.Info)
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+    }
+    state.incidentProblem?.let { problem ->
+        val message = if (problem == ApiProblem.NotFound) "La consulta de incidentes no está disponible para este evento."
+            else problem.description()
+        Status(message, Tone.Warning)
+        if (state.incidents != null) Text("Se muestra la última consulta disponible.")
+    }
+    TextButton(onClick = actions::continueReading, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ir al lector NFC") }
+    TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) { Text("Configuración y evento") }
+    state.incidents?.let { incidents ->
+        if (incidents.isEmpty()) Text("Este evento aún no tiene solicitudes registradas.")
+        incidents.forEach { IncidentCard(it) }
     }
 }
 
@@ -69,6 +97,9 @@ private fun ReadingPage(state: ReaderUiState, nfc: NfcAvailability, actions: Rea
 
     TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) {
         Text(if (state.local) "Volver al modo conectado" else "Configuración y evento")
+    }
+    if (!state.local) {
+        TextButton(onClick = actions::openIncidents, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ver incidentes") }
     }
 
     DiagnosticsPanel {

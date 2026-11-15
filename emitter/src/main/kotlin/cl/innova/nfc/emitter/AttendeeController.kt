@@ -1,7 +1,10 @@
 package cl.innova.nfc.emitter
 
+import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.IncidentStatus
 import java.time.Clock
 import java.time.Duration
+import java.util.UUID
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -14,12 +17,14 @@ import kotlinx.coroutines.launch
 import okhttp3.HttpUrl
 
 internal enum class Section(val label: String) {
-    Identification("Identificación"), Card("Mi ficha"), Contacts("Contactos"), Connection("Conexión"),
+    Identification("Identificación"), Sos("SOS"), Card("Mi ficha"), Contacts("Contactos"), Connection("Conexión"),
 }
 internal enum class Task(val label: String) {
     Checking("Comprobando el servidor"), SigningIn("Verificando sesión"),
     Switching("Cambiando de cuenta y verificando sesión"), Credential("Recuperando credencial NFC"),
     Loading("Cargando desde el servidor"), Saving("Guardando en el servidor"),
+    SosReading("Consultando solicitudes SOS"), SosSending("Enviando solicitud SOS"),
+    SosCancelling("Enviando cancelación"),
 }
 internal enum class Reachability { Unchecked, Connected, Offline }
 internal enum class Review { Conflict, Uncertain, Present, Removed }
@@ -61,11 +66,13 @@ internal data class AttendeeState(
     val review: Review? = null,
     val notice: String? = null,
     val confirmation: String? = null,
+    val sos: SosState = SosState(),
 ) {
     val editable get() = person != null && fresh && task == null &&
         snapshot?.card?.version?.let { it in 1L..MAX_WRITE_VERSION } == true
     val canSave get() = editable && review == null
-    val canChangeAccount get() = task != Task.Saving
+    val sosWriting get() = task == Task.SosSending || task == Task.SosCancelling
+    val canChangeAccount get() = task != Task.Saving && !sosWriting
 }
 
 internal class AttendeeController(
@@ -84,6 +91,8 @@ internal class AttendeeController(
     private var operation: Job? = null
     private var expiry: Job? = null
     private var generation = 0L
+    // Scoped to the current server. Only the original person can recover an attempt.
+    private val pendingSos = mutableMapOf<String, SosAttempt>()
     private val identityOwner = Any().also(sharing::claim)
     private val mutable = MutableStateFlow(AttendeeState(address = target?.toString().orEmpty()))
     val state = mutable.asStateFlow()
@@ -94,10 +103,11 @@ internal class AttendeeController(
     fun navigate(section: Section) {
         if (ui.draft != null || ui.section == section) return
         ui = ui.copy(section = section)
+        if (section == Section.Sos && ui.sos.events.isEmpty()) refreshSos()
     }
 
     fun connect(input: String) {
-        if (ui.draft != null) return
+        if (ui.draft != null || ui.sosWriting) return
         val address = attendeeServerAddress(input, allowHttp)
         if (address == null) {
             ui = ui.copy(notice = if (allowHttp) "Ingresa una URL HTTP o HTTPS con la dirección y el puerto del PC."
@@ -107,6 +117,7 @@ internal class AttendeeController(
         if (address != target) {
             clearSession()
             cancelWork()
+            pendingSos.clear()
             target = address
             api = apiFor(address)
             storeUrl(address.toString())
@@ -149,7 +160,9 @@ internal class AttendeeController(
             val identity = sharing.publish(pending, active, origin) ?: throw AttendeeFailure(FailureKind.Expired)
             session = active
             ui = ui.copy(person = identity.person, sharingGeneration = identity.credential.generation,
-                reachability = Reachability.Connected, task = Task.Loading)
+                reachability = Reachability.Connected, task = Task.Loading,
+                sos = pendingSos[active.person.id]?.let { SosState(pending = it, outcome = SosOutcome.Uncertain) }
+                    ?: SosState())
             expiry = scope.launch {
                 delay(Duration.between(clock.instant(), identity.expiresAt).toMillis().coerceAtLeast(0))
                 if (session === active) {
@@ -171,7 +184,7 @@ internal class AttendeeController(
     fun presentation(state: AttendeeState, slot: IdentitySlot, identity: ShareableIdentity?): AttendeeState {
         if (slot.owner !== identityOwner) return AttendeeState(address = state.address, section = state.section)
         return if (state.person != null && identity == null)
-            state.copy(person = null, snapshot = null, fresh = false, confirmation = null)
+            state.copy(person = null, snapshot = null, fresh = false, confirmation = null, sos = SosState())
         else state
     }
 
@@ -188,10 +201,160 @@ internal class AttendeeController(
     }
 
     fun logout() {
+        if (ui.sosWriting) return
+        resetLogin()
+    }
+
+    private fun resetLogin() {
         clearSession()
         cancelWork()
         draftOwner = null
         ui = AttendeeState(address = ui.address, section = Section.Connection, reachability = ui.reachability)
+    }
+
+    fun refreshSos() = sosWork(Task.SosReading) { remote, active ->
+        val events = remote.events(active)
+        current()
+        val pending = ui.sos.pending
+        val selectedId = pending?.eventId ?: ui.sos.event?.id
+        val event = events.firstOrNull { it.id == selectedId }
+        updateSos(if (event?.id == ui.sos.event?.id) ui.sos.copy(events = events, event = event)
+            else SosState(events = events, event = event, pending = pending,
+                outcome = if (pending == null) SosOutcome.Ready else SosOutcome.Uncertain))
+        if (event != null) loadSosEvent(remote, active, event)
+        else if (pending != null) updateSos(ui.sos.copy(error = "El evento de la solicitud pendiente ya no está disponible."))
+    }
+
+    fun selectSosEvent(id: String) {
+        if (ui.sos.pending != null || ui.task != null || ui.section != Section.Sos) return
+        val event = ui.sos.events.firstOrNull { it.id == id } ?: return
+        updateSos(SosState(events = ui.sos.events, event = event))
+        sosWork(Task.SosReading) { remote, active -> loadSosEvent(remote, active, event) }
+    }
+
+    fun selectSosZone(id: String?) {
+        val zones = ui.sos.zones ?: return
+        if (!canEditSos() || id != null && zones.none { it.id == id }) return
+        updateSos(ui.sos.copy(locationChosen = true, zoneId = id, outcome = SosOutcome.Ready, error = null))
+    }
+
+    fun updateSosReference(value: String) {
+        if (!canEditSos() || value.length > 160) return
+        updateSos(ui.sos.copy(reference = value, outcome = SosOutcome.Ready, error = null))
+    }
+
+    fun sendSos() {
+        val form = ui.sos
+        if (!canEditSos() || !form.canSend) return
+        val body = SosRequest(UUID.randomUUID().toString(), form.zoneId, form.reference.trim().ifEmpty { null })
+        submitSos(SosAttempt.Create(requireNotNull(form.event).id, body))
+    }
+
+    fun cancelSos(id: String) {
+        if (!canEditSos()) return
+        val incident = ui.sos.incidents?.firstOrNull { it.id == id && it.status == IncidentStatus.OPEN } ?: return
+        submitSos(SosAttempt.Cancel(incident.eventId, id))
+    }
+
+    fun retrySos() {
+        val pending = ui.sos.pending ?: return
+        if (ui.sos.event?.id == pending.eventId) submitSos(pending)
+    }
+
+    private fun canEditSos() = ui.section == Section.Sos && ui.task == null && ui.sos.pending == null
+
+    private fun updateSos(state: SosState) {
+        ui = ui.copy(sos = state)
+    }
+
+    private suspend fun Operation.loadSosEvent(remote: AttendeeApi, active: AttendeeSession, event: SosEvent) {
+        // Recover writes before loading the form, even if zones are temporarily unavailable.
+        val incidents = remote.incidents(active, event.id)
+        current()
+        val recovered = ui.sos.pending?.let { pending -> incidents.firstOrNull(pending::matches) }
+        updateSos(ui.sos.copy(incidents = incidents))
+        if (recovered != null) confirmSos(active, recovered)
+        val zones = remote.zones(active, event.id)
+        current()
+        val state = ui.sos
+        val chosen = state.locationChosen && (state.zoneId == null || zones.any { it.id == state.zoneId })
+        updateSos(state.copy(zones = zones, locationChosen = chosen, zoneId = state.zoneId.takeIf { chosen }))
+    }
+
+    private fun submitSos(attempt: SosAttempt) {
+        val task = if (attempt is SosAttempt.Create) Task.SosSending else Task.SosCancelling
+        sosWork(task) { remote, active ->
+            val owner = active.person.id
+            val retrying = pendingSos[owner] != null
+            var sending = false
+            try {
+                if (!retrying) remote.health()
+                current()
+                pendingSos[owner] = attempt
+                updateSos(ui.sos.copy(pending = attempt, receipt = null))
+                sending = true
+                val incident = when (attempt) {
+                    is SosAttempt.Create -> remote.createSos(active, attempt)
+                    is SosAttempt.Cancel -> remote.cancelSos(active, attempt)
+                }
+                current()
+                confirmSos(active, incident)
+            } catch (failure: AttendeeFailure) {
+                current()
+                val network = failure.kind in setOf(FailureKind.Offline, FailureKind.Timeout)
+                val uncertain = if (retrying) failure.kind != FailureKind.Conflict || attempt is SosAttempt.Cancel
+                    else sending && (network || failure.kind in setOf(FailureKind.Response, FailureKind.Server))
+                if (!uncertain) pendingSos.remove(owner)
+                if (failure.kind == FailureKind.Expired) {
+                    expire()
+                    return@sosWork
+                }
+                val outcome = when {
+                    uncertain -> SosOutcome.Uncertain
+                    network -> SosOutcome.Offline
+                    !sending -> SosOutcome.Unsent
+                    else -> SosOutcome.Rejected
+                }
+                val message = when (failure.kind) {
+                    FailureKind.Conflict -> "El servidor informó un conflicto. Consulta tus solicitudes."
+                    FailureKind.Missing -> "El servidor no encontró la solicitud."
+                    else -> failure.kind.message
+                }
+                updateSos(ui.sos.copy(pending = pendingSos[owner], outcome = outcome, receipt = null, error = message))
+                ui = ui.copy(reachability = reachabilityAfter(failure.kind))
+            }
+        }
+    }
+
+    private fun confirmSos(active: AttendeeSession, incident: Incident) {
+        pendingSos.remove(active.person.id)
+        val items = ui.sos.incidents.orEmpty().filterNot { it.id == incident.id } + incident
+        updateSos(ui.sos.copy(pending = null, receipt = incident.id, error = null,
+            outcome = if (incident.status == IncidentStatus.CANCELLED) SosOutcome.Cancelled else SosOutcome.Confirmed,
+            incidents = items.sortedWith(compareByDescending<Incident> { it.createdAt }.thenByDescending { it.id })))
+        ui = ui.copy(reachability = Reachability.Connected)
+    }
+
+    private fun sosWork(task: Task, block: suspend Operation.(AttendeeApi, AttendeeSession) -> Unit) {
+        val remote = api ?: return
+        if (ui.task != null || ui.section != Section.Sos) return
+        val active = validSession() ?: return
+        updateSos(ui.sos.copy(error = null))
+        work(task) {
+            try {
+                block(remote, active)
+            } catch (failure: AttendeeFailure) {
+                current()
+                if (failure.kind == FailureKind.Expired) expire()
+                else {
+                    if (failure.kind == FailureKind.Forbidden) {
+                        updateSos(SosState(pending = ui.sos.pending, outcome = ui.sos.outcome))
+                    }
+                    updateSos(ui.sos.copy(error = failure.kind.message))
+                    ui = ui.copy(reachability = reachabilityAfter(failure.kind))
+                }
+            }
+        }
     }
 
     fun editCard() {
@@ -298,7 +461,7 @@ internal class AttendeeController(
 
     fun resume() {
         if (!sharing.owns(identityOwner)) {
-            logout()
+            resetLogin()
             sharing.claim(identityOwner)
         }
         validSession()
@@ -330,7 +493,7 @@ internal class AttendeeController(
         expiry?.cancel()
         expiry = null
         session = null
-        ui = ui.copy(person = null, sharingGeneration = null, snapshot = null, fresh = false)
+        ui = ui.copy(person = null, sharingGeneration = null, snapshot = null, fresh = false, sos = SosState())
         return pending
     }
 
@@ -389,7 +552,8 @@ internal class AttendeeController(
     }
 
     private fun work(task: Task, block: suspend Operation.() -> Unit) {
-        ui = ui.copy(task = task, notice = null, fresh = if (task == Task.Saving) ui.fresh else false)
+        val preserveFresh = task in setOf(Task.Saving, Task.SosReading, Task.SosSending, Task.SosCancelling)
+        ui = ui.copy(task = task, notice = null, fresh = preserveFresh && ui.fresh)
         val request = Operation(++generation)
         operation = scope.launch {
             try {

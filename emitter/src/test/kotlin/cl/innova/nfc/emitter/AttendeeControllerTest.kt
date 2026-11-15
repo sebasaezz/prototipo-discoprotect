@@ -248,7 +248,7 @@ class AttendeeControllerTest {
             it.navigate(Section.Card)
         }
 
-    private inner class Fake : AttendeeApi {
+    private inner class Fake : H4AttendeeApi() {
         var record = original
         var people = listOf(relative)
         var rejectWrite: FailureKind? = null

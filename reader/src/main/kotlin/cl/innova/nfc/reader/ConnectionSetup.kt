@@ -71,6 +71,11 @@ internal fun ConnectionSetup(state: ReaderUiState, actions: ReaderController) {
     if (sameAddress && state.signedIn) {
         Status("Guardia autenticado", Tone.Success)
         EventSelector(state, actions::selectEvent)
+        if (state.event != null) {
+            Button(onClick = actions::openIncidents, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("Ver incidentes")
+            }
+        }
         if (state.canContinue) {
             Button(onClick = actions::continueReading, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text("Ir al lector NFC")
@@ -115,7 +120,7 @@ private fun GuardLogin(idle: Boolean, signIn: (String) -> Unit) {
 }
 
 @Composable
-private fun EventSelector(state: ReaderUiState, select: (String) -> Unit) {
+internal fun EventSelector(state: ReaderUiState, select: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
         if (state.events.size == 1) {
             state.event?.let { Field("Evento autorizado", "${it.name} · ${it.venue}") }

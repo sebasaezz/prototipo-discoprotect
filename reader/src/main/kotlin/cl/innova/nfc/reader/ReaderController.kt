@@ -1,5 +1,6 @@
 package cl.innova.nfc.reader
 
+import cl.discoprotect.ui.Incident
 import java.time.Clock
 import java.time.Duration
 import kotlinx.coroutines.CancellationException
@@ -40,9 +41,13 @@ internal data class ReaderUiState(
     val notice: String? = null,
     val scan: ScanState = ScanState.Ready,
     val debug: NfcDebug = NfcDebug(),
+    val incidentsVisible: Boolean = false,
+    val incidentsLoading: Boolean = false,
+    val incidents: List<Incident>? = null,
+    val incidentProblem: ApiProblem? = null,
 ) {
     val canContinue get() = signedIn && event != null && server == ServerState.Connected
-    val canScan get() = !configuring && (local || signedIn && event != null) && scan == ScanState.Ready
+    val canScan get() = !configuring && !incidentsVisible && (local || signedIn && event != null) && scan == ScanState.Ready
 }
 
 /** Coordinates foreground work. All public methods and state updates run on the UI dispatcher. */
@@ -73,7 +78,8 @@ internal class ReaderController(
 
     fun configure() {
         cancelWork()
-        ui = ui.copy(configuring = true, local = false, scan = ScanState.Ready, debug = NfcDebug(), notice = null)
+        ui = ui.copy(configuring = true, local = false, scan = ScanState.Ready, debug = NfcDebug(), notice = null,
+            incidentsVisible = false, incidents = null, incidentProblem = null)
         checkExpiry()
     }
 
@@ -157,17 +163,54 @@ internal class ReaderController(
         val event = ui.events.firstOrNull { it.id == id } ?: return
         if (ui.task != null || !checkExpiry()) return
         cancelWork()
-        ui = ui.copy(event = event, scan = ScanState.Ready, debug = NfcDebug(), notice = null)
+        ui = ui.copy(event = event, scan = ScanState.Ready, debug = NfcDebug(), notice = null,
+            incidents = null, incidentProblem = null)
+        if (ui.incidentsVisible) refreshIncidents()
     }
 
     fun continueReading() {
-        if (!checkExpiry() || !ui.canContinue || ui.task != null) return
-        ui = ui.copy(configuring = false, notice = null)
+        if (!checkExpiry() || ui.task != null || ui.event == null || !ui.incidentsVisible && !ui.canContinue) return
+        if (ui.incidentsVisible) cancelWork()
+        ui = ui.copy(configuring = false, notice = null, incidentsVisible = false, incidents = null, incidentProblem = null)
+    }
+
+    fun openIncidents() {
+        if (ui.local || ui.task != null || ui.event == null || !checkExpiry() || ui.incidentsVisible) return
+        cancelWork()
+        ui = ui.copy(configuring = false, incidentsVisible = true, scan = ScanState.Ready, debug = NfcDebug(),
+            incidents = null, incidentProblem = null)
+        refreshIncidents()
+    }
+
+    fun refreshIncidents() {
+        if (!ui.incidentsVisible || ui.incidentsLoading || !checkExpiry()) return
+        val remote = api ?: return
+        val active = session ?: return
+        val event = ui.event ?: return
+        ui = ui.copy(incidentsLoading = true)
+        work {
+            try {
+                val incidents = remote.incidents(active, event)
+                current()
+                if (checkExpiry()) ui = ui.copy(incidents = incidents, incidentProblem = null, server = ServerState.Connected)
+            } catch (failure: ApiFailure) {
+                current()
+                if (failure.problem == ApiProblem.Unauthorized) expire()
+                else ui = ui.copy(
+                    incidentProblem = failure.problem,
+                    incidents = ui.incidents.takeUnless { failure.problem == ApiProblem.Forbidden },
+                    server = if (failure.problem.isConnectivityError()) ServerState.Unreachable else ServerState.Connected,
+                )
+            } finally {
+                if (isCurrent) ui = ui.copy(incidentsLoading = false)
+            }
+        }
     }
 
     fun useLocal() {
         cancelWork()
-        ui = ui.copy(local = true, configuring = false, notice = null, scan = ScanState.Ready, debug = NfcDebug())
+        ui = ui.copy(local = true, configuring = false, notice = null, scan = ScanState.Ready, debug = NfcDebug(),
+            incidentsVisible = false, incidents = null, incidentProblem = null)
     }
 
     fun logout() {
@@ -188,7 +231,7 @@ internal class ReaderController(
     }
 
     fun resume() {
-        if (!ui.local) checkExpiry()
+        if (!ui.local && checkExpiry() && ui.incidentsVisible) refreshIncidents()
     }
 
     fun scan(read: suspend () -> ReadResult) {
@@ -236,7 +279,7 @@ internal class ReaderController(
         generation++
         operation?.cancel()
         operation = null
-        ui = ui.copy(task = null)
+        ui = ui.copy(task = null, incidentsLoading = false)
     }
 
     private fun work(block: suspend Work.() -> Unit) {
@@ -271,7 +314,8 @@ internal class ReaderController(
         expiry?.cancel()
         expiry = null
         session = null
-        ui = ui.copy(signedIn = false, events = emptyList(), event = null)
+        ui = ui.copy(signedIn = false, events = emptyList(), event = null,
+            incidentsVisible = false, incidents = null, incidentsLoading = false, incidentProblem = null)
     }
 
     private fun checkExpiry(): Boolean {
