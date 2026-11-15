@@ -11,7 +11,7 @@ const digest = (value: string) => createHash('sha256').update(value).digest();
 
 const roles: Record<string, Role> = Object.assign(Object.create(null), {
   antonia: 'ATTENDEE', martin: 'ATTENDEE', sofia: 'ATTENDEE',
-  guardia: 'STAFF', organizador: 'ORGANIZER',
+  guardia: 'STAFF', guardia2: 'STAFF', organizador: 'ORGANIZER',
 });
 
 export function issueSession(db: Db, pins: Pins, account: string, pin?: string) {
@@ -19,7 +19,7 @@ export function issueSession(db: Db, pins: Pins, account: string, pin?: string) 
   const role = roles[account];
   if (!person || !role) throw new ApiError(401, 'INVALID_CREDENTIALS', 'Cuenta o PIN de demostración incorrectos');
   if (role !== 'ATTENDEE') {
-    const expected = pins[role];
+    const expected = pins[account === 'guardia2' ? 'STAFF_2' : role];
     if (!expected || !pin || !timingSafeEqual(digest(expected), digest(pin))) {
       throw new ApiError(401, 'INVALID_CREDENTIALS', 'Cuenta o PIN de demostración incorrectos');
     }

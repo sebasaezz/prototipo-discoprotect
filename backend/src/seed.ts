@@ -37,6 +37,8 @@ function insertDemo(db: Db) {
 
   addPerson.run('demo-guardia', 'guardia', 'Guardia Demo', null, now, now);
   addMember.run('member-demo-guardia', 'demo-festival', 'demo-guardia', 'STAFF');
+  addPerson.run('demo-guardia2', 'guardia2', 'Guardia Demo 2', null, now, now);
+  addMember.run('member-demo-guardia2', 'demo-festival', 'demo-guardia2', 'STAFF');
   addPerson.run('demo-organizador', 'organizador', 'Organizador Demo', null, now, now);
   addMember.run('member-demo-organizador', 'demo-festival', 'demo-organizador', 'ORGANIZER');
 }
@@ -48,7 +50,7 @@ export function seed(db: Db) {
 export function resetDemo(db: Db) {
   atomic(db, () => {
     db.exec(`DELETE FROM events WHERE id = 'demo-festival';
-      DELETE FROM people WHERE id IN ('demo-antonia', 'demo-martin', 'demo-sofia', 'demo-guardia', 'demo-organizador');`);
+      DELETE FROM people WHERE id IN ('demo-antonia', 'demo-martin', 'demo-sofia', 'demo-guardia', 'demo-guardia2', 'demo-organizador');`);
     insertDemo(db);
   });
 }
