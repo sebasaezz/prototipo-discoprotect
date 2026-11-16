@@ -22,7 +22,7 @@ class HttpStaffApiTest {
     private val token = "a".repeat(43)
     private val expiry = java.time.Instant.parse("2030-01-01T00:00:00Z")
     private val event = StaffEvent("demo-festival", "Festival Demo", "Recinto ficticio")
-    private val session = StaffSession(token, expiry)
+    private val session = StaffSession(token, expiry, "demo-guardia", "Guardia Demo")
 
     @Before fun setUp() {
         server.start(InetAddress.getLoopbackAddress(), 0)
@@ -55,6 +55,7 @@ class HttpStaffApiTest {
 
     @Test fun `login submits the guard account and handles rejected credentials`() = runBlocking {
         reply("""{"token":"$token","role":"STAFF","expiresAt":"$expiry"}""", 201)
+        reply("""{"person":{"id":"demo-guardia","account":"guardia","name":"Guardia Demo"},"role":"STAFF"}""")
         val active = api.login("pin-de-prueba")
         assertEquals(expiry, active.expiresAt)
         assertEquals(token, active.token)
@@ -62,6 +63,13 @@ class HttpStaffApiTest {
         assertEquals("POST /api/v1/demo/sessions HTTP/1.1", request.requestLine)
         assertEquals("""{"account":"guardia","pin":"pin-de-prueba"}""", request.body.readUtf8())
         assertNull(request.getHeader("Authorization"))
+        assertEquals("Bearer $token", request().getHeader("Authorization"))
+
+        reply("""{"token":"$token","role":"STAFF","expiresAt":"$expiry"}""", 201)
+        reply("""{"person":{"id":"demo-guardia2","account":"guardia2","name":"Guardia Demo 2"},"role":"STAFF"}""")
+        assertEquals("demo-guardia2", api.login("segundo-pin", StaffAccount.Second).personId)
+        assertEquals("""{"account":"guardia2","pin":"segundo-pin"}""", request().body.readUtf8())
+        assertEquals("GET /api/v1/me HTTP/1.1", request().requestLine)
 
         reply("{}", 401)
         fails(ApiProblem.Unauthorized) { api.login("incorrecto") }

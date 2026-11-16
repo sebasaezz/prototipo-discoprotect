@@ -94,11 +94,18 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
     }
     sos.receipt?.let { Field("ID confirmado", it) }
     sos.error?.let { Status(it, Tone.Warning) }
+    sos.historyError?.let {
+        Status(it, Tone.Warning)
+        if (sos.incidents != null) Text("La última consulta puede estar desactualizada.")
+    }
+    sos.lastConsultedAt?.let { Field("Última consulta", incidentTime(it.toString())) }
     OutlinedButton(onClick = actions::refreshSos, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
         Text("Consultar servidor")
     }
     if (sos.pending != null && event != null && !state.sosWriting) {
-        TextButton(onClick = actions::retrySos, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
+        TextButton(onClick = actions::retrySos,
+            enabled = idle && (sos.pending !is SosAttempt.Cancel || sos.historyFresh),
+            modifier = Modifier.heightIn(min = 48.dp)) {
             Text(if (sos.pending is SosAttempt.Cancel) "Reintentar cancelación" else "Reintentar el mismo envío")
         }
     }
@@ -109,7 +116,7 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
         incidents.forEach { incident ->
             IncidentCard(incident) {
                 if (incident.status == IncidentStatus.OPEN) {
-                    TextButton(onClick = { confirmCancel = incident.id }, enabled = editable,
+                    TextButton(onClick = { confirmCancel = incident.id }, enabled = editable && sos.historyFresh,
                         modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancelar solicitud") }
                 }
             }
@@ -123,7 +130,9 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
                 actions.sendSos()
             })
     }
-    confirmCancel?.takeIf { editable }?.let { id ->
+    confirmCancel?.takeIf { id ->
+        editable && sos.historyFresh && sos.incidents?.any { it.id == id && it.status == IncidentStatus.OPEN } == true
+    }?.let { id ->
         SosConfirmation("¿Cancelar esta solicitud?", "Se conservará el registro con estado Cancelada.",
             "Cancelar solicitud", dismiss = { confirmCancel = null }, accept = {
                 confirmCancel = null

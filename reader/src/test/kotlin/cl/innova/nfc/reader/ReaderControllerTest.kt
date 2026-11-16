@@ -3,6 +3,7 @@ package cl.innova.nfc.reader
 import cl.innova.nfc.protocol.NfcProtocol
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.IncidentStatus
+import cl.discoprotect.ui.AssignedStaff
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -24,7 +25,7 @@ class ReaderControllerTest {
     private val eventA = StaffEvent("A", "Festival A", "Recinto A")
     private val eventB = StaffEvent("B", "Festival B", "Recinto B")
     private val now = Instant.parse("2026-11-15T14:00:00Z")
-    private val session = StaffSession("guard-bearer", now.plusSeconds(3600))
+    private val session = StaffSession("guard-bearer", now.plusSeconds(3600), "demo-guardia", "Guardia Demo")
     private val nfcId = NfcProtocol.DEMO_PERSON_ID
     private val debug = NfcDebug(true, true, "Success", nfcId, 20)
     private val original = HealthProfile("Antonia", 22, "O+", listOf("Látex"), emptyList(), emptyList(),
@@ -82,6 +83,67 @@ class ReaderControllerTest {
         runCurrent()
         assertNull(screen.state.value.incidents)
         assertEquals(ApiProblem.Forbidden, screen.state.value.incidentProblem)
+    }
+
+    @Test fun `polling pauses and backs off and never replaces a newer incident version`() = runTest {
+        val open = incident(eventA)
+        val assigned = open.copy(version = 2, status = IncidentStatus.ASSIGNED,
+            assignedAt = now.toString(), assignedStaff = AssignedStaff(session.personId, session.name))
+        val remote = FakeApi().apply { onIncidents = { _, _ -> listOf(assigned) } }
+        val screen = controller(remote)
+        authenticate(screen)
+        screen.openIncidents()
+        runCurrent()
+        remote.onIncidents = { _, _ -> throw ApiFailure(ApiProblem.Network) }
+        advanceTimeBy(5000)
+        runCurrent()
+        assertEquals(2, remote.incidentCalls)
+        assertFalse(screen.state.value.incidentsCurrent)
+        advanceTimeBy(9999)
+        runCurrent()
+        assertEquals(2, remote.incidentCalls)
+        screen.pause()
+        advanceTimeBy(30000)
+        assertEquals(2, remote.incidentCalls)
+        remote.onIncidents = { _, _ -> listOf(open) }
+        screen.resume()
+        runCurrent()
+        assertEquals(3, remote.incidentCalls)
+        assertEquals(listOf(assigned), screen.state.value.incidents)
+        assertTrue(screen.state.value.incidentsCurrent)
+    }
+
+    @Test fun `lost write keeps exact command and displays the live status on historical confirmation`() = runTest {
+        val open = incident(eventA)
+        val remote = FakeApi()
+        var current = open
+        val commands = mutableListOf<IncidentCommand>()
+        remote.onIncidents = { _, _ -> listOf(current) }
+        remote.onOperate = { command ->
+            commands += command
+            if (commands.size == 1) throw ApiFailure(ApiProblem.Timeout)
+            OperationReply(AppliedOperation(command.body.operationId, IncidentStatus.OPEN, IncidentStatus.ASSIGNED,
+                2, now.toString(), true), current)
+        }
+        val screen = controller(remote)
+        authenticate(screen)
+        screen.openIncidents()
+        runCurrent()
+        screen.operateIncident(open.id, open.version, IncidentAction.Claim)
+        runCurrent()
+        assertTrue(screen.state.value.pendingIncident)
+        assertEquals(IncidentStatus.OPEN, screen.state.value.incidents?.single()?.status)
+        current = open.copy(version = 3, status = IncidentStatus.IN_PROGRESS, assignedAt = now.toString(),
+            startedAt = now.toString(), assignedStaff = AssignedStaff(session.personId, session.name))
+        screen.refreshIncidents()
+        runCurrent()
+        screen.retryIncident()
+        runCurrent()
+        assertEquals(2, commands.size)
+        assertEquals(commands[0], commands[1])
+        assertFalse(screen.state.value.pendingIncident)
+        assertEquals(IncidentStatus.IN_PROGRESS, screen.state.value.incidents?.single()?.status)
+        assertTrue(screen.state.value.incidentNotice!!.contains("original confirmada: Asignada. Estado vigente: En atención"))
     }
 
     @Test fun `event selection and updates after closing NFC`() = runTest {
@@ -266,9 +328,12 @@ class ReaderControllerTest {
         var resolveCount = 0
         var incidentCalls = 0
         var onIncidents: suspend (StaffSession, StaffEvent) -> List<Incident> = { _, _ -> emptyList() }
+        var onOperate: suspend (IncidentCommand) -> OperationReply = { error("Operación inesperada") }
         var onResolve: suspend (StaffSession, StaffEvent, String) -> HealthProfile = { _, _, _ -> original }
         override suspend fun health() = Unit
-        override suspend fun login(pin: String) = session
+        override suspend fun login(pin: String, account: StaffAccount) = session
+        override suspend fun operate(session: StaffSession, event: StaffEvent, command: IncidentCommand): OperationReply =
+            onOperate(command)
         override suspend fun events(session: StaffSession) = availableEvents
         override suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident> {
             incidentCalls++

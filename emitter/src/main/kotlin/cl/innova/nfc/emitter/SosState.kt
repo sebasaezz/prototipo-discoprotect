@@ -2,6 +2,7 @@ package cl.innova.nfc.emitter
 
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.IncidentStatus
+import java.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 
@@ -44,6 +45,9 @@ internal data class SosState(
     val outcome: SosOutcome = SosOutcome.Ready,
     val receipt: String? = null,
     val error: String? = null,
+    val historyError: String? = null,
+    val lastConsultedAt: Instant? = null,
+    val historyFresh: Boolean = false,
 ) {
     val canSend get() = event != null && zones != null && locationChosen && pending == null
 }

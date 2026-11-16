@@ -1,8 +1,12 @@
 package cl.innova.nfc.reader
 
 import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.currentIncidentSnapshot
+import cl.discoprotect.ui.incidentPollDelay
 import java.time.Clock
 import java.time.Duration
+import java.time.Instant
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -45,9 +49,19 @@ internal data class ReaderUiState(
     val incidentsLoading: Boolean = false,
     val incidents: List<Incident>? = null,
     val incidentProblem: ApiProblem? = null,
+    val lastIncidentRead: Instant? = null,
+    val staffId: String? = null,
+    val staffName: String? = null,
+    val incidentWriting: Boolean = false,
+    val pendingIncident: Boolean = false,
+    val incidentNotice: String? = null,
 ) {
     val canContinue get() = signedIn && event != null && server == ServerState.Connected
     val canScan get() = !configuring && !incidentsVisible && (local || signedIn && event != null) && scan == ScanState.Ready
+    val incidentsCurrent get() = lastIncidentRead != null && incidentProblem == null && !incidentWriting
+    fun actionFor(incident: Incident): IncidentAction? = IncidentAction.entries.firstOrNull {
+        it.from == incident.status && (it == IncidentAction.Claim || staffId != null && incident.assignedStaff?.id == staffId)
+    }
 }
 
 /** Coordinates foreground work. All public methods and state updates run on the UI dispatcher. */
@@ -66,6 +80,10 @@ internal class ReaderController(
     private var operation: Job? = null
     private var expiry: Job? = null
     private var generation = 0L
+    private var foreground = true
+    private var incidentTimer: Job? = null
+    private var incidentFailures = 0
+    private val pendingCommands = mutableMapOf<Pair<String, String>, IncidentCommand>()
 
     private val mutable = MutableStateFlow(ReaderUiState(
         address = address?.toString().orEmpty(),
@@ -93,6 +111,7 @@ internal class ReaderController(
         cancelWork()
         if (target != address) {
             clearSession()
+            pendingCommands.clear()
             address = target
             api = apiFor(target)
             saveAddress(target.toString())
@@ -117,7 +136,7 @@ internal class ReaderController(
         }
     }
 
-    fun login(pin: String) {
+    fun login(pin: String, account: StaffAccount = StaffAccount.First) {
         val remote = api ?: return
         if (ui.task != null || ui.server != ServerState.Connected) return
         if (pin.length !in 4..128) {
@@ -129,14 +148,14 @@ internal class ReaderController(
         ui = ui.copy(task = SetupTask.SigningIn, notice = null)
         work {
             try {
-                val active = remote.login(pin)
+                val active = remote.login(pin, account)
                 current()
                 if (!active.expiresAt.isAfter(clock.instant())) {
                     expire()
                     return@work
                 }
                 startSession(active)
-                ui = ui.copy(signedIn = true)
+                ui = ui.copy(signedIn = true, staffId = active.personId, staffName = active.name)
                 loadEvents(remote, active, this)
             } catch (failure: ApiFailure) {
                 current()
@@ -164,7 +183,7 @@ internal class ReaderController(
         if (ui.task != null || !checkExpiry()) return
         cancelWork()
         ui = ui.copy(event = event, scan = ScanState.Ready, debug = NfcDebug(), notice = null,
-            incidents = null, incidentProblem = null)
+            incidents = null, incidentProblem = null, lastIncidentRead = null, pendingIncident = false, incidentNotice = null)
         if (ui.incidentsVisible) refreshIncidents()
     }
 
@@ -178,31 +197,114 @@ internal class ReaderController(
         if (ui.local || ui.task != null || ui.event == null || !checkExpiry() || ui.incidentsVisible) return
         cancelWork()
         ui = ui.copy(configuring = false, incidentsVisible = true, scan = ScanState.Ready, debug = NfcDebug(),
-            incidents = null, incidentProblem = null)
+            incidents = null, incidentProblem = null, lastIncidentRead = null, pendingIncident = false, incidentNotice = null)
         refreshIncidents()
     }
 
     fun refreshIncidents() {
-        if (!ui.incidentsVisible || ui.incidentsLoading || !checkExpiry()) return
+        if (!foreground || !ui.incidentsVisible || ui.incidentsLoading || ui.incidentWriting || !checkExpiry()) return
         val remote = api ?: return
         val active = session ?: return
         val event = ui.event ?: return
-        ui = ui.copy(incidentsLoading = true)
+        incidentTimer?.cancel()
+        ui = ui.copy(incidentsLoading = true, pendingIncident = pendingCommands.containsKey(active.personId to event.id))
         work {
             try {
                 val incidents = remote.incidents(active, event)
                 current()
-                if (checkExpiry()) ui = ui.copy(incidents = incidents, incidentProblem = null, server = ServerState.Connected)
+                if (checkExpiry()) {
+                    incidentFailures = 0
+                    ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, incidents), incidentProblem = null,
+                        lastIncidentRead = clock.instant(), server = ServerState.Connected)
+                }
             } catch (failure: ApiFailure) {
                 current()
                 if (failure.problem == ApiProblem.Unauthorized) expire()
-                else ui = ui.copy(
-                    incidentProblem = failure.problem,
-                    incidents = ui.incidents.takeUnless { failure.problem == ApiProblem.Forbidden },
-                    server = if (failure.problem.isConnectivityError()) ServerState.Unreachable else ServerState.Connected,
-                )
+                else {
+                    incidentFailures = (incidentFailures + 1).coerceAtMost(3)
+                    ui = ui.copy(
+                        incidentProblem = failure.problem,
+                        incidents = ui.incidents.takeUnless { failure.problem == ApiProblem.Forbidden },
+                        lastIncidentRead = ui.lastIncidentRead.takeUnless { failure.problem == ApiProblem.Forbidden },
+                        server = if (failure.problem.isConnectivityError()) ServerState.Unreachable else ServerState.Connected,
+                    )
+                }
             } finally {
-                if (isCurrent) ui = ui.copy(incidentsLoading = false)
+                if (isCurrent) {
+                    ui = ui.copy(incidentsLoading = false)
+                    scheduleIncidents()
+                }
+            }
+        }
+    }
+
+    private fun scheduleIncidents() {
+        if (!foreground || !ui.incidentsVisible || session == null) return
+        incidentTimer = scope.launch {
+            delay(incidentPollDelay(incidentFailures))
+            incidentTimer = null
+            refreshIncidents()
+        }
+    }
+
+    fun operateIncident(incidentId: String, version: Long, action: IncidentAction, note: String = "") {
+        if (!ui.incidentsCurrent || ui.pendingIncident || note.length > 240) return
+        val incident = ui.incidents?.firstOrNull { it.id == incidentId && it.version == version } ?: return
+        if (ui.actionFor(incident) != action) return
+        val command = IncidentCommand(incident.id, action,
+            OperationBody(incident.version, UUID.randomUUID().toString(), note.trim().ifEmpty { null }))
+        submitIncident(command)
+    }
+
+    fun retryIncident() {
+        if (!ui.incidentsCurrent) return
+        val active = session ?: return
+        val event = ui.event ?: return
+        pendingCommands[active.personId to event.id]?.let(::submitIncident)
+    }
+
+    private fun submitIncident(command: IncidentCommand) {
+        if (!foreground || !ui.incidentsVisible || !checkExpiry()) return
+        val remote = api ?: return
+        val active = session ?: return
+        val event = ui.event ?: return
+        val key = active.personId to event.id
+        val retrying = pendingCommands.containsKey(key)
+        cancelWork()
+        pendingCommands[key] = command
+        ui = ui.copy(incidentWriting = true, pendingIncident = true, incidentNotice = null)
+        work {
+            try {
+                val (operation, incident) = remote.operate(active, event, command)
+                current()
+                pendingCommands.remove(key)
+                val items = ui.incidents.orEmpty().filterNot { it.id == incident.id } + incident
+                ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, items)
+                    .sortedWith(compareByDescending<Incident> { it.createdAt }.thenByDescending { it.id }),
+                    pendingIncident = false,
+                    incidentNotice = if (operation.replayed && operation.appliedVersion != incident.version)
+                        "Operación original confirmada: ${operation.toStatus.label}. Estado vigente: ${incident.status.label}."
+                    else "Operación confirmada: ${operation.toStatus.label}.")
+            } catch (failure: ApiFailure) {
+                current()
+                when (failure.problem) {
+                    ApiProblem.Unauthorized -> expire()
+                    else -> {
+                        val inaccessible = failure.problem in setOf(ApiProblem.Forbidden, ApiProblem.NotFound)
+                        val rejected = failure.problem in setOf(ApiProblem.Conflict, ApiProblem.InvalidInput) ||
+                            inaccessible && !retrying
+                        if (rejected) pendingCommands.remove(key)
+                        ui = ui.copy(pendingIncident = !rejected, incidentNotice = when {
+                            rejected || inaccessible -> failure.problem.description()
+                            else -> "Consulta el estado y reintenta la misma operación."
+                        })
+                    }
+                }
+            } finally {
+                if (isCurrent) {
+                    ui = ui.copy(incidentWriting = false, lastIncidentRead = null)
+                    refreshIncidents()
+                }
             }
         }
     }
@@ -226,11 +328,13 @@ internal class ReaderController(
     }
 
     fun pause() {
+        foreground = false
         cancelWork()
-        ui = ui.copy(scan = ScanState.Ready, debug = NfcDebug())
+        ui = ui.copy(scan = ScanState.Ready, debug = NfcDebug(), lastIncidentRead = null)
     }
 
     fun resume() {
+        foreground = true
         if (!ui.local && checkExpiry() && ui.incidentsVisible) refreshIncidents()
     }
 
@@ -279,7 +383,10 @@ internal class ReaderController(
         generation++
         operation?.cancel()
         operation = null
-        ui = ui.copy(task = null, incidentsLoading = false)
+        incidentTimer?.cancel()
+        incidentTimer = null
+        incidentFailures = 0
+        ui = ui.copy(task = null, incidentsLoading = false, incidentWriting = false)
     }
 
     private fun work(block: suspend Work.() -> Unit) {
@@ -315,7 +422,8 @@ internal class ReaderController(
         expiry = null
         session = null
         ui = ui.copy(signedIn = false, events = emptyList(), event = null,
-            incidentsVisible = false, incidents = null, incidentsLoading = false, incidentProblem = null)
+            incidentsVisible = false, incidents = null, incidentsLoading = false, incidentProblem = null,
+            staffId = null, staffName = null, lastIncidentRead = null, pendingIncident = false, incidentNotice = null)
     }
 
     private fun checkExpiry(): Boolean {
@@ -363,4 +471,6 @@ internal fun ApiProblem.description(): String = when (this) {
     ApiProblem.InvalidId -> "El identificador recibido no tiene el formato esperado."
     ApiProblem.InvalidResponse -> "La respuesta no coincide con la API de Discoprotect. Revisa la dirección y el servidor."
     ApiProblem.Server -> "El servidor no pudo responder a la consulta. Vuelve a intentar."
+    ApiProblem.Conflict -> "El incidente cambió. Revisa su estado actual antes de volver a actuar."
+    ApiProblem.InvalidInput -> "El servidor rechazó los datos de la operación."
 }
