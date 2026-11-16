@@ -1,13 +1,23 @@
 export type Session = { token: string; expiresAt: string };
 export type Event = { id: string; name: string; venue: string; role: string };
+export const incidentLabels = {
+  OPEN: 'Abierta', ASSIGNED: 'Asignada', IN_PROGRESS: 'En atención', RESOLVED: 'Resuelta', CANCELLED: 'Cancelada',
+} as const;
 export type Incident = {
   id: string;
   eventId: string;
   requesterName: string;
   zoneName: string | null;
   locationText: string | null;
-  status: 'OPEN' | 'CANCELLED';
+  status: keyof typeof incidentLabels;
   createdAt: string;
+  updatedAt: string;
+  version: number;
+  assignedStaff: { id: string; name: string } | null;
+  assignedAt: string | null;
+  startedAt: string | null;
+  resolvedAt: string | null;
+  resolutionNote: string | null;
 };
 
 export class ApiError extends Error {
@@ -60,11 +70,36 @@ export async function incidents(session: Session, eventId: string, signal: Abort
   const result = await request<{ incidents: Incident[] }>(
     `events/${encodeURIComponent(eventId)}/incidents`, signal, session,
   );
-  if (result.incidents.some(incident => incident.eventId !== eventId || !Number.isFinite(Date.parse(incident.createdAt))
-      || !['OPEN', 'CANCELLED'].includes(incident.status))) {
+  if (!Array.isArray(result.incidents) || result.incidents.some(incident => !validIncident(incident, eventId))
+      || new Set(result.incidents.map(item => item.id)).size !== result.incidents.length) {
     throw new ApiError(502, 'La respuesta contiene solicitudes inválidas para el evento.');
   }
   return result.incidents;
+}
+
+function validIncident(item: Incident, eventId: string) {
+  if (!item || item.eventId !== eventId || typeof item.id !== 'string' ||
+      typeof item.requesterName !== 'string' || !Object.hasOwn(incidentLabels, item.status) ||
+      typeof item.createdAt !== 'string' || typeof item.updatedAt !== 'string' ||
+      !Number.isSafeInteger(item.version) || item.version < 1) return false;
+  const assigned = ['ASSIGNED', 'IN_PROGRESS', 'RESOLVED'].includes(item.status);
+  if (assigned ? !item.assignedStaff?.id || !item.assignedStaff.name : item.assignedStaff !== null) return false;
+  if ((typeof item.assignedAt === 'string') !== assigned ||
+      (typeof item.startedAt === 'string') !== ['IN_PROGRESS', 'RESOLVED'].includes(item.status) ||
+      (typeof item.resolvedAt === 'string') !== (item.status === 'RESOLVED')) return false;
+  if (item.resolutionNote !== null && (item.status !== 'RESOLVED' || typeof item.resolutionNote !== 'string' ||
+      !item.resolutionNote.trim() || item.resolutionNote.length > 240)) return false;
+  const dates = [item.createdAt, item.assignedAt, item.startedAt, item.resolvedAt, item.updatedAt]
+    .filter(value => value !== null).map(value => Date.parse(value));
+  return dates.every((time, index) => Number.isFinite(time) && (index === 0 || dates[index - 1] <= time));
+}
+
+export function currentIncidentSnapshot(previous: Incident[] | null, incoming: Incident[]) {
+  const known = new Map(previous?.map(item => [item.id, item]));
+  return incoming.map(item => {
+    const current = known.get(item.id);
+    return current && current.version > item.version ? current : item;
+  });
 }
 
 export function messageFor(error: unknown) {

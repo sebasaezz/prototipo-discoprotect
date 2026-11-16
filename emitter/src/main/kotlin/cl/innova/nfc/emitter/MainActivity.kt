@@ -57,6 +57,11 @@ class MainActivity : ComponentActivity() {
         refresh()
     }
 
+    override fun onPause() {
+        controller.pause()
+        super.onPause()
+    }
+
     private fun refresh() {
         val adapter = NfcAdapter.getDefaultAdapter(this)
         diagnostics = Diagnostics(

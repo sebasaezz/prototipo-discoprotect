@@ -11,7 +11,7 @@
     "db:migrate": "npm run build && node --env-file-if-exists=.env dist/src/db-cli.js migrate",
     "db:seed": "npm run build && node --env-file-if-exists=.env dist/src/db-cli.js seed",
     "db:reset": "npm run build && node --env-file-if-exists=.env dist/src/db-cli.js reset",
-    "test": "npm run build && node --test dist/tests/api.test.js"
+    "test": "npm run build && node --test dist/tests/*.test.js"
   },
   "dependencies": { "fastify": "5.12.8", "zod": "4.6.7" },
   "devDependencies": { "@types/node": "^22.0.0", "typescript": "~5.9.3" }

@@ -69,7 +69,7 @@ internal fun ConnectionSetup(state: ReaderUiState, actions: ReaderController) {
         GuardLogin(idle, actions::login)
     }
     if (sameAddress && state.signedIn) {
-        Status("Guardia autenticado", Tone.Success)
+        Status(state.staffName ?: "Guardia autenticado", Tone.Success)
         EventSelector(state, actions::selectEvent)
         if (state.event != null) {
             Button(onClick = actions::openIncidents, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
@@ -93,11 +93,24 @@ internal fun ConnectionSetup(state: ReaderUiState, actions: ReaderController) {
 }
 
 @Composable
-private fun GuardLogin(idle: Boolean, signIn: (String) -> Unit) {
+private fun GuardLogin(idle: Boolean, signIn: (String, StaffAccount) -> Unit) {
     var pin by remember { mutableStateOf("") }
+    var account by remember { mutableStateOf(StaffAccount.First) }
     val focus = LocalFocusManager.current
     Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
         Text("Sesión de guardia", style = MaterialTheme.typography.titleMedium)
+        Column(Modifier.selectableGroup()) {
+            StaffAccount.entries.forEach { choice ->
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .selectable(account == choice, enabled = idle, role = Role.RadioButton) {
+                        account = choice
+                        pin = ""
+                    }, verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(account == choice, onClick = null, enabled = idle)
+                    Text(choice.label, modifier = Modifier.padding(start = Space.sm))
+                }
+            }
+        }
         OutlinedTextField(
             value = pin,
             onValueChange = { if (it.length <= 128) pin = it },
@@ -112,7 +125,7 @@ private fun GuardLogin(idle: Boolean, signIn: (String) -> Unit) {
             val value = pin
             pin = ""
             focus.clearFocus()
-            signIn(value)
+            signIn(value, account)
         }, enabled = idle && pin.length >= 4, modifier = Modifier.heightIn(min = 48.dp)) {
             Text("Iniciar sesión")
         }

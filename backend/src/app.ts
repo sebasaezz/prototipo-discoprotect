@@ -94,6 +94,31 @@ export function createApp(db: Db, pins: Pins, logging = false) {
       const { id } = parse(incidents.incidentId, request.params);
       return incidents.cancelIncident(db, current, id);
     });
+    api.get('/me/incidents/:id', async request => {
+      const current = session(request);
+      requireRole(current, 'ATTENDEE');
+      const { id } = parse(incidents.incidentId, request.params);
+      return incidents.ownIncident(db, current, id);
+    });
+    const incidentParams = records.eventId.extend(incidents.incidentId.shape);
+    const incidentPath = '/events/:eventId/incidents/:id';
+    api.get(incidentPath, async request => {
+      const current = session(request);
+      if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
+      const { eventId, id } = parse(incidentParams, request.params);
+      requireMembership(db, current, eventId);
+      return incidents.eventIncident(db, eventId, id);
+    });
+    for (const action of ['claim', 'start', 'resolve'] as const) {
+      api.post(`${incidentPath}/${action}`, async request => {
+        const current = session(request);
+        requireRole(current, 'STAFF');
+        const { eventId, id } = parse(incidentParams, request.params);
+        const input = action === 'resolve' ? parse(incidents.resolutionInput, request.body)
+          : parse(incidents.operationInput, request.body);
+        return incidents.operate(db, current, eventId, id, action, input);
+      });
+    }
     api.patch('/events/:eventId', async request => {
       const current = session(request);
       requireRole(current, 'ORGANIZER');

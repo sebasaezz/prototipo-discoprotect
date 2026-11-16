@@ -2,7 +2,7 @@
 
 Prototipo universitario de seguridad para eventos masivos. AppPersonal lee el identificador NFC, cierra la conexión con AppAsistente y consulta la ficha actualizada en el servidor. La demo local sigue disponible desde la configuración del lector. AppAsistente verifica una de las tres cuentas demo, emite su credencial NFC vigente y permite editar la ficha y los contactos de esa cuenta mediante el mismo servidor.
 
-H5 agrega solicitudes SOS con zona manual en AppAsistente y consulta de incidentes en AppPersonal y en la web de organizadores. Los registros se conservan en SQLite. El usuario validó físicamente H5 el 15 de noviembre de 2026. H6, gestión operativa de incidentes, es el siguiente hito. [Checkpoint H5](docs/checkpoints/h5-2026-11-15.md) · [Guion H5](docs/h5-integration.md)
+H5 agregó el SOS persistente y fue validado físicamente el 15 de noviembre de 2026. H6 agrega la asignación, atención y resolución por guardias y el seguimiento automático en ambas apps y GestiónWeb. H6 superó la revisión independiente y completó la aceptación física con 26/26 comprobaciones aprobadas por el usuario, incluida la regresión NFC con Antonia y Sofía. [Checkpoint H6](docs/checkpoints/h6-2026-11-15.md) · [Guion H6](docs/h6-integration.md)
 
 ## Backend
 
@@ -17,11 +17,11 @@ npm run db:seed
 npm start
 ```
 
-Para habilitar roles privilegiados, copia `.env.example` a `.env` desde `backend/` (`Copy-Item .env.example .env` en PowerShell o `cp .env.example .env` en Linux). Define valores privados y distintos en `DEMO_STAFF_PIN` y `DEMO_ORGANIZER_PIN`. Los perfiles privilegiados quedan deshabilitados si su PIN está vacío. Las cuentas ficticias `antonia`, `martin` y `sofia` se pueden seleccionar sin PIN.
+Para habilitar roles privilegiados, copia `.env.example` a `.env` desde `backend/` si el archivo aún no existe (`Copy-Item .env.example .env` en PowerShell o `cp .env.example .env` en Linux). Define valores privados y distintos en `DEMO_STAFF_PIN`, `DEMO_STAFF_2_PIN` y `DEMO_ORGANIZER_PIN`. Cada cuenta privilegiada queda deshabilitada si su PIN está vacío. Las cuentas ficticias `antonia`, `martin` y `sofia` se pueden seleccionar sin PIN.
 
 `npm start` ejecuta el resultado compilado. Recompila con `npm run build`. Durante el desarrollo `npm run dev` compila al inicio y reinicia Node ante cambios en el JavaScript generado. El arranque aplica migraciones pendientes. Ejecuta el seed para provisionar los datos demo. El seed es idempotente con las filas existentes y la persistencia de uso normal ocurre en SQLite. La restauración se ejecuta explícitamente. La configuración por defecto usa `127.0.0.1:3000` y `backend/data/demo.sqlite`. Consulta `GET /api/v1/health`. El flujo local funciona sin Internet tras instalar dependencias.
 
-Para restaurar, detén el servidor, comprueba que `DATABASE_PATH` apunte a la base de prueba, establece temporalmente `ALLOW_DEMO_RESET=true` en `.env` y ejecuta `npm run db:reset`. Devuelve la opción a `false` tras restaurar. La operación recrea el evento, las cinco cuentas ficticias y sus registros relacionados, incluidas sus sesiones.
+Para restaurar una base descartable, detén el servidor, comprueba que `DATABASE_PATH` apunte a esa base de prueba, establece temporalmente `ALLOW_DEMO_RESET=true` en `.env` y ejecuta `npm run db:reset`. Devuelve la opción a `false` tras restaurar. La operación recrea el evento, las seis cuentas ficticias y sus registros relacionados, incluidas sus sesiones. Para actualizar una base H5 usa las instrucciones de migración incremental del [guion H6](docs/h6-integration.md).
 
 Para escuchar en LAN, configura `HOST=0.0.0.0` y `PORT` en `.env`. Permite el puerto en el firewall de red privada y usa la IP LAN del computador para las consultas. HTTP de desarrollo está destinado a datos ficticios en una LAN aislada. Fuera de ese entorno se requiere HTTPS y controles adicionales.
 

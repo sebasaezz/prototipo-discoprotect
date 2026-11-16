@@ -174,6 +174,31 @@ class SosControllerTest {
         assertEquals(SosOutcome.Confirmed, app.state.value.sos.outcome)
     }
 
+    @Test fun `visible history polls without disturbing the form and ignores lower versions`() = runTest {
+        val backend = Server()
+        val app = ready(backend)
+        app.sendSos()
+        runCurrent()
+        val original = backend.saved.values.single()
+        val key = requireNotNull(original.clientRequestId)
+        backend.saved[key] = original.copy(status = IncidentStatus.ASSIGNED, version = 2, assignedAt = now.toString())
+        app.updateSosReference("Referencia en edición")
+        advanceTimeBy(5000)
+        runCurrent()
+        assertEquals(IncidentStatus.ASSIGNED, app.state.value.sos.incidents?.single()?.status)
+        assertEquals("Referencia en edición", app.state.value.sos.reference)
+        backend.saved[key] = original
+        app.pause()
+        val reads = backend.reads
+        advanceTimeBy(30000)
+        runCurrent()
+        assertEquals(reads, backend.reads)
+        app.resume()
+        runCurrent()
+        assertEquals(reads + 1, backend.reads)
+        assertEquals(2L, app.state.value.sos.incidents?.single()?.version)
+    }
+
     private fun TestScope.open(backend: Server) = AttendeeController(
         backgroundScope, true, "http://192.168.1.10:3000", {}, { backend }, Clock.fixed(now, ZoneOffset.UTC),
     ).also {
@@ -195,6 +220,7 @@ class SosControllerTest {
         var loseResponse = false
         var offline = false
         var expireReads = false
+        var reads = 0
         var pauseList: (suspend () -> Unit)? = null
 
         override suspend fun health() {
@@ -214,6 +240,7 @@ class SosControllerTest {
         override suspend fun events(session: AttendeeSession) = listOf(event)
         override suspend fun zones(session: AttendeeSession, eventId: String) = listOf(zone)
         override suspend fun incidents(session: AttendeeSession, eventId: String): List<Incident> {
+            reads++
             if (expireReads) throw AttendeeFailure(FailureKind.Expired)
             pauseList?.invoke()
             return saved.values.filter { it.requesterPersonId == session.person.id && it.eventId == eventId }

@@ -2,6 +2,8 @@ package cl.innova.nfc.reader
 
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.IncidentList
+import cl.discoprotect.ui.IncidentStatus
+import cl.discoprotect.ui.isIncidentUuid
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.URI
@@ -36,16 +38,34 @@ internal fun serverAddress(input: String, allowHttp: Boolean): HttpUrl? {
     return url
 }
 
-internal class StaffSession(val token: String, val expiresAt: Instant)
+internal enum class StaffAccount(val key: String, val label: String) {
+    First("guardia", "Guardia Demo"), Second("guardia2", "Guardia Demo 2"),
+}
+internal class StaffSession(val token: String, val expiresAt: Instant, val personId: String, val name: String)
 internal data class StaffEvent(val id: String, val name: String, val venue: String)
-internal enum class ApiProblem { Network, Timeout, Unavailable, Unauthorized, Forbidden, NotFound, InvalidId, InvalidResponse, Server }
+internal enum class ApiProblem { Network, Timeout, Unavailable, Unauthorized, Forbidden, NotFound, InvalidId, InvalidResponse, Server, Conflict, InvalidInput }
 internal class ApiFailure(val problem: ApiProblem) : Exception(problem.name)
+
+internal enum class IncidentAction(val path: String, val label: String, val from: IncidentStatus, val to: IncidentStatus) {
+    Claim("claim", "Asumir", IncidentStatus.OPEN, IncidentStatus.ASSIGNED),
+    Start("start", "Iniciar atención", IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS),
+    Resolve("resolve", "Resolver", IncidentStatus.IN_PROGRESS, IncidentStatus.RESOLVED),
+}
+
+internal data class IncidentCommand(val incidentId: String, val action: IncidentAction, val body: OperationBody)
+@Serializable internal data class OperationBody(val version: Long, val operationId: String, val resolutionNote: String? = null)
+@Serializable internal data class AppliedOperation(
+    val operationId: String, val fromStatus: IncidentStatus, val toStatus: IncidentStatus,
+    val appliedVersion: Long, val appliedAt: String, val replayed: Boolean,
+)
+@Serializable internal data class OperationReply(val operation: AppliedOperation, val incident: Incident)
 
 internal interface StaffApi {
     suspend fun health()
-    suspend fun login(pin: String): StaffSession
+    suspend fun login(pin: String, account: StaffAccount = StaffAccount.First): StaffSession
     suspend fun events(session: StaffSession): List<StaffEvent>
     suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident>
+    suspend fun operate(session: StaffSession, event: StaffEvent, command: IncidentCommand): OperationReply
     suspend fun resolve(session: StaffSession, event: StaffEvent, token: String): HealthProfile
 }
 
@@ -55,11 +75,15 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
         requireReply(reply.status == "ok" && reply.database == "ok", ApiProblem.Unavailable)
     }
 
-    override suspend fun login(pin: String): StaffSession {
-        val reply = exchange<SessionReply>("demo/sessions", payload = json.encodeToString(LoginBody("guardia", pin)))
+    override suspend fun login(pin: String, account: StaffAccount): StaffSession {
+        val reply = exchange<SessionReply>("demo/sessions", payload = json.encodeToString(LoginBody(account.key, pin)))
         requireReply(reply.role == "STAFF", ApiProblem.Forbidden)
         requireReply(reply.token.matches(Regex("[A-Za-z0-9_-]{43}")))
-        return StaffSession(reply.token, instant(reply.expiresAt))
+        val active = StaffSession(reply.token, instant(reply.expiresAt), "", "")
+        val identity = exchange<StaffIdentity>("me", active)
+        requireReply(identity.role == "STAFF" && identity.person.account == account.key &&
+            identity.person.id.isNotBlank() && identity.person.name.isNotBlank())
+        return StaffSession(active.token, active.expiresAt, identity.person.id, identity.person.name)
     }
 
     override suspend fun events(session: StaffSession): List<StaffEvent> =
@@ -69,12 +93,35 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
         }
 
     override suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident> {
-        requireReply(event.id.isNotBlank() && event.id !in setOf(".", ".."))
-        val url = address.newBuilder().addPathSegments("api/v1/events")
-            .addPathSegment(event.id).addPathSegment("incidents").build()
-        return exchange<IncidentList>(url, session).incidents.also { incidents ->
-            requireReply(incidents.all { it.validFor(event.id) } &&
+        return exchange<IncidentList>(incidentUrl(event).build(), session).incidents.also { incidents ->
+            requireReply(incidents.all { it.validOperational(event.id) } &&
                 incidents.distinctBy { it.id }.size == incidents.size)
+        }
+    }
+
+    private fun incidentUrl(event: StaffEvent): HttpUrl.Builder {
+        requireReply(event.id.isNotBlank() && event.id !in setOf(".", ".."))
+        return address.newBuilder().addPathSegments("api/v1/events")
+            .addPathSegment(event.id).addPathSegment("incidents")
+    }
+
+    override suspend fun operate(session: StaffSession, event: StaffEvent, command: IncidentCommand): OperationReply {
+        requireReply(isIncidentUuid(command.incidentId) && isIncidentUuid(command.body.operationId) && command.body.version > 0,
+            ApiProblem.InvalidInput)
+        val url = incidentUrl(event).addPathSegment(command.incidentId).addPathSegment(command.action.path).build()
+        return exchange<OperationReply>(url, session, json.encodeToString(command.body)).also { (operation, incident) ->
+            val actionTime = when (command.action) {
+                IncidentAction.Claim -> incident.assignedAt
+                IncidentAction.Start -> incident.startedAt
+                IncidentAction.Resolve -> incident.resolvedAt
+            }
+            requireReply(incident.validOperational(event.id) && incident.id == command.incidentId &&
+                incident.assignedStaff?.id == session.personId && operation.operationId == command.body.operationId &&
+                operation.fromStatus == command.action.from && operation.toStatus == command.action.to &&
+                operation.appliedVersion == command.body.version + 1 && operation.appliedAt == actionTime &&
+                incident.version >= operation.appliedVersion &&
+                (operation.replayed || incident.version == operation.appliedVersion) &&
+                (incident.version > operation.appliedVersion || incident.status == operation.toStatus))
         }
     }
 
@@ -124,6 +171,8 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
                             401 -> ApiProblem.Unauthorized
                             403 -> ApiProblem.Forbidden
                             404 -> ApiProblem.NotFound
+                            409 -> ApiProblem.Conflict
+                            400 -> ApiProblem.InvalidInput
                             else -> ApiProblem.Server
                         })
                         val body = it.body ?: throw ApiFailure(ApiProblem.InvalidResponse)
@@ -159,6 +208,11 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
     }
 }
 
+private fun Incident.validOperational(eventId: String): Boolean = validFor(eventId) &&
+    (assignedStaff != null) == (assignedAt != null) &&
+    (assignedStaff == null || assignedStaff.id.isNotBlank() && assignedStaff.name.isNotBlank()) &&
+    (resolutionNote == null || status == IncidentStatus.RESOLVED && resolutionNote.isNotBlank() && resolutionNote.length <= 240)
+
 private fun requireReply(condition: Boolean, problem: ApiProblem = ApiProblem.InvalidResponse) {
     if (!condition) throw ApiFailure(problem)
 }
@@ -172,6 +226,8 @@ private fun IOException.toApiFailure() =
 @Serializable private class HealthReply(val status: String, val database: String)
 @Serializable private class LoginBody(val account: String, val pin: String)
 @Serializable private class SessionReply(val token: String, val role: String, val expiresAt: String)
+@Serializable private class StaffIdentity(val person: StaffPerson, val role: String)
+@Serializable private class StaffPerson(val id: String, val account: String, val name: String)
 @Serializable private class EventsReply(val events: List<EventReply>)
 @Serializable private class EventReply(val id: String, val name: String, val venue: String, val role: String)
 @Serializable private class ResolveBody(val token: String, val eventId: String)

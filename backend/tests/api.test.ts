@@ -8,7 +8,7 @@ import { createApp } from '../src/app.js';
 import { migrate, openDb } from '../src/db.js';
 import { DEMO_NFC, resetDemo, seed } from '../src/seed.js';
 
-const pins = { STAFF: 'test-staff-only', ORGANIZER: 'test-organizer-only' };
+const pins = { STAFF: 'test-staff-only', STAFF_2: 'test-second-staff-only', ORGANIZER: 'test-organizer-only' };
 const eventId = 'demo-festival';
 const prefix = '/api/v1';
 
@@ -30,8 +30,8 @@ test('health, foreign keys, migrations and repeatable seed', async t => {
   const { app, db } = await fixture(t);
   migrate(db);
   seed(db);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 2);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM people').get()?.n, 5);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 3);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM people').get()?.n, 6);
   assert.equal(db.prepare('SELECT count(*) AS n FROM emergency_contacts').get()?.n, 3);
   assert.equal(db.prepare('SELECT count(*) AS n FROM nfc_credentials WHERE length(token) = 16').get()?.n, 3);
   assert.throws(() => db.prepare("INSERT INTO emergency_contacts VALUES ('bad', 'absent', 'X', 'X', '000')").run());
@@ -261,7 +261,7 @@ test('SOS validates role, session, event and zone and limits the operational vie
     const { incidents } = (await app.inject({ url: eventIncidents, headers: roleHeaders })).json();
     assert.equal(incidents.length, 1);
     const { clientRequestId, requesterPersonId, ...summary } = created.json();
-    assert.deepEqual(incidents[0], summary);
+    assert.deepEqual(incidents[0], { ...summary, assignedStaff: null, resolutionNote: null });
     assert.equal((await app.inject({ method: 'POST', url: `${prefix}/me/incidents/${summary.id}/cancel`, headers: roleHeaders })).statusCode, 403);
   }
   db.exec("DELETE FROM event_memberships WHERE id = 'other-attendee'");
@@ -270,4 +270,91 @@ test('SOS validates role, session, event and zone and limits the operational vie
   db.exec('UPDATE demo_sessions SET expires_at = 0');
   assert.equal((await send(payload)).statusCode, 401);
   assert.equal((await app.inject({ url: eventIncidents, headers: staff })).statusCode, 401);
+});
+
+test('two distinct guards compete and the winner can progress with durable exact replays', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'discoprotect-h6-'));
+  const path = join(dir, 'operations.sqlite');
+  const db = openDb(path);
+  migrate(db);
+  seed(db);
+  let server = createApp(db, pins);
+  let database = db;
+  t.after(async () => { await server.close(); database.close(); rmSync(dir, { recursive: true }); });
+  const request = (url: string, token?: string, payload?: object) => server.inject({
+    method: payload === undefined ? 'GET' : 'POST', url, payload,
+    headers: token ? { authorization: `Bearer ${token}` } : undefined,
+  });
+  const login = async (account: string, pin?: string) => {
+    const reply = await request(prefix + '/demo/sessions', undefined, { account, pin });
+    assert.equal(reply.statusCode, 201);
+    return (await reply.json()).token as string;
+  };
+  assert.equal((await request(prefix + '/demo/sessions', undefined, { account: 'guardia2', pin: pins.STAFF })).statusCode, 401);
+  const attendee = await login('antonia');
+  const organizer = await login('organizador', pins.ORGANIZER);
+  const guards = [await login('guardia', pins.STAFF), await login('guardia2', pins.STAFF_2)];
+  const { id } = await (await request(eventIncidents, attendee, { clientRequestId: randomUUID() })).json();
+  const url = `${eventIncidents}/${id}`;
+  const command = (version: number) => ({ version, operationId: randomUUID() });
+  const claims = [command(1), command(1)];
+  assert.equal((await request(url + '/start', guards[0], command(1))).statusCode, 409);
+  for (const token of [attendee, organizer]) assert.equal((await request(url + '/claim', token, command(1))).statusCode, 403);
+  const outcomes = await Promise.all(guards.map((token, index) => request(url + '/claim', token, claims[index])));
+  assert.deepEqual(outcomes.map(result => result.statusCode).sort(), [200, 409]);
+  const index = outcomes.findIndex(result => result.statusCode === 200);
+  const winner = guards[index];
+  const loser = guards[1 - index];
+  // Discard the successful HTTP body, as a client would after losing the return path.
+  const conflict = await outcomes[1 - index].json();
+  assert.deepEqual(conflict.error.details, { currentStatus: 'ASSIGNED', currentVersion: 2 });
+  assert.equal((await request(url + '/start', loser, command(2))).statusCode, 403);
+  assert.equal((await request(url + '/start', winner, claims[index])).statusCode, 409);
+  assert.equal((await request(url + '/start', winner, command(2))).statusCode, 200);
+  assert.equal((await request(url + '/resolve', winner, { ...command(3), resolutionNote: 'x'.repeat(241) })).statusCode, 400);
+  assert.equal((await request(url + '/resolve', winner, { ...command(3), resolutionNote: '  Atención completada ' })).statusCode, 200);
+  await server.close();
+  database.close();
+  database = openDb(path);
+  migrate(database);
+  server = createApp(database, pins);
+  const replay = await request(url + '/claim', winner, claims[index]);
+  assert.equal(replay.statusCode, 200);
+  const { operation, incident } = await replay.json();
+  assert.deepEqual(operation, { operationId: claims[index].operationId, fromStatus: 'OPEN', toStatus: 'ASSIGNED',
+    appliedVersion: 2, appliedAt: incident.assignedAt, replayed: true });
+  assert.equal(incident.status, 'RESOLVED');
+  assert.equal(incident.version, 4);
+  assert.equal(incident.resolutionNote, 'Atención completada');
+  assert.equal(database.prepare('SELECT count(*) AS n FROM incident_transitions').get()?.n, 3);
+  assert.deepEqual(await (await request(url, organizer)).json(), incident);
+  const own = await (await request(`${prefix}/me/incidents/${id}`, attendee)).json();
+  assert.equal(own.status, incident.status);
+  assert.equal('assignedStaff' in own || 'resolutionNote' in own, false);
+  assert.equal((await request(`${prefix}/me/incidents/${id}`, await login('martin'))).statusCode, 404);
+  assert.equal((await request(url + '/claim', winner, command(4))).statusCode, 409);
+  assert.equal((await request(`${prefix}/events/otro/incidents/${id}/claim`, winner, command(4))).statusCode, 403);
+  database.prepare('DELETE FROM event_memberships WHERE event_id = ? AND person_id = ?').run(eventId, incident.assignedStaff.id);
+  assert.equal((await request(url + '/claim', winner, claims[index])).statusCode, 403);
+});
+
+test('assignment and cancellation serialize and only the first can update an open SOS', async t => {
+  const { app, db, login } = await fixture(t);
+  const attendee = await login();
+  const staff = await login('guardia', pins.STAFF);
+  const transition = async (cancelFirst: boolean) => {
+    const { id } = (await app.inject({ method: 'POST', url: eventIncidents, headers: attendee,
+      payload: { clientRequestId: randomUUID() } })).json();
+    const claim = () => app.inject({ method: 'POST', url: `${eventIncidents}/${id}/claim`, headers: staff,
+      payload: { version: 1, operationId: randomUUID() } });
+    const cancel = () => app.inject({ method: 'POST', url: `${prefix}/me/incidents/${id}/cancel`, headers: attendee });
+    const actions = cancelFirst ? [cancel, claim] : [claim, cancel];
+    const responses = await Promise.all(actions.map(action => action()));
+    assert.deepEqual(responses.map(response => response.statusCode).sort(), [200, 409]);
+    const cancellationWon = responses[cancelFirst ? 0 : 1].statusCode === 200;
+    assert.equal(db.prepare('SELECT status FROM incidents WHERE id = ?').get(id)?.status, cancellationWon ? 'CANCELLED' : 'ASSIGNED');
+    assert.equal(db.prepare('SELECT count(*) AS n FROM incident_transitions WHERE incident_id = ?').get(id)?.n, 1);
+  };
+  await transition(true);
+  await transition(false);
 });

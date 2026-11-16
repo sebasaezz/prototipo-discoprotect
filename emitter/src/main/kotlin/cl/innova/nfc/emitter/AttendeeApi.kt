@@ -168,7 +168,8 @@ internal class HttpAttendeeApi(
     }
 
     private fun Incident.validated(session: AttendeeSession, eventId: String) = also {
-        checkReply(validFor(eventId) && requesterPersonId == session.person.id && clientRequestId?.let(::isIncidentUuid) == true)
+        checkReply(validFor(eventId) && requesterPersonId == session.person.id && clientRequestId?.let(::isIncidentUuid) == true &&
+            assignedStaff == null && resolutionNote == null)
     }
 
     private fun sosEventEndpoint(eventId: String, resource: String): HttpUrl {

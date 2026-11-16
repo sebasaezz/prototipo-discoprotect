@@ -1,9 +1,10 @@
 import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ApiError, events, incidents, login, messageFor } from './api.js';
+import { ApiError, currentIncidentSnapshot, events, incidents, login, messageFor } from './api.js';
 import type { Event, Incident, Session } from './api.js';
 import { IncidentTable } from './IncidentTable.js';
+import { incidentPolling } from './incidentPolling.js';
 import './styles.css';
 
 function App() {
@@ -131,38 +132,50 @@ function IncidentList({ session, event, onExpiry }: { session: Session; event: s
   const [items, setItems] = useState<Incident[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [revision, setRevision] = useState(0);
+  const [lastRead, setLastRead] = useState<Date | null>(null);
+  const refresh = useRef<() => void>(() => {});
 
   useEffect(() => {
-    const request = new AbortController();
-    incidents(session, event, request.signal).then(result => {
-      if (request.signal.aborted) return;
-      setItems(result);
+    const polling = incidentPolling(signal => {
+      if (Date.parse(session.expiresAt) <= Date.now()) throw new ApiError(401, 'La sesión venció.');
+      return incidents(session, event, signal);
+    }, result => {
+      setItems(current => currentIncidentSnapshot(current, result));
+      setLastRead(new Date());
+      setError('');
       setLoading(false);
-    }).catch(failure => {
-      if (request.signal.aborted) return;
-      if (failure instanceof ApiError && failure.status === 401) onExpiry();
-      else {
-        if (failure instanceof ApiError && failure.status === 403) setItems(null);
-        setError(messageFor(failure));
-        setLoading(false);
+    }, failure => {
+      if (failure instanceof ApiError && failure.status === 401) {
+        onExpiry();
+        return false;
       }
+      if (failure instanceof ApiError && failure.status === 403) {
+        setItems(null);
+        setLastRead(null);
+      }
+      setError(messageFor(failure));
+      setLoading(false);
+      return true;
     });
-    return () => request.abort();
-  }, [session, event, revision, onExpiry]);
+    refresh.current = polling.refresh;
+    const visibility = () => polling.setVisible(document.visibilityState === 'visible');
+    document.addEventListener('visibilitychange', visibility);
+    visibility();
+    return () => {
+      document.removeEventListener('visibilitychange', visibility);
+      polling.setVisible(false);
+    };
+  }, [session, event, onExpiry]);
 
   return (
     <section aria-labelledby="sos-title">
       <div className="list-header">
         <h2 id="sos-title">Solicitudes SOS</h2>
-        <button className="secondary" disabled={loading} onClick={() => {
-          setLoading(true);
-          setError('');
-          setRevision(revision + 1);
-        }}>Actualizar incidentes</button>
+        <button className="secondary" onClick={() => refresh.current()}>Actualizar incidentes</button>
       </div>
       {loading && <p role="status">Consultando incidentes…</p>}
       {error && <p role="alert" className="notice">{error} {items && 'Se muestra la última consulta disponible.'}</p>}
+      {lastRead && <p>Última consulta · <time dateTime={lastRead.toISOString()}>{lastRead.toLocaleTimeString('es-CL')}</time></p>}
       {items && <IncidentTable items={items} />}
     </section>
   );

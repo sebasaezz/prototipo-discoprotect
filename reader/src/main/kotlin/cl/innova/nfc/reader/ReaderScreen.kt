@@ -2,8 +2,7 @@ package cl.innova.nfc.reader
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.key
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -33,15 +32,26 @@ internal fun ReaderScreen(state: ReaderUiState, nfc: NfcAvailability, actions: R
 
 @Composable
 private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
+    var confirmation by remember(state.event?.id, state.staffId) { mutableStateOf<Pair<Incident, IncidentAction>?>(null) }
+    var note by remember(confirmation) { mutableStateOf("") }
     Heading("Incidentes", "Solicitudes SOS registradas en el evento.")
+    state.staffName?.let { Field("Cuenta activa", it) }
     EventSelector(state, actions::selectEvent)
-    OutlinedButton(onClick = actions::refreshIncidents, enabled = !state.incidentsLoading,
+    OutlinedButton(onClick = actions::refreshIncidents, enabled = !state.incidentsLoading && !state.incidentWriting,
         modifier = Modifier.heightIn(min = 48.dp)) {
         Text("Actualizar incidentes")
     }
-    if (state.incidentsLoading) {
+    if (state.incidentsLoading && state.incidents == null) {
         Status("Consultando incidentes", Tone.Info)
         LinearProgressIndicator(Modifier.fillMaxWidth())
+    }
+    state.lastIncidentRead?.let { Field("Última consulta", incidentTime(it.toString())) }
+    if (state.incidentWriting) Status("Enviando operación", Tone.Info)
+    state.incidentNotice?.let { Text(it) }
+    if (state.pendingIncident && !state.incidentWriting) {
+        Status("Resultado sin confirmar", Tone.Warning)
+        OutlinedButton(onClick = actions::retryIncident, enabled = state.incidentsCurrent,
+            modifier = Modifier.heightIn(min = 48.dp)) { Text("Reintentar la misma operación") }
     }
     state.incidentProblem?.let { problem ->
         val message = if (problem == ApiProblem.NotFound) "La consulta de incidentes no está disponible para este evento."
@@ -53,7 +63,47 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) { Text("Configuración y evento") }
     state.incidents?.let { incidents ->
         if (incidents.isEmpty()) Text("Este evento aún no tiene solicitudes registradas.")
-        incidents.forEach { IncidentCard(it) }
+        val groups = listOf(
+            "Pendientes" to setOf(IncidentStatus.OPEN),
+            "Asignadas y en atención" to setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS),
+            "Cerradas" to setOf(IncidentStatus.RESOLVED, IncidentStatus.CANCELLED),
+        )
+        groups.forEach { (label, statuses) ->
+            val items = incidents.filter { it.status in statuses }
+            if (items.isNotEmpty()) Text(label, style = MaterialTheme.typography.titleMedium)
+            items.forEach { incident ->
+                IncidentCard(incident) {
+                    state.actionFor(incident)?.let { action ->
+                        Button(onClick = {
+                            if (action == IncidentAction.Start) actions.operateIncident(incident.id, incident.version, action)
+                            else confirmation = incident to action
+                        }, enabled = state.incidentsCurrent && !state.pendingIncident,
+                            modifier = Modifier.heightIn(min = 48.dp)) { Text(action.label) }
+                    }
+                }
+            }
+        }
+    }
+    confirmation?.let { (incident, action) ->
+        val valid = state.incidentsCurrent && !state.pendingIncident &&
+            state.incidents?.any { it.id == incident.id && it.version == incident.version && state.actionFor(it) == action } == true
+        AlertDialog(onDismissRequest = { confirmation = null },
+            title = { Text(if (action == IncidentAction.Claim) "¿Asumir esta solicitud?" else "¿Resolver esta solicitud?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+                    if (!valid) Text("La solicitud cambió o requiere una consulta vigente.")
+                    else if (action == IncidentAction.Claim) Text("Quedarás a cargo de la atención de este SOS.")
+                    else OutlinedTextField(note, { if (it.length <= 240) note = it },
+                        label = { Text("Nota de cierre (opcional)") }, supportingText = { Text("${note.length}/240") })
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    actions.operateIncident(incident.id, incident.version, action, note)
+                    confirmation = null
+                }, enabled = valid, modifier = Modifier.heightIn(min = 48.dp)) { Text(action.label) }
+            },
+            dismissButton = { TextButton(onClick = { confirmation = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver") } })
     }
 }
 
