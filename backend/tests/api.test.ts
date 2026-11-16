@@ -30,7 +30,7 @@ test('health, foreign keys, migrations and repeatable seed', async t => {
   const { app, db } = await fixture(t);
   migrate(db);
   seed(db);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 3);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 4);
   assert.equal(db.prepare('SELECT count(*) AS n FROM people').get()?.n, 6);
   assert.equal(db.prepare('SELECT count(*) AS n FROM emergency_contacts').get()?.n, 3);
   assert.equal(db.prepare('SELECT count(*) AS n FROM nfc_credentials WHERE length(token) = 16').get()?.n, 3);
@@ -261,7 +261,11 @@ test('SOS validates role, session, event and zone and limits the operational vie
     const { incidents } = (await app.inject({ url: eventIncidents, headers: roleHeaders })).json();
     assert.equal(incidents.length, 1);
     const { clientRequestId, requesterPersonId, ...summary } = created.json();
-    assert.deepEqual(incidents[0], { ...summary, assignedStaff: null, resolutionNote: null });
+    const { triage, reasonCode, dangerAlert, ...operational } = incidents[0];
+    assert.deepEqual(operational, { ...summary, assignedStaff: null, resolutionNote: null });
+    assert.equal(triage.status, 'MANUAL');
+    assert.equal(reasonCode, null);
+    assert.equal(dangerAlert, null);
     assert.equal((await app.inject({ method: 'POST', url: `${prefix}/me/incidents/${summary.id}/cancel`, headers: roleHeaders })).statusCode, 403);
   }
   db.exec("DELETE FROM event_memberships WHERE id = 'other-attendee'");

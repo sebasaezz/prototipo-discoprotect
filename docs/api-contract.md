@@ -16,11 +16,13 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 | `GET /me/nfc-credential` | — | 200 `{id,token,active,createdAt}`. Asistente. |
 | `GET /events` | — | 200 `{events}`. Devuelve las membresías de la cuenta. |
 | `GET /events/:eventId/zones` | — | 200 `{zones:[{id,name}]}`. Membresía en el evento. |
-| `POST /events/:eventId/incidents` | `{clientRequestId,zoneId?,locationText?}` | 201 incidente creado o 200 repetición equivalente. Asistente miembro. |
+| `POST /events/:eventId/incidents` | `{clientRequestId,zoneId?,locationText?,reasonCode?,description?}` | 201 incidente creado o 200 repetición equivalente. Asistente miembro. |
 | `GET /me/incidents?eventId=…` | — | 200 `{incidents}`. Solicitudes propias del asistente miembro. |
 | `GET /me/incidents/:id` | — | 200 incidente propio. Asistente titular y miembro. |
 | `GET /events/:eventId/incidents` | — | 200 `{incidents}`. Guardia u organizador miembro. |
 | `GET /events/:eventId/incidents/:id` | — | 200 incidente operativo. Guardia u organizador miembro. |
+| `GET /events/:eventId/incidents/:id/triage` | — | 200 `{triage,reviews,description?}`. Guardia u organizador miembro. Solo el guardia recibe el relato original. |
+| `POST /events/:eventId/incidents/:id/triage/reviews` | `{triageVersion,operationId,decision,category?,urgency?}` | 200 `{review,triage,replayed}`. Guardia asignado con membresía vigente. |
 | `POST /me/incidents/:id/cancel` | — | 200 incidente cancelado. Asistente creador y miembro del evento. |
 | `POST /events/:eventId/incidents/:id/claim` | `{version,operationId}` | 200 `{operation,incident}`. Guardia miembro. `OPEN → ASSIGNED`, autoasignación. |
 | `POST /events/:eventId/incidents/:id/start` | `{version,operationId}` | 200 `{operation,incident}`. Guardia asignado con membresía. `ASSIGNED → IN_PROGRESS`. |
@@ -37,7 +39,7 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 
 Los cuerpos de sesión, ficha y contactos se validan como JSON. Las escrituras de ficha y contactos requieren `version` entera positiva y se ejecutan en transacción. Una escritura exitosa incrementa la versión compartida exactamente en uno. El 409 incluye `details.currentVersion`. Para teléfonos, los separadores permitidos son espacio, `+`, paréntesis y guion, y debe haber al menos un dígito.
 
-El SOS requiere un UUID generado por el cliente. El servidor normaliza la clave a minúsculas y recorta la referencia manual a efectos de comparación, con un límite de 160 caracteres tras recortar. Zona omitida o nula representa ubicación desconocida y puede acompañarse de una referencia. Una referencia vacía equivale a nula. La zona debe pertenecer al evento. Un reenvío con la misma clave por la misma persona devuelve el registro y su estado vigente si coinciden evento, zona y referencia. La cancelación cambia `OPEN` a `CANCELLED` y conserva el ID.
+El SOS requiere un UUID generado por el cliente. El servidor normaliza la clave a minúsculas y recorta la referencia manual a efectos de comparación, con un límite de 160 caracteres tras recortar. Zona omitida o nula representa ubicación desconocida y puede acompañarse de una referencia. Una referencia vacía equivale a nula. La zona debe pertenecer al evento. Un reenvío con la misma clave por la misma persona devuelve el registro y su estado vigente si coinciden evento, zona, referencia, motivo y descripción. La cancelación cambia `OPEN` a `CANCELLED` y conserva el ID.
 
 Cada transición exitosa aumenta `version` en uno. `CANCELLED` y `RESOLVED` son terminales. La nota opcional se recorta a efectos de comparación, admite hasta 240 caracteres tras recortar y se guarda como nula si está vacía. El guardia envía la versión observada y un UUID `operationId`; ante un resultado incierto conserva versión, UUID y cuerpo. El servidor verifica rol y membresía y reconoce el reintento por incidente, actor y comando normalizado antes de comparar la versión vigente.
 
@@ -53,3 +55,12 @@ Los errores usan `{error:{code,message,details?}}`.
 | 404 | `CARD_NOT_FOUND`, `CONTACT_NOT_FOUND`, `NFC_NOT_FOUND` o `INCIDENT_NOT_FOUND` cuando el recurso autorizado no está disponible. `NOT_FOUND` si la ruta no existe. |
 | 409 | `VERSION_CONFLICT` para versión distinta de la vigente. `REQUEST_CONFLICT` para una clave reutilizada con otro actor o comando en un incidente, o un UUID SOS reutilizado con otros datos. `INCIDENT_NOT_OPEN` al cancelar desde otro estado. `INVALID_TRANSITION` si el estado impide la acción operativa. Los conflictos de estado o versión de incidentes incluyen `details.currentVersion` y `details.currentStatus`. |
 | 500 | `INTERNAL_ERROR` ante fallos internos. |
+
+## Triaje H7
+
+- Motivo `reasonCode` admite `UNRESPONSIVE`, `IMMEDIATE_DANGER`, `ILLNESS_OR_INJURY`, `AGGRESSION_OR_HARASSMENT`, `CROWDING` y `OTHER`. El relato admite hasta 280 unidades UTF-16. Se conserva tal como se envió, incluida la puntuación y los saltos de línea. Un relato en blanco, un campo omitido y un campo nulo se tratan como ausencia.
+- La vista operativa agrega `{reasonCode,dangerAlert,triage}` a los listados, detalles y respuestas de las acciones H6. `dangerAlert` es `UNRESPONSIVE`, `IMMEDIATE_DANGER` o `null`. Se deriva del motivo y es independiente de la clasificación. La vista propia del asistente conserva los campos H6.
+- `triage` contiene `{triageVersion,status,suggestion,fallbackReason,fallback,latestReview}`. El estado es `PENDING`, `SUGGESTED` o `MANUAL`. `suggestion` solo tiene valor en `SUGGESTED`. `fallback` y `fallbackReason` solo tienen valor en `MANUAL`. El detalle añade `reviews` por versión ascendente, y `description` de tipo cadena o nulo únicamente con rol `STAFF`.
+- Una sugerencia o fallback contiene `{category,urgency,summary,missingInformation,uncertainty}`. Categorías `MEDICAL`, `SECURITY`, `CROWD`, `OTHER`, `UNKNOWN`. Prioridades `IMMEDIATE`, `PRIORITY`, `UNDETERMINED`. Incertidumbre `MEDIUM` o `HIGH`. Resumen de hasta 220 caracteres y hasta tres códigos distintos entre `WHAT_HAPPENED`, `CURRENT_CONDITION`, `ONGOING_DANGER` y `PEOPLE_AFFECTED`.
+- Una revisión contiene `{reviewVersion,reviewedTriageVersion,operationId,decision,category,urgency,reviewedAt,actor:{id,name}}`. `CONFIRM` requiere una sugerencia vigente y omite categoría y prioridad en el comando. `CORRECT` exige ambos valores. Un comando nuevo requiere `ASSIGNED` o `IN_PROGRESS`. Se reconoce una repetición exacta del mismo autor antes de verificar estado y versión, previa autorización vigente. Las revisiones actualizan la clasificación visible e incrementan solo `triageVersion`. La sugerencia original queda disponible.
+- `TRIAGE_VERSION_CONFLICT` e `INVALID_TRIAGE_REVIEW` devuelven 409 con `details.currentTriageVersion` y `details.currentStatus`. Reusar un UUID con un comando distinto devuelve `REQUEST_CONFLICT`.

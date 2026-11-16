@@ -55,6 +55,8 @@ button:disabled { cursor: default; opacity: 0.65; }
 .table-scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th, td { vertical-align: top; padding: 1rem; }
+.triage-detail { min-width: 11rem; max-width: 19rem; overflow-wrap: anywhere; }
+.triage-detail summary { cursor: pointer; padding-block: 0.75rem; color: var(--primary); }
 thead { background: var(--lavender); color: var(--primary); }
 tbody tr + tr { border-top: 1px solid var(--divider); }
 code, small { display: block; color: #564965; margin-top: 0.3rem; font-weight: 400; overflow-wrap: anywhere; }

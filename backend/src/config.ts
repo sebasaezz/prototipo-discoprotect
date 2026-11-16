@@ -13,6 +13,27 @@ const schema = z.object({
   ALLOW_DEMO_RESET: z.enum(['true', 'false']).default('false'),
 });
 
+const workerSchema = z.object({
+  TRIAGE_ENABLED: z.enum(['true', 'false']).default('false'),
+  OPENAI_MODEL: z.string().regex(/^[\w.-]{1,128}$/).default('gpt-5.4-mini'),
+  TRIAGE_TIMEOUT_MS: z.coerce.number().int().min(1).max(60_000).default(5_000),
+  TRIAGE_MAX_QUEUE_AGE_MS: z.coerce.number().int().min(1).max(300_000).default(30_000),
+  TRIAGE_DAILY_LIMIT: z.coerce.number().int().min(1).max(10_000).default(100),
+});
+
+export function readTriageConfig(env: NodeJS.ProcessEnv) {
+  const settings = workerSchema.safeParse(env);
+  const values = settings.success ? settings.data : workerSchema.parse({});
+  const key = env.OPENAI_API_KEY?.trim();
+  return {
+    key: settings.success && values.TRIAGE_ENABLED === 'true' && key && /^[\x21-\x7e]+$/.test(key) ? key : undefined,
+    model: values.OPENAI_MODEL,
+    timeoutMs: values.TRIAGE_TIMEOUT_MS,
+    maxQueueAgeMs: values.TRIAGE_MAX_QUEUE_AGE_MS,
+    dailyLimit: values.TRIAGE_DAILY_LIMIT,
+  };
+}
+
 export function readConfig(env: NodeJS.ProcessEnv) {
   const result = schema.safeParse(env);
   if (!result.success) throw new Error(`Configuración inválida en: ${result.error.issues.map(issue => issue.path.join('.')).join(', ')}`);

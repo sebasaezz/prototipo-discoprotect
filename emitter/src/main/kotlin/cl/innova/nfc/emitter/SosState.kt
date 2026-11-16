@@ -2,6 +2,7 @@ package cl.innova.nfc.emitter
 
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.IncidentStatus
+import cl.discoprotect.ui.SosReason
 import java.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
@@ -13,7 +14,13 @@ internal data class SosEvent(val id: String, val name: String, val venue: String
 internal data class SosZone(val id: String, val name: String)
 
 @Serializable
-internal data class SosRequest(val clientRequestId: String, val zoneId: String?, val locationText: String?)
+internal data class SosRequest(
+    val clientRequestId: String,
+    val zoneId: String?,
+    val locationText: String?,
+    val reasonCode: SosReason? = null,
+    val description: String? = null,
+)
 
 internal sealed interface SosAttempt {
     val eventId: String
@@ -40,6 +47,8 @@ internal data class SosState(
     val locationChosen: Boolean = false,
     val zoneId: String? = null,
     val reference: String = "",
+    val reasonCode: SosReason? = null,
+    val description: String = "",
     val incidents: List<Incident>? = null,
     val pending: SosAttempt? = null,
     val outcome: SosOutcome = SosOutcome.Ready,

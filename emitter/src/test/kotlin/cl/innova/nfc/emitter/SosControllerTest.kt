@@ -2,6 +2,7 @@ package cl.innova.nfc.emitter
 
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.IncidentStatus
+import cl.discoprotect.ui.SosReason
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -72,6 +73,10 @@ class SosControllerTest {
     @Test fun `timeout retries with the same body and a fresh app can discover existing requests`() = runTest {
         val backend = Server()
         val app = ready(backend)
+        val report = "  Se fue de hocico y quedó medio ido.  "
+        app.selectSosReason(SosReason.ILLNESS_OR_INJURY)
+        app.updateSosDescription(report)
+        app.updateSosDescription("x".repeat(281))
         backend.loseResponse = true
         app.sendSos()
         runCurrent()
@@ -82,6 +87,10 @@ class SosControllerTest {
         runCurrent()
         assertEquals(2, backend.attempts.size)
         assertEquals(backend.attempts.first(), backend.attempts.last())
+        val sent = (backend.attempts.first() as SosAttempt.Create).body
+        assertEquals(report, sent.description)
+        assertEquals(SosReason.ILLNESS_OR_INJURY, sent.reasonCode)
+        assertEquals("", app.state.value.sos.description)
         val incident = backend.saved.values.single()
         assertEquals(incident.id, app.state.value.sos.receipt)
         assertNull(incident.zoneId)

@@ -176,7 +176,7 @@ function IncidentList({ session, event, onExpiry }: { session: Session; event: s
       {loading && <p role="status">Consultando incidentes…</p>}
       {error && <p role="alert" className="notice">{error} {items && 'Se muestra la última consulta disponible.'}</p>}
       {lastRead && <p>Última consulta · <time dateTime={lastRead.toISOString()}>{lastRead.toLocaleTimeString('es-CL')}</time></p>}
-      {items && <IncidentTable items={items} />}
+      {items && <IncidentTable items={items} session={session} onExpiry={onExpiry} />}
     </section>
   );
 }

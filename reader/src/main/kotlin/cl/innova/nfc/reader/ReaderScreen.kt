@@ -73,12 +73,32 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
             if (items.isNotEmpty()) Text(label, style = MaterialTheme.typography.titleMedium)
             items.forEach { incident ->
                 IncidentCard(incident) {
+                    incident.dangerAlert?.alert?.let { Status(it, Tone.Warning) }
+                    incident.triage?.let { triage ->
+                        val review = triage.latestReview
+                        Text(if (review != null) "Revisión humana" else triage.status.label)
+                        val category = review?.category ?: triage.suggestion?.category ?: triage.fallback?.category
+                        val urgency = review?.urgency ?: triage.suggestion?.urgency ?: triage.fallback?.urgency
+                        if (category != null && urgency != null) {
+                            Text("${category.label} · Prioridad ${urgency.label.lowercase()}")
+                        }
+                    }
                     state.actionFor(incident)?.let { action ->
                         Button(onClick = {
                             if (action == IncidentAction.Start) actions.operateIncident(incident.id, incident.version, action)
                             else confirmation = incident to action
                         }, enabled = state.incidentsCurrent && !state.pendingIncident,
                             modifier = Modifier.heightIn(min = 48.dp)) { Text(action.label) }
+                    }
+                    if (incident.triage != null) {
+                        if (state.triageId == incident.id) {
+                            TriagePanel(state, incident, actions)
+                        } else {
+                            TextButton(onClick = { actions.openTriage(incident.id) },
+                                enabled = !state.triageWriting, modifier = Modifier.heightIn(min = 48.dp)) {
+                                Text("Ver triaje")
+                            }
+                        }
                     }
                 }
             }
@@ -104,6 +124,78 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
                 }, enabled = valid, modifier = Modifier.heightIn(min = 48.dp)) { Text(action.label) }
             },
             dismissButton = { TextButton(onClick = { confirmation = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver") } })
+    }
+}
+
+@Composable
+private fun TriagePanel(state: ReaderUiState, incident: Incident, actions: ReaderController) {
+    val triage = requireNotNull(incident.triage)
+    val suggestion = triage.suggestion
+    val review = triage.latestReview
+    var editing by remember(incident.id, triage.triageVersion) { mutableStateOf(false) }
+    var category by remember(incident.id, triage.triageVersion) {
+        mutableStateOf(review?.category ?: suggestion?.category ?: TriageCategory.UNKNOWN)
+    }
+    var urgency by remember(incident.id, triage.triageVersion) {
+        mutableStateOf(review?.urgency ?: suggestion?.urgency ?: TriageUrgency.UNDETERMINED)
+    }
+    val canEdit = state.canReview(incident) && state.triageDetail != null && !state.triagePending
+    TextButton(onClick = actions::closeTriage, modifier = Modifier.heightIn(min = 48.dp)) { Text("Cerrar triaje") }
+    if (state.triageLoading) Text("Consultando detalle…")
+    state.triageNotice?.let { Text(it) }
+    state.triageDetail?.let { Field("Relato original", it.description ?: "Sin descripción") }
+    if (!state.triageLoading && state.triageDetail == null) {
+        TextButton(onClick = { actions.openTriage(incident.id) }, enabled = !state.triageWriting,
+            modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a consultar el detalle") }
+    }
+    review?.let { Field("Última revisión", "${it.actor.name} · ${incidentTime(it.reviewedAt)}") }
+    (suggestion ?: triage.fallback)?.let { result ->
+        Field(if (suggestion != null) "Resumen sugerido por IA" else "Verificación manual", result.summary)
+        Field("Incertidumbre", result.uncertainty.label)
+        if (result.missingInformation.isNotEmpty()) {
+            Field("Información faltante", result.missingInformation.joinToString("\n") { it.label })
+        }
+    }
+    if (state.triageWriting) Text("Guardando revisión…")
+    if (state.triagePending && !state.triageWriting) {
+        OutlinedButton(onClick = actions::retryTriage, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("Reintentar la misma revisión")
+        }
+    }
+    if (canEdit && !editing) {
+        if (suggestion != null) {
+            OutlinedButton(onClick = { actions.reviewTriage(triage.triageVersion, ReviewDecision.CONFIRM) },
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("Confirmar sugerencia de IA") }
+        }
+        OutlinedButton(onClick = { editing = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text(if (suggestion == null && review == null) "Clasificar manualmente" else "Corregir clasificación")
+        }
+    }
+    if (canEdit && editing) {
+        TriageMenu("Categoría", category, TriageCategory.entries, { it.label }) { category = it }
+        TriageMenu("Prioridad", urgency, TriageUrgency.entries, { it.label }) { urgency = it }
+        Button(onClick = {
+            actions.reviewTriage(triage.triageVersion, ReviewDecision.CORRECT, category, urgency)
+        }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Guardar clasificación") }
+        TextButton(onClick = { editing = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancelar edición") }
+    }
+}
+
+@Composable
+private fun <T> TriageMenu(label: String, selected: T, options: List<T>, text: (T) -> String, select: (T) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("$label · ${text(selected)}")
+        }
+        DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(text = { Text(text(option)) }, onClick = {
+                    expanded = false
+                    select(option)
+                }, modifier = Modifier.heightIn(min = 48.dp))
+            }
+        }
     }
 }
 

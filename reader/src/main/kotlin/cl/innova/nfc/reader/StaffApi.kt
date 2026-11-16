@@ -3,6 +3,11 @@ package cl.innova.nfc.reader
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.IncidentList
 import cl.discoprotect.ui.IncidentStatus
+import cl.discoprotect.ui.IncidentTriage
+import cl.discoprotect.ui.ReviewDecision
+import cl.discoprotect.ui.TriageCategory
+import cl.discoprotect.ui.TriageReview
+import cl.discoprotect.ui.TriageUrgency
 import cl.discoprotect.ui.isIncidentUuid
 import java.io.IOException
 import java.io.InterruptedIOException
@@ -59,6 +64,12 @@ internal data class IncidentCommand(val incidentId: String, val action: Incident
     val appliedVersion: Long, val appliedAt: String, val replayed: Boolean,
 )
 @Serializable internal data class OperationReply(val operation: AppliedOperation, val incident: Incident)
+@Serializable internal data class TriageDetail(val triage: IncidentTriage, val description: String?)
+@Serializable internal data class ReviewBody(
+    val triageVersion: Long, val operationId: String, val decision: ReviewDecision,
+    val category: TriageCategory? = null, val urgency: TriageUrgency? = null,
+)
+@Serializable internal data class ReviewReply(val review: TriageReview, val triage: IncidentTriage, val replayed: Boolean)
 
 internal interface StaffApi {
     suspend fun health()
@@ -66,6 +77,8 @@ internal interface StaffApi {
     suspend fun events(session: StaffSession): List<StaffEvent>
     suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident>
     suspend fun operate(session: StaffSession, event: StaffEvent, command: IncidentCommand): OperationReply
+    suspend fun triage(session: StaffSession, event: StaffEvent, id: String): TriageDetail
+    suspend fun review(session: StaffSession, event: StaffEvent, id: String, body: ReviewBody): ReviewReply
     suspend fun resolve(session: StaffSession, event: StaffEvent, token: String): HealthProfile
 }
 
@@ -122,6 +135,28 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
                 incident.version >= operation.appliedVersion &&
                 (operation.replayed || incident.version == operation.appliedVersion) &&
                 (incident.version > operation.appliedVersion || incident.status == operation.toStatus))
+        }
+    }
+
+    private fun triageUrl(event: StaffEvent, id: String): HttpUrl.Builder {
+        requireReply(isIncidentUuid(id), ApiProblem.InvalidInput)
+        return incidentUrl(event).addPathSegment(id).addPathSegment("triage")
+    }
+
+    override suspend fun triage(session: StaffSession, event: StaffEvent, id: String): TriageDetail =
+        exchange<TriageDetail>(triageUrl(event, id).build(), session).also {
+            requireReply(it.triage.valid() && (it.description == null ||
+                it.description.isNotBlank() && it.description.length <= 280))
+        }
+
+    override suspend fun review(session: StaffSession, event: StaffEvent, id: String, body: ReviewBody): ReviewReply {
+        val url = triageUrl(event, id).addPathSegment("reviews").build()
+        return exchange<ReviewReply>(url, session, json.encodeToString(body)).also { (review, triage, replayed) ->
+            requireReply(review.valid() && triage.valid() && review.actor.id == session.personId &&
+                review.operationId == body.operationId && review.reviewedTriageVersion == body.triageVersion &&
+                review.decision == body.decision &&
+                (body.decision == ReviewDecision.CONFIRM || review.category == body.category && review.urgency == body.urgency) &&
+                triage.triageVersion >= review.reviewVersion && (replayed || triage.latestReview == review))
         }
     }
 
@@ -211,7 +246,8 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
 private fun Incident.validOperational(eventId: String): Boolean = validFor(eventId) &&
     (assignedStaff != null) == (assignedAt != null) &&
     (assignedStaff == null || assignedStaff.id.isNotBlank() && assignedStaff.name.isNotBlank()) &&
-    (resolutionNote == null || status == IncidentStatus.RESOLVED && resolutionNote.isNotBlank() && resolutionNote.length <= 240)
+    (resolutionNote == null || status == IncidentStatus.RESOLVED && resolutionNote.isNotBlank() && resolutionNote.length <= 240) &&
+    dangerAlert == reasonCode?.takeIf { it.alert != null } && (triage == null || triage.valid())
 
 private fun requireReply(condition: Boolean, problem: ApiProblem = ApiProblem.InvalidResponse) {
     if (!condition) throw ApiFailure(problem)

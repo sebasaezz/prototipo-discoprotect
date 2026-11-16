@@ -1,6 +1,11 @@
 package cl.innova.nfc.reader
 
 import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.IncidentStatus
+import cl.discoprotect.ui.IncidentTriage
+import cl.discoprotect.ui.ReviewDecision
+import cl.discoprotect.ui.TriageCategory
+import cl.discoprotect.ui.TriageUrgency
 import cl.discoprotect.ui.currentIncidentSnapshot
 import cl.discoprotect.ui.incidentPollDelay
 import java.time.Clock
@@ -55,6 +60,12 @@ internal data class ReaderUiState(
     val incidentWriting: Boolean = false,
     val pendingIncident: Boolean = false,
     val incidentNotice: String? = null,
+    val triageId: String? = null,
+    val triageDetail: TriageDetail? = null,
+    val triageLoading: Boolean = false,
+    val triageWriting: Boolean = false,
+    val triagePending: Boolean = false,
+    val triageNotice: String? = null,
 ) {
     val canContinue get() = signedIn && event != null && server == ServerState.Connected
     val canScan get() = !configuring && !incidentsVisible && (local || signedIn && event != null) && scan == ScanState.Ready
@@ -62,6 +73,8 @@ internal data class ReaderUiState(
     fun actionFor(incident: Incident): IncidentAction? = IncidentAction.entries.firstOrNull {
         it.from == incident.status && (it == IncidentAction.Claim || staffId != null && incident.assignedStaff?.id == staffId)
     }
+    fun canReview(incident: Incident) = incidentsCurrent && staffId != null &&
+        incident.assignedStaff?.id == staffId && incident.status in setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS)
 }
 
 /** Coordinates foreground work. All public methods and state updates run on the UI dispatcher. */
@@ -84,6 +97,9 @@ internal class ReaderController(
     private var incidentTimer: Job? = null
     private var incidentFailures = 0
     private val pendingCommands = mutableMapOf<Pair<String, String>, IncidentCommand>()
+    private val pendingReviews = mutableMapOf<Triple<String, String, String>, ReviewBody>()
+    private var detailRequest: Job? = null
+    private var reviewRequest: Job? = null
 
     private val mutable = MutableStateFlow(ReaderUiState(
         address = address?.toString().orEmpty(),
@@ -112,6 +128,7 @@ internal class ReaderController(
         if (target != address) {
             clearSession()
             pendingCommands.clear()
+            pendingReviews.clear()
             address = target
             api = apiFor(target)
             saveAddress(target.toString())
@@ -221,6 +238,7 @@ internal class ReaderController(
                 current()
                 if (failure.problem == ApiProblem.Unauthorized) expire()
                 else {
+                    if (failure.problem == ApiProblem.Forbidden) closeTriage()
                     incidentFailures = (incidentFailures + 1).coerceAtMost(3)
                     ui = ui.copy(
                         incidentProblem = failure.problem,
@@ -270,7 +288,7 @@ internal class ReaderController(
         val event = ui.event ?: return
         val key = active.personId to event.id
         val retrying = pendingCommands.containsKey(key)
-        cancelWork()
+        cancelWork(keepTriage = true)
         pendingCommands[key] = command
         ui = ui.copy(incidentWriting = true, pendingIncident = true, incidentNotice = null)
         work {
@@ -307,6 +325,104 @@ internal class ReaderController(
                 }
             }
         }
+    }
+
+    fun openTriage(id: String) {
+        if (!foreground || !ui.incidentsVisible || ui.triageWriting || !checkExpiry() ||
+            ui.incidents?.none { it.id == id && it.triage != null } != false) return
+        val remote = api ?: return
+        val active = session ?: return
+        val event = ui.event ?: return
+        detailRequest?.cancel()
+        ui = ui.copy(triageId = id, triageDetail = null, triageLoading = true, triageNotice = null,
+            triagePending = pendingReviews.containsKey(Triple(active.personId, event.id, id)))
+        detailRequest = scope.launch {
+            try {
+                val detail = remote.triage(active, event, id)
+                coroutineContext.ensureActive()
+                if (checkExpiry()) {
+                    updateTriage(id, detail.triage)
+                    ui = ui.copy(triageDetail = detail)
+                }
+            } catch (failure: ApiFailure) {
+                coroutineContext.ensureActive()
+                if (failure.problem == ApiProblem.Unauthorized) expire()
+                else ui = ui.copy(triageNotice = failure.problem.description())
+            } finally {
+                if (coroutineContext[Job]?.isActive == true) ui = ui.copy(triageLoading = false)
+            }
+        }
+    }
+
+    fun closeTriage() {
+        detailRequest?.cancel()
+        reviewRequest?.cancel()
+        ui = ui.copy(triageId = null, triageDetail = null, triageNotice = null,
+            triageLoading = false, triageWriting = false, triagePending = false)
+    }
+
+    fun reviewTriage(version: Long, decision: ReviewDecision, category: TriageCategory? = null, urgency: TriageUrgency? = null) {
+        val id = ui.triageId ?: return
+        val incident = ui.incidents?.firstOrNull { it.id == id && it.triage?.triageVersion == version } ?: return
+        if (!ui.canReview(incident) || ui.triageDetail == null || ui.triagePending ||
+            decision == ReviewDecision.CONFIRM && incident.triage?.suggestion == null ||
+            decision == ReviewDecision.CORRECT && (category == null || urgency == null)) return
+        submitReview(id, ReviewBody(version, UUID.randomUUID().toString(), decision, category, urgency))
+    }
+
+    fun retryTriage() {
+        val id = ui.triageId ?: return
+        val active = session ?: return
+        val event = ui.event ?: return
+        pendingReviews[Triple(active.personId, event.id, id)]?.let { submitReview(id, it) }
+    }
+
+    private fun submitReview(id: String, body: ReviewBody) {
+        if (!foreground || !ui.incidentsVisible || ui.triageWriting || !checkExpiry()) return
+        val remote = api ?: return
+        val active = session ?: return
+        val event = ui.event ?: return
+        val key = Triple(active.personId, event.id, id)
+        pendingReviews[key] = body
+        ui = ui.copy(triageWriting = true, triagePending = true, triageNotice = null)
+        reviewRequest = scope.launch {
+            var reload = false
+            try {
+                val reply = remote.review(active, event, id, body)
+                coroutineContext.ensureActive()
+                pendingReviews.remove(key)
+                updateTriage(id, reply.triage)
+                ui = ui.copy(triagePending = false, triageNotice = "Revisión guardada.")
+            } catch (failure: ApiFailure) {
+                coroutineContext.ensureActive()
+                when (failure.problem) {
+                    ApiProblem.Unauthorized -> expire()
+                    ApiProblem.Conflict, ApiProblem.InvalidInput, ApiProblem.Forbidden, ApiProblem.NotFound -> {
+                        pendingReviews.remove(key)
+                        reload = failure.problem == ApiProblem.Conflict
+                        ui = ui.copy(triagePending = false, triageDetail = null, triageNotice = failure.problem.description())
+                    }
+                    else -> ui = ui.copy(triageNotice = "Resultado sin confirmar. Reintenta la misma revisión.")
+                }
+            } finally {
+                if (coroutineContext[Job]?.isActive == true) {
+                    ui = ui.copy(triageWriting = false)
+                    if (reload) {
+                        openTriage(id)
+                        ui = ui.copy(triageNotice = "El triaje cambió. Revisa la versión vigente antes de enviar.")
+                        refreshIncidents()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun updateTriage(id: String, triage: IncidentTriage) {
+        ui = ui.copy(incidents = ui.incidents?.map { incident ->
+            if (incident.id == id && triage.triageVersion >= (incident.triage?.triageVersion ?: 0)) {
+                incident.copy(triage = triage)
+            } else incident
+        })
     }
 
     fun useLocal() {
@@ -379,7 +495,8 @@ internal class ReaderController(
         }
     }
 
-    private fun cancelWork() {
+    private fun cancelWork(keepTriage: Boolean = false) {
+        if (!keepTriage) closeTriage()
         generation++
         operation?.cancel()
         operation = null
@@ -418,6 +535,7 @@ internal class ReaderController(
     }
 
     private fun clearSession() {
+        closeTriage()
         expiry?.cancel()
         expiry = null
         session = null

@@ -32,7 +32,7 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
     val idle = state.task == null
     val editable = idle && sos.pending == null
     val event = sos.event
-    var confirmSend by remember(person.id, event?.id, sos.zoneId, sos.reference) { mutableStateOf(false) }
+    var confirmSend by remember(person.id, event?.id, sos.zoneId, sos.reference, sos.reasonCode, sos.description) { mutableStateOf(false) }
     var confirmCancel by remember(person.id, event?.id) { mutableStateOf<String?>(null) }
     Field("Cuenta activa", person.name)
 
@@ -67,9 +67,23 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
                 supportingText = { Text("${sos.reference.length}/160") },
                 maxLines = 3, modifier = Modifier.fillMaxWidth(),
             )
+            SosMenu("Motivo (opcional)", sos.reasonCode?.label ?: "Sin motivo seleccionado", editable) { close ->
+                (listOf(null) + SosReason.entries).forEach { reason ->
+                    DropdownMenuItem(text = { Text(reason?.label ?: "Sin motivo") }, onClick = {
+                        close()
+                        actions.selectSosReason(reason)
+                    }, modifier = Modifier.heightIn(min = 48.dp))
+                }
+            }
+            OutlinedTextField(
+                value = sos.description, onValueChange = actions::updateSosDescription,
+                label = { Text("Descripción (opcional)") }, enabled = editable,
+                supportingText = { Text("Describe qué ocurre. Evita nombres, teléfonos y otros datos personales. ${sos.description.length}/280") },
+                maxLines = 5, modifier = Modifier.fillMaxWidth(),
+            )
         }
         if (editable && sos.canSend) {
-            key(person.id, event.id, sos.zoneId, sos.reference) {
+            key(person.id, event.id, sos.zoneId, sos.reference, sos.reasonCode, sos.description) {
                 HoldSosButton(actions::sendSos) { confirmSend = true }
             }
             TextButton(onClick = { confirmSend = true }, modifier = Modifier.heightIn(min = 48.dp)) {

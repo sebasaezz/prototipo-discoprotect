@@ -47,6 +47,9 @@ internal data class Incident(
     val resolvedAt: String? = null,
     val assignedStaff: AssignedStaff? = null,
     val resolutionNote: String? = null,
+    val reasonCode: SosReason? = null,
+    val dangerAlert: SosReason? = null,
+    val triage: IncidentTriage? = null,
 ) {
     fun validFor(event: String): Boolean = eventId == event && isIncidentUuid(id) &&
         requesterName.isNotBlank() && (zoneId == null) == (zoneName == null) &&
@@ -70,7 +73,12 @@ internal data class IncidentList(val incidents: List<Incident>)
 
 internal fun currentIncidentSnapshot(previous: List<Incident>?, incoming: List<Incident>): List<Incident> {
     val known = previous.orEmpty().associateBy { it.id }
-    return incoming.map { item -> known[item.id]?.takeIf { it.version > item.version } ?: item }
+    return incoming.map { item ->
+        val current = known[item.id] ?: return@map item
+        val operational = if (current.version > item.version) current else item
+        val triage = if ((current.triage?.triageVersion ?: 0) > (item.triage?.triageVersion ?: 0)) current.triage else item.triage
+        if (operational.triage == triage) operational else operational.copy(triage = triage)
+    }
 }
 
 internal fun incidentPollDelay(failures: Int): Long = when (failures) {

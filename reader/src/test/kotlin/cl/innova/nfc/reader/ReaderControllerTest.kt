@@ -4,6 +4,14 @@ import cl.innova.nfc.protocol.NfcProtocol
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.IncidentStatus
 import cl.discoprotect.ui.AssignedStaff
+import cl.discoprotect.ui.IncidentTriage
+import cl.discoprotect.ui.ReviewDecision
+import cl.discoprotect.ui.TriageCategory
+import cl.discoprotect.ui.TriageReview
+import cl.discoprotect.ui.TriageStatus
+import cl.discoprotect.ui.TriageSuggestion
+import cl.discoprotect.ui.TriageUncertainty
+import cl.discoprotect.ui.TriageUrgency
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -320,10 +328,72 @@ class ReaderControllerTest {
 
     private fun readIdentity() = ReadResult(NfcOutcome.Identity(nfcId), debug)
 
+    @Test fun `triage review retries exact command and late detail is discarded after context changes`() = runTest {
+        val result = TriageSuggestion(TriageCategory.MEDICAL, TriageUrgency.PRIORITY, "Caída ficticia.",
+            emptyList(), TriageUncertainty.HIGH)
+        val pending = IncidentTriage(1, TriageStatus.PENDING, null, null, null, null)
+        val suggested = IncidentTriage(2, TriageStatus.SUGGESTED, result, null, null, null)
+        val staff = AssignedStaff(session.personId, session.name)
+        val base = incident(eventA)
+        val assigned = base.copy(version = 2, status = IncidentStatus.ASSIGNED,
+            assignedAt = now.toString(), assignedStaff = staff, triage = pending)
+        val backend = FakeApi().apply {
+            availableEvents = listOf(eventA, eventB)
+            onIncidents = { _, selected -> if (selected == eventA) listOf(assigned) else emptyList() }
+            onTriage = { TriageDetail(suggested, "Se cayó.") }
+        }
+        val screen = controller(backend)
+        authenticate(screen)
+        screen.selectEvent(eventA.id)
+        screen.openIncidents()
+        runCurrent()
+        screen.openTriage(base.id)
+        runCurrent()
+        assertEquals("Se cayó.", screen.state.value.triageDetail?.description)
+        screen.refreshIncidents()
+        runCurrent()
+        assertEquals(suggested, screen.state.value.incidents?.single()?.triage)
+        val attempts = mutableListOf<ReviewBody>()
+        backend.onReview = { command ->
+            attempts += command
+            if (attempts.size == 1) throw ApiFailure(ApiProblem.Timeout)
+            val review = TriageReview(3, 2, command.operationId, ReviewDecision.CORRECT,
+                TriageCategory.OTHER, TriageUrgency.PRIORITY, now.toString(), staff)
+            ReviewReply(review, suggested.copy(triageVersion = 3, latestReview = review), true)
+        }
+        screen.reviewTriage(2, ReviewDecision.CORRECT, TriageCategory.OTHER, TriageUrgency.PRIORITY)
+        runCurrent()
+        assertTrue(screen.state.value.triagePending)
+        assertEquals(IncidentAction.Start, screen.state.value.actionFor(assigned))
+        screen.retryTriage()
+        runCurrent()
+        assertEquals(2, attempts.size)
+        assertEquals(attempts[0], attempts[1])
+        assertFalse(screen.state.value.triagePending)
+        assertEquals(3L, screen.state.value.incidents?.single()?.triage?.triageVersion)
+
+        lateinit var late: Continuation<TriageDetail>
+        backend.onTriage = { suspendCoroutine { late = it } }
+        screen.openTriage(base.id)
+        runCurrent()
+        screen.selectEvent(eventB.id)
+        runCurrent()
+        late.resume(TriageDetail(suggested, "Relato del otro evento."))
+        runCurrent()
+        assertNull(screen.state.value.triageDetail)
+        assertEquals(eventB, screen.state.value.event)
+    }
+
     private fun incident(event: StaffEvent) = Incident(UUID.randomUUID().toString(), event.id, "Antonia Reyes",
         null, null, "Cerca de la fila", IncidentStatus.OPEN, now.toString(), now.toString())
 
     private inner class FakeApi : StaffApi {
+        override suspend fun triage(session: StaffSession, event: StaffEvent, id: String): TriageDetail =
+            onTriage(id)
+        override suspend fun review(session: StaffSession, event: StaffEvent, id: String, body: ReviewBody): ReviewReply =
+            onReview(body)
+        var onTriage: suspend (String) -> TriageDetail = { error("Unexpected triage read") }
+        var onReview: suspend (ReviewBody) -> ReviewReply = { error("Unexpected triage review") }
         var availableEvents = listOf(eventA)
         var resolveCount = 0
         var incidentCalls = 0

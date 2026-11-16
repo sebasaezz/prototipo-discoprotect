@@ -1,3 +1,5 @@
+import { alertLabels, reasonLabels, type Review, type Triage, validReview, validTriage } from './triage.js';
+
 export type Session = { token: string; expiresAt: string };
 export type Event = { id: string; name: string; venue: string; role: string };
 export const incidentLabels = {
@@ -18,6 +20,9 @@ export type Incident = {
   startedAt: string | null;
   resolvedAt: string | null;
   resolutionNote: string | null;
+  reasonCode?: keyof typeof reasonLabels | null;
+  dangerAlert?: keyof typeof alertLabels | null;
+  triage?: Triage;
 };
 
 export class ApiError extends Error {
@@ -77,11 +82,30 @@ export async function incidents(session: Session, eventId: string, signal: Abort
   return result.incidents;
 }
 
+export async function incidentTriage(session: Session, eventId: string, id: string, signal: AbortSignal) {
+  if (!eventId || eventId === '.' || eventId === '..' || !/^[a-f0-9-]{36}$/.test(id)) {
+    throw new ApiError(400, 'La solicitud no es válida.');
+  }
+  const result = await request<{ triage: Triage; reviews: Review[] }>(
+    `events/${encodeURIComponent(eventId)}/incidents/${encodeURIComponent(id)}/triage`, signal, session,
+  );
+  if (!validTriage(result.triage) || !Array.isArray(result.reviews) || !result.reviews.every(validReview) ||
+      result.reviews.some((review, index) => review.reviewVersion <= (result.reviews[index - 1]?.reviewVersion ?? 0)) ||
+      (result.reviews.at(-1)?.reviewVersion ?? null) !== (result.triage.latestReview?.reviewVersion ?? null) ||
+      Object.hasOwn(result, 'description')) {
+    throw new ApiError(502, 'La respuesta de triaje no es válida.');
+  }
+  return result;
+}
+
 function validIncident(item: Incident, eventId: string) {
   if (!item || item.eventId !== eventId || typeof item.id !== 'string' ||
       typeof item.requesterName !== 'string' || !Object.hasOwn(incidentLabels, item.status) ||
       typeof item.createdAt !== 'string' || typeof item.updatedAt !== 'string' ||
       !Number.isSafeInteger(item.version) || item.version < 1) return false;
+  if (Object.hasOwn(item, 'description') || item.reasonCode != null && !Object.hasOwn(reasonLabels, item.reasonCode) ||
+      (item.dangerAlert ?? null) !== (item.reasonCode === 'UNRESPONSIVE' || item.reasonCode === 'IMMEDIATE_DANGER'
+        ? item.reasonCode : null) || item.triage !== undefined && !validTriage(item.triage)) return false;
   const assigned = ['ASSIGNED', 'IN_PROGRESS', 'RESOLVED'].includes(item.status);
   if (assigned ? !item.assignedStaff?.id || !item.assignedStaff.name : item.assignedStaff !== null) return false;
   if ((typeof item.assignedAt === 'string') !== assigned ||
@@ -98,7 +122,10 @@ export function currentIncidentSnapshot(previous: Incident[] | null, incoming: I
   const known = new Map(previous?.map(item => [item.id, item]));
   return incoming.map(item => {
     const current = known.get(item.id);
-    return current && current.version > item.version ? current : item;
+    if (!current) return item;
+    const operational = current.version > item.version ? current : item;
+    const triage = (current.triage?.triageVersion ?? 0) > (item.triage?.triageVersion ?? 0) ? current.triage : item.triage;
+    return operational.triage === triage ? operational : { ...operational, triage };
   });
 }
 

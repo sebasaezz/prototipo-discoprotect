@@ -5,8 +5,10 @@ import type { Db } from './db.js';
 import { ApiError, parse } from './errors.js';
 import * as incidents from './incidents.js';
 import * as records from './records.js';
+import { triageDetail, reviewTriage } from './triage.js';
+import { reviewInput } from './triage-contract.js';
 
-export function createApp(db: Db, pins: Pins, logging = false) {
+export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = false) {
   const app = Fastify({ logger: logging, logController: new LogController({ disableRequestLogging: true }), bodyLimit: 32 * 1024 });
   const session = (request: FastifyRequest) => authenticate(db, request.headers.authorization);
   const attendee = (request: FastifyRequest) => {
@@ -71,7 +73,7 @@ export function createApp(db: Db, pins: Pins, logging = false) {
       const current = session(request);
       requireRole(current, 'ATTENDEE');
       const { eventId } = parse(records.eventId, request.params);
-      const result = incidents.createIncident(db, current, eventId, parse(incidents.createInput, request.body));
+      const result = incidents.createIncident(db, current, eventId, parse(incidents.createInput, request.body), triageEnabled);
       return reply.code(result.created ? 201 : 200).send(result.incident);
     });
     api.get('/me/incidents', async request => {
@@ -108,6 +110,18 @@ export function createApp(db: Db, pins: Pins, logging = false) {
       const { eventId, id } = parse(incidentParams, request.params);
       requireMembership(db, current, eventId);
       return incidents.eventIncident(db, eventId, id);
+    });
+    api.get(`${incidentPath}/triage`, async request => {
+      const current = session(request);
+      if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
+      const { eventId, id } = parse(incidentParams, request.params);
+      return triageDetail(db, current, eventId, id);
+    });
+    api.post(`${incidentPath}/triage/reviews`, async request => {
+      const current = session(request);
+      requireRole(current, 'STAFF');
+      const { eventId, id } = parse(incidentParams, request.params);
+      return reviewTriage(db, current, eventId, id, parse(reviewInput, request.body));
     });
     for (const action of ['claim', 'start', 'resolve'] as const) {
       api.post(`${incidentPath}/${action}`, async request => {

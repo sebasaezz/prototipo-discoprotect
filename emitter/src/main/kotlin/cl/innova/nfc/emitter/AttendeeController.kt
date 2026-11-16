@@ -1,5 +1,7 @@
 package cl.innova.nfc.emitter
 
+import cl.discoprotect.ui.SosReason
+
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.IncidentStatus
 import cl.discoprotect.ui.currentIncidentSnapshot
@@ -266,10 +268,21 @@ internal class AttendeeController(
         updateSos(ui.sos.copy(reference = value, outcome = SosOutcome.Ready, error = null))
     }
 
+    fun selectSosReason(value: SosReason?) {
+        if (!canEditSos()) return
+        updateSos(ui.sos.copy(reasonCode = value, outcome = SosOutcome.Ready, error = null))
+    }
+
+    fun updateSosDescription(value: String) {
+        if (!canEditSos() || value.length > 280) return
+        updateSos(ui.sos.copy(description = value, outcome = SosOutcome.Ready, error = null))
+    }
+
     fun sendSos() {
         val form = ui.sos
         if (!canEditSos() || !form.canSend) return
-        val body = SosRequest(UUID.randomUUID().toString(), form.zoneId, form.reference.trim().ifEmpty { null })
+        val body = SosRequest(UUID.randomUUID().toString(), form.zoneId, form.reference.trim().ifEmpty { null },
+            form.reasonCode, form.description.takeUnless { it.isBlank() })
         submitSos(SosAttempt.Create(requireNotNull(form.event).id, body))
     }
 
@@ -425,7 +438,10 @@ internal class AttendeeController(
     private fun confirmSos(active: AttendeeSession, incident: Incident) {
         pendingSos.remove(active.person.id)
         val items = ui.sos.incidents.orEmpty().filterNot { it.id == incident.id } + incident
+        val sending = ui.sos.pending is SosAttempt.Create
         updateSos(ui.sos.copy(pending = null, receipt = incident.id, error = null,
+            reasonCode = ui.sos.reasonCode.takeUnless { sending },
+            description = if (sending) "" else ui.sos.description,
             outcome = if (incident.status == IncidentStatus.CANCELLED) SosOutcome.Cancelled else SosOutcome.Confirmed,
             incidents = currentIncidentSnapshot(ui.sos.incidents, items)
                 .sortedWith(compareByDescending<Incident> { it.createdAt }.thenByDescending { it.id })))

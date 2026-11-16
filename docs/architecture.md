@@ -49,6 +49,10 @@ Fastify expone acciones explícitas para asumir, iniciar y resolver. SQLite conf
 
 Los tres clientes consultan el listado al entrar, al volver a primer plano y cada cinco segundos mientras esté visible. Cada vista tiene una sola lectura en vuelo. Los fallos espacian las consultas y la acción manual permite intentarlas de inmediato. Las versiones y la invalidación por contexto impiden aplicar respuestas antiguas. AppAsistente separa el polling del formulario y de HCE. AppPersonal suspende el polling al volver al lector y conserva el comando pendiente por cuenta y evento en el origen activo. [Guion H6](h6-integration.md)
 
-## Extensiones previstas
+## H7
 
-La clasificación asistida por IA de H7 será un servicio desacoplado. La gestión administrativa se incorpora en H8.
+AppAsistente ofrece motivo y relato opcionales. El backend guarda el incidente, el relato original y el triaje inicial antes de responder al SOS. Un trabajador dentro de Fastify reserva trabajos en SQLite y consulta OpenAI después de cerrar la transacción. La demo usa un proceso Fastify por base SQLite. El trabajador continúa pendientes vigentes al reiniciar y envía a fallback los intentos interrumpidos.
+
+Solo el motivo y una copia minimizada del relato pueden salir hacia OpenAI. El filtro local admite español coloquial, bloquea indicadores de identificación e instrucciones incrustadas y deja los relatos dudosos para atención manual. La separación del mensaje de usuario, el esquema estricto y la validación local limitan el efecto de instrucciones incrustadas. Los controles son heurísticos y H7 usa datos ficticios.
+
+AppPersonal muestra alertas derivadas de motivos explícitos y permite clasificación por el guardia asignado. El detalle restringe el relato original a guardias autorizados. GestiónWeb consulta la clasificación y el historial. Los clientes combinan por separado la versión operativa y la de triaje en el polling. El protocolo NFC, la navegación al lector y los controles de H6 conservan su contrato. La gestión administrativa se incorpora en H8.

@@ -30,3 +30,15 @@ Una transacción inmediata compara o inserta el registro antes de responder. La 
 La creación lleva al estado `OPEN`. Una solicitud abierta puede cancelarse o ser asumida de forma exclusiva. El guardia asignado puede iniciar la atención y resolverla. La asignación, el inicio y la resolución registran sus propias horas. Una transición incrementa la versión y agrega una fila al historial en el mismo commit. El historial empieza con las transiciones efectuadas tras la migración. La versión resultante y el UUID de operación son únicos por incidente.
 
 La asignación apunta a la persona y la autorización consulta su membresía vigente. Si el guardia se retira, el incidente conserva su responsable histórico. H8 puede agregar una transición autorizada de reasignación y conservar los responsables anterior y nuevo.
+
+## Triaje H7
+
+`004_incident_triage.sql` agrega motivo y descripción opcionales a `incidents` y crea las tablas de triaje sin reconstruir la tabla operativa. Los incidentes H6 existentes quedan en `MANUAL` con causa `LEGACY`. Las filas nuevas se crean con su triaje en el mismo commit. La versión de triaje se incrementa cuando se publica una sugerencia, se entra en fallback desde pendiente o se registra una revisión. La reserva interna del intento conserva la versión visible.
+
+| Tabla | Datos y restricciones |
+| --- | --- |
+| `incident_triage` | Una fila por incidente. Estado, versión, causa de fallback o sugerencia validada, entrada en cola, intento reservado, finalización y metadatos del proveedor. Índice parcial para pendientes. |
+| `incident_triage_reviews` | Historial de sólo inserción con actor, decisión, categoría y prioridad resultantes, fecha, versión aplicada, UUID de operación y huella del comando. Versión y UUID únicos dentro del incidente. |
+| `triage_daily_usage` | Reservas de llamada por día UTC. La reserva se confirma antes de salir a la red y el contador se conserva al resetear la demo. |
+
+Las filas de triaje y sus revisiones se eliminan en cascada al restaurar los incidentes de la demo. Cancelar un SOS conserva el relato, el triaje y el historial. La marca de intento se persiste antes de enviar para evitar llamadas duplicadas tras reiniciar.

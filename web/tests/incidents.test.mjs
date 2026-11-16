@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ApiError, currentIncidentSnapshot, events, incidents, login } from '../.test-build/api.js';
+import { ApiError, currentIncidentSnapshot, events, incidents, incidentTriage, login } from '../.test-build/api.js';
 import { IncidentTable } from '../.test-build/IncidentTable.js';
 import { incidentPolling } from '../.test-build/incidentPolling.js';
 
@@ -22,6 +22,48 @@ const incident = {
   resolvedAt: null,
   resolutionNote: null,
 };
+
+const suggested = {
+  triageVersion: 2, status: 'SUGGESTED', fallback: null, fallbackReason: null, latestReview: null,
+  suggestion: { category: 'SECURITY', urgency: 'IMMEDIATE', summary: 'Se reportó un peligro.',
+    missingInformation: ['ONGOING_DANGER'], uncertainty: 'HIGH' },
+};
+const review = { reviewVersion: 3, reviewedTriageVersion: 2, operationId: incident.id, decision: 'CORRECT',
+  category: 'OTHER', urgency: 'PRIORITY', reviewedAt: incident.createdAt, actor: { id: 'guard', name: 'Guardia ficticio' } };
+const reviewed = { ...suggested, triageVersion: 3, latestReview: review };
+
+test('review and deterministic danger remain visible when operational and triage versions arrive out of order', () => {
+  const alert = { reasonCode: 'IMMEDIATE_DANGER', dangerAlert: 'IMMEDIATE_DANGER' };
+  const current = { ...incident, ...alert, version: 2, triage: suggested };
+  const late = { ...incident, ...alert, triage: reviewed };
+  const [merged] = currentIncidentSnapshot([current], [late]);
+  assert.equal(merged.version, 2);
+  assert.equal(merged.triage, reviewed);
+  assert.equal(currentIncidentSnapshot([merged], [current])[0].triage, reviewed);
+  const html = renderToStaticMarkup(createElement(IncidentTable, { items: [merged] }));
+  for (const text of ['Se reportó peligro inmediato', 'Revisión humana', 'Prioritaria', 'Detalle e historial']) {
+    assert.ok(html.includes(text));
+  }
+});
+
+test('organizer history validates ordering and rejects a leaked original description', async t => {
+  const signal = new AbortController().signal;
+  const session = { token: 'a'.repeat(43), expiresAt: new Date(Date.now() + 60000).toISOString() };
+  const replies = [
+    { triage: reviewed, reviews: [review] },
+    { triage: reviewed, reviews: [review, review] },
+    { triage: reviewed, reviews: [review], description: 'Solo para el guardia' },
+  ];
+  t.mock.method(globalThis, 'fetch', async (path, options) => {
+    assert.equal(path, `/api/v1/events/demo-festival/incidents/${incident.id}/triage`);
+    assert.equal(options.headers.Authorization, 'Bearer ' + session.token);
+    assert.equal(options.signal, signal);
+    return Response.json(replies.shift());
+  });
+  assert.deepEqual((await incidentTriage(session, incident.eventId, incident.id, signal)).reviews, [review]);
+  await assert.rejects(incidentTriage(session, incident.eventId, incident.id, signal), { status: 502 });
+  await assert.rejects(incidentTriage(session, incident.eventId, incident.id, signal), { status: 502 });
+});
 
 test('table renders the ID, location, reference, timestamp and textual status', () => {
   const html = renderToStaticMarkup(createElement(IncidentTable, { items: [
