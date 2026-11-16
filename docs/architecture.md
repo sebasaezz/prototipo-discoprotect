@@ -43,6 +43,12 @@ En el backend `main.ts` abre la base y arranca el proceso. `app.ts` define las r
 
 La web solicita una sesión de organizador con PIN y conserva el Bearer en estado React. El proxy local de Vite permite usar rutas del mismo origen en el navegador. AppPersonal y la web obtienen la misma vista operativa de la API y permiten actualización manual. [Guion H5](h5-integration.md)
 
+## H6
+
+Fastify expone acciones explícitas para asumir, iniciar y resolver. SQLite confirma la versión, el nuevo estado y el registro de transición en una transacción inmediata. Al repetir un comando, Fastify devuelve la operación confirmada y la vista vigente. El organizador consulta los mismos datos operativos que el guardia. AppAsistente recibe una proyección propia sin la nota de cierre ni la identidad del guardia.
+
+Los tres clientes consultan el listado al entrar, al volver a primer plano y cada cinco segundos mientras esté visible. Cada vista tiene una sola lectura en vuelo. Los fallos espacian las consultas y la acción manual permite intentarlas de inmediato. Las versiones y la invalidación por contexto impiden aplicar respuestas antiguas. AppAsistente separa el polling del formulario y de HCE. AppPersonal suspende el polling al volver al lector y conserva el comando pendiente por cuenta y evento en el origen activo. [Guion H6](h6-integration.md)
+
 ## Extensiones previstas
 
-H6 contempla sincronización de cambios persistidos y recuperación tras desconexiones. La clasificación asistida por IA de H7 será un servicio desacoplado. La gestión administrativa se incorpora en H8. El [modelo de datos](data-model.md) recoge las entidades futuras para ubicaciones dentro del recinto.
+La clasificación asistida por IA de H7 será un servicio desacoplado. La gestión administrativa se incorpora en H8.

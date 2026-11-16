@@ -5,7 +5,7 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 | Operación | Cuerpo | Respuesta y acceso |
 | --- | --- | --- |
 | `GET /health` | — | 200 `{status,database}`. Pública. |
-| `POST /demo/sessions` | `{account,pin?}` | 201 `{token, role, expiresAt}`. Sin Bearer. Invitados demo `antonia`, `martin`, `sofia`. `guardia` y `organizador` requieren su PIN de entorno. Vence en 8 h. |
+| `POST /demo/sessions` | `{account,pin?}` | 201 `{token, role, expiresAt}`. Sin Bearer. Invitados demo `antonia`, `martin`, `sofia`. `guardia`, `guardia2` y `organizador` requieren su PIN de entorno. Vence en 8 h. |
 | `GET /me` | — | 200 `{person,role}`. Cualquier sesión. |
 | `GET /me/emergency-card` | — | 200 ficha propia. Asistente. |
 | `PUT /me/emergency-card` | `{version,bloodType,allergies,conditions,medications}` | 200 ficha actualizada. Asistente. Reemplazo completo. |
@@ -18,8 +18,13 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 | `GET /events/:eventId/zones` | — | 200 `{zones:[{id,name}]}`. Membresía en el evento. |
 | `POST /events/:eventId/incidents` | `{clientRequestId,zoneId?,locationText?}` | 201 incidente creado o 200 repetición equivalente. Asistente miembro. |
 | `GET /me/incidents?eventId=…` | — | 200 `{incidents}`. Solicitudes propias del asistente miembro. |
+| `GET /me/incidents/:id` | — | 200 incidente propio. Asistente titular y miembro. |
 | `GET /events/:eventId/incidents` | — | 200 `{incidents}`. Guardia u organizador miembro. |
+| `GET /events/:eventId/incidents/:id` | — | 200 incidente operativo. Guardia u organizador miembro. |
 | `POST /me/incidents/:id/cancel` | — | 200 incidente cancelado. Asistente creador y miembro del evento. |
+| `POST /events/:eventId/incidents/:id/claim` | `{version,operationId}` | 200 `{operation,incident}`. Guardia miembro. `OPEN → ASSIGNED`, autoasignación. |
+| `POST /events/:eventId/incidents/:id/start` | `{version,operationId}` | 200 `{operation,incident}`. Guardia asignado con membresía. `ASSIGNED → IN_PROGRESS`. |
+| `POST /events/:eventId/incidents/:id/resolve` | `{version,operationId,resolutionNote?}` | 200 `{operation,incident}`. Guardia asignado con membresía. `IN_PROGRESS → RESOLVED`. |
 | `PATCH /events/:eventId` | `{name,venue}` | 200 evento modificado. Organizador miembro del evento. |
 | `POST /nfc/resolve` | `{token,eventId}` | 200 `{person,card,contacts}`. Rol `STAFF` con membresía de guardia en el evento solicitado. La credencial corresponde a un `ATTENDEE` de ese evento. |
 
@@ -27,12 +32,16 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 - Ficha `{id,bloodType,allergies,conditions,medications,updatedAt,version}`. Las listas tienen hasta 30 textos de 160 caracteres. Grupo sanguíneo `A+`, `A−`, `B+`, `B−`, `AB+`, `AB−`, `O+`, `O−` o `null`.
 - Contacto `{id,name,relationship,phone}`. `phone` usa de 3 a 32 caracteres, con dígitos y separadores de teléfono.
 - Evento `{id,name,venue,startsAt,endsAt,status,role}`. Rol de la cuenta en ese evento.
-- Incidente `{id,eventId,requesterName,zoneId,zoneName,locationText,status,createdAt,updatedAt}`. Incluye también `requesterPersonId` y `clientRequestId` en las respuestas al asistente. Los listados se ordenan de más a menos reciente.
+- Incidente `{id,eventId,requesterName,zoneId,zoneName,locationText,status,createdAt,updatedAt,version,assignedAt,startedAt,resolvedAt}`. Los tiempos operativos pendientes son nulos. La vista propia incluye `requesterPersonId` y `clientRequestId`. La vista operativa agrega `assignedStaff: {id,name} | null` y `resolutionNote: string | null`. Los listados se ordenan por creación e ID descendentes.
 - `token` NFC son exactamente 32 dígitos hexadecimales sin separadores. Acepta minúsculas y mayúsculas. Con un guardia autorizado para el evento, un token inactivo, ajeno al evento o desconocido produce el mismo 404. El token NFC identifica al asistente y la sesión Bearer autoriza al guardia.
 
 Los cuerpos de sesión, ficha y contactos se validan como JSON. Las escrituras de ficha y contactos requieren `version` entera positiva y se ejecutan en transacción. Una escritura exitosa incrementa la versión compartida exactamente en uno. El 409 incluye `details.currentVersion`. Para teléfonos, los separadores permitidos son espacio, `+`, paréntesis y guion, y debe haber al menos un dígito.
 
 El SOS requiere un UUID generado por el cliente. El servidor normaliza la clave a minúsculas y recorta la referencia manual a efectos de comparación, con un límite de 160 caracteres tras recortar. Zona omitida o nula representa ubicación desconocida y puede acompañarse de una referencia. Una referencia vacía equivale a nula. La zona debe pertenecer al evento. Un reenvío con la misma clave por la misma persona devuelve el registro y su estado vigente si coinciden evento, zona y referencia. La cancelación cambia `OPEN` a `CANCELLED` y conserva el ID.
+
+Cada transición exitosa aumenta `version` en uno. `CANCELLED` y `RESOLVED` son terminales. La nota opcional se recorta a efectos de comparación, admite hasta 240 caracteres tras recortar y se guarda como nula si está vacía. El guardia envía la versión observada y un UUID `operationId`; ante un resultado incierto conserva versión, UUID y cuerpo. El servidor verifica rol y membresía y reconoce el reintento por incidente, actor y comando normalizado antes de comparar la versión vigente.
+
+`operation` contiene `{operationId,fromStatus,toStatus,appliedVersion,appliedAt,replayed}`. En un reintento exitoso, `replayed` es verdadero y los demás campos describen la operación original. `incident` contiene la vista operativa vigente, que puede haber avanzado. Por ejemplo, una repetición de `claim` puede confirmar `OPEN → ASSIGNED` mientras `incident.status` es `IN_PROGRESS`. La repetición exacta mantiene la versión y el historial. Las respuestas usan `Cache-Control: no-store`.
 
 Los errores usan `{error:{code,message,details?}}`.
 
@@ -42,5 +51,5 @@ Los errores usan `{error:{code,message,details?}}`.
 | 401 | `INVALID_CREDENTIALS` al iniciar sesión o `UNAUTHENTICATED` si el Bearer no es válido o está vencido. |
 | 403 | `FORBIDDEN` por rol incompatible o `EVENT_FORBIDDEN` por falta de membresía autorizada. |
 | 404 | `CARD_NOT_FOUND`, `CONTACT_NOT_FOUND`, `NFC_NOT_FOUND` o `INCIDENT_NOT_FOUND` cuando el recurso autorizado no está disponible. `NOT_FOUND` si la ruta no existe. |
-| 409 | `VERSION_CONFLICT` si la versión de escritura es anterior. `REQUEST_CONFLICT` si la clave SOS ya se usó con otros datos. `INCIDENT_NOT_OPEN` si el propio incidente ya fue cancelado. |
+| 409 | `VERSION_CONFLICT` para versión distinta de la vigente. `REQUEST_CONFLICT` para una clave reutilizada con otro actor o comando en un incidente, o un UUID SOS reutilizado con otros datos. `INCIDENT_NOT_OPEN` al cancelar desde otro estado. `INVALID_TRANSITION` si el estado impide la acción operativa. Los conflictos de estado o versión de incidentes incluyen `details.currentVersion` y `details.currentStatus`. |
 | 500 | `INTERNAL_ERROR` ante fallos internos. |
