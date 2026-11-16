@@ -2,7 +2,7 @@
 
 Usa solo perfiles ficticios en una LAN controlada. El Galaxy S22 ejecuta AppAsistente, el Galaxy S25 ejecuta AppPersonal y el PC Windows ejecuta Fastify, SQLite y GestiónWeb. Registra el SHA instalado, el ID de cada solicitud y el resultado de cada comprobación.
 
-El usuario reportó 25/25 comprobaciones físicas aprobadas en H6-A, H6-B2, H6-B3, H6-B4 y H6-C. La simultaneidad HTTP estricta se verificó en la integración automatizada. Queda pendiente la regresión física NFC breve del punto 14. Los demás pasos describen el guion reproducible. El checkpoint distingue la evidencia reportada de las comprobaciones sin resultado registrado. [Checkpoint H6](checkpoints/h6-2026-11-15.md)
+El usuario completó la aceptación física con 26/26 comprobaciones aprobadas en H6-A, H6-B2, H6-B3, H6-B4, H6-C y la regresión NFC del punto 14. La simultaneidad HTTP estricta se verificó en la integración automatizada. [Checkpoint H6](checkpoints/h6-2026-11-15.md)
 
 Si un guardia abandona el evento, el incidente conserva el responsable y el estado registrados. H6 carece de reasignación.
 
@@ -56,7 +56,7 @@ Si un guardia abandona el evento, el incidente conserva el responsable y el esta
 | 11 | Crea otro SOS. Enfrenta **Asumir** del S25 con el comando de `guardia2` del PC, usando el procedimiento de abajo. | Un único responsable confirmado. La solicitud perdedora devuelve conflicto o la vista se actualiza antes de que llegue a enviar la acción. La prueba automatizada realiza la carrera sin demora humana. |
 | 12 | Con un incidente abierto, pierde la primera respuesta de **Asumir** usando el proxy de abajo. | S25 muestra **Resultado sin confirmar**. Cuando el listado vuelva, pulsa **Reintentar la misma operación**. La API confirma la operación original y el estado vigente con un solo responsable. |
 | 13 | Cambia de Antonia a Martín en el S22 y envía mediante confirmación alternativa con ubicación desconocida. | Cada cuenta ve sus propias solicitudes. El guardia y el organizador del evento ven ambas. |
-| 14 | **Pendiente.** En el S25 vuelve al lector. En el S22 verifica Antonia y haz una lectura nueva. Cambia a Sofía y repite. | El S25 muestra la ficha de Antonia en la primera lectura y la de Sofía en la segunda. |
+| 14 | En el S25 vuelve al lector. En el S22 verifica Antonia y haz una lectura nueva. Cambia a Sofía y repite. | **Aprobada por el usuario.** El S25 mostró la ficha correspondiente en cada lectura y descartó la identidad anterior al cambiar de cuenta. |
 | 15 | Revisa letra grande, TalkBack y teclado web en los estados y acciones modificados. | Las etiquetas se entienden sin depender del color, las acciones se alcanzan y los diálogos anuncian su propósito. |
 
 ## Segundo guardia desde PowerShell

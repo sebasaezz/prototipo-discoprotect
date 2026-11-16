@@ -2,7 +2,7 @@
 
 Prototipo universitario de seguridad para eventos masivos. AppPersonal lee el identificador NFC, cierra la conexión con AppAsistente y consulta la ficha actualizada en el servidor. La demo local sigue disponible desde la configuración del lector. AppAsistente verifica una de las tres cuentas demo, emite su credencial NFC vigente y permite editar la ficha y los contactos de esa cuenta mediante el mismo servidor.
 
-H5 agregó el SOS persistente y fue validado físicamente el 15 de noviembre de 2026. H6 agrega la asignación, atención y resolución por guardias y el seguimiento automático en ambas apps y GestiónWeb. H6 superó la revisión independiente y el usuario reportó 25/25 comprobaciones físicas aprobadas en los bloques ejecutados. Queda pendiente la regresión física NFC con Antonia y Sofía. [Checkpoint H6](docs/checkpoints/h6-2026-11-15.md) · [Guion H6](docs/h6-integration.md)
+H5 agregó el SOS persistente y fue validado físicamente el 15 de noviembre de 2026. H6 agrega la asignación, atención y resolución por guardias y el seguimiento automático en ambas apps y GestiónWeb. H6 superó la revisión independiente y completó la aceptación física con 26/26 comprobaciones aprobadas por el usuario, incluida la regresión NFC con Antonia y Sofía. [Checkpoint H6](docs/checkpoints/h6-2026-11-15.md) · [Guion H6](docs/h6-integration.md)
 
 ## Backend
 
