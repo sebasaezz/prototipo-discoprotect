@@ -1,6 +1,6 @@
 # Roadmap H0–H10
 
-El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre. Los checkpoints [H4](checkpoints/h4-2026-11-15.md) y [H5](checkpoints/h5-2026-11-15.md) registran sus aceptaciones físicas.
+El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre. Los checkpoints [H4](checkpoints/h4-2026-11-15.md) y [H5](checkpoints/h5-2026-11-15.md) registran sus aceptaciones físicas. El [checkpoint H6](checkpoints/h6-2026-11-15.md) registra la evidencia de los bloques ejecutados y la regresión física NFC pendiente.
 
 | Hito y estado | Objetivo, componentes y dependencias | Entregable y aceptación | Pruebas y riesgos |
 | --- | --- | --- | --- |
@@ -10,7 +10,7 @@ El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre
 | H3 · Implementado y validado físicamente por el usuario el 2026-11-15 | Edición de ficha y contactos desde AppAsistente. Depende de H2. | Guardar desde AppAsistente y recuperar el cambio por NFC en AppPersonal. | Flujos completos, errores y conflictos de versiones. Riesgo de edición concurrente. |
 | H4 · Completado y validado físicamente el 15 de noviembre de 2026 | Sesión seleccionable y credenciales dinámicas. Depende de H3. | Cambiar de cuenta y obtener su ficha por NFC. | Alternar identidades y verificar consistencia HCE al reanudar. Riesgo de credencial anterior. |
 | H5 · Implementado y validado físicamente el 15/11/2026 | SOS persistente, zona manual, guardia y vista web básica. Depende de H4, API y LAN. | Una pulsación prolongada crea un incidente que conserva el mismo ID en AppPersonal y en la web tras reiniciar Fastify. | [Aceptación H5, 27/27](checkpoints/h5-2026-11-15.md) · [Guion de regresión](h5-integration.md). |
-| H6 · Implementado en rama de revisión, aceptación física pendiente | Atención, transiciones y sincronización. Depende de H5. | Un guardia asume, atiende y resuelve. Asistente y GestiónWeb reciben los estados. | [Guion H6](h6-integration.md). Transiciones, concurrencia, reconexión y resincronización. |
+| H6 · Implementado y revisado. Regresión física NFC pendiente | Atención, transiciones y sincronización. Depende de H5. | Un guardia asume, atiende y resuelve. Asistente y GestiónWeb reciben los estados. | [Checkpoint H6](checkpoints/h6-2026-11-15.md). 95 pruebas automatizadas reportadas y 25/25 comprobaciones físicas ejecutadas aprobadas. Simultaneidad HTTP estricta verificada en la integración automatizada. |
 | H7 · Pendiente | Triaje con IA, fallback y corrección humana. Depende de H5–H6. | Categoría, urgencia, resumen y evidencias inciertas sin bloquear SOS. | Respuestas válidas, timeout, fallback y revisión humana. Riesgo de clasificación errónea. |
 | H8 · Pendiente | GestiónWeb para organizadores. Depende del API de eventos e incidentes. | Administrar eventos/personal y consultar métricas e historial persistentes. | Permisos, consistencia de métricas y flujos web. Riesgo de exponer registros de otro evento. |
 | H9 · Pendiente | Entradas QR ficticias, promociones, acompañantes y búsqueda autorizada. Depende de apps y GestiónWeb. | Publicar una promoción y verla durante la vigencia. Completar flujos complementarios. | Vigencias, zonas horarias, accesos y entradas inválidas. Riesgo de campañas fuera de plazo. |
