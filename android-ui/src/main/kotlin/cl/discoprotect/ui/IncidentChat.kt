@@ -83,6 +83,8 @@ internal fun IncidentChat(
     staffId: String? = null,
     load: suspend (Long) -> ChatPage,
     send: suspend (ChatDraft) -> ChatWrite,
+    sendLabel: String = "Enviar mensaje",
+    emptyConversationMessage: String? = null,
 ) {
     val owner = LocalLifecycleOwner.current
     val loader by rememberUpdatedState(load)
@@ -134,9 +136,13 @@ internal fun IncidentChat(
     val state = chat
     if (disconnected) Status("Sin conexión con el chat · se muestra la última consulta.", Tone.Warning)
     if (state == null && !disconnected) Text("Consultando conversación…")
+    val emptyMessage = emptyConversationMessage?.takeIf {
+        state != null && state.lastSeq == 0L && state.control != ChatControl.CLOSED
+    }
+    emptyMessage?.let { Text(it) }
     when (state?.control) {
-        ChatControl.AUTO -> Text(if (state.aiStatus == "PENDING") "La IA está revisando el relato. A la espera del personal."
-            else "A la espera del personal.")
+        ChatControl.AUTO -> if (emptyMessage == null) Text(if (state.aiStatus == "PENDING")
+            "La IA está revisando el relato. A la espera del personal." else "A la espera del personal.")
         ChatControl.STAFF -> Text("Guardia a cargo · ${state.guard?.displayName.orEmpty()}")
         ChatControl.CLOSED -> Text("Conversación cerrada")
         null -> Unit
@@ -182,6 +188,6 @@ internal fun IncidentChat(
                         sending = false
                     }
                 }
-            }) { Text(if (sending) "Enviando…" else if (pending != null) "Reintentar envío" else "Enviar mensaje") }
+            }) { Text(if (sending) "Enviando…" else if (pending != null) "Reintentar envío" else sendLabel) }
     }
 }

@@ -35,13 +35,12 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
     var confirmSend by remember(person.id, event?.id) { mutableStateOf(false) }
     var confirmCancel by remember(person.id, event?.id) { mutableStateOf<String?>(null) }
     var chatId by remember(person.id, event?.id) { mutableStateOf<String?>(null) }
-    var report by remember(person.id, event?.id) { mutableStateOf("") }
     LaunchedEffect(sos.receipt) {
         if (sos.incidents.orEmpty().any { it.id == sos.receipt && it.hasConversation }) {
             chatId = sos.receipt
-            report = ""
         }
     }
+    val currentChat = sos.incidents?.firstOrNull { it.id == chatId && it.hasConversation }
     Field("Cuenta activa", person.name)
 
     if (sos.events.isEmpty()) {
@@ -58,35 +57,27 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
     }
 
     if (event != null) {
-        val currentChat = sos.incidents?.firstOrNull { it.id == chatId && it.hasConversation }
         if (currentChat != null) {
             Field("Solicitud recibida", "${currentChat.id} · ${incidentTime(currentChat.createdAt)}")
             Status(currentChat.status.label, currentChat.status.tone)
             key(person.id, event.id, currentChat.id) {
                 IncidentChat(currentChat.id, attendee = true, outbox = actions.chatOutbox,
-                    load = { actions.conversation(currentChat.id, it) }, send = { actions.message(currentChat.id, it) })
+                    load = { actions.conversation(currentChat.id, it) }, send = { actions.message(currentChat.id, it) },
+                    sendLabel = "Enviar",
+                    emptyConversationMessage = "Solicitud recibida. A la espera de información o atención del personal",
+                )
             }
             TextButton(onClick = { chatId = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Otra solicitud") }
-        } else {
-            OutlinedTextField(report, { if (it.length <= 500) report = it }, enabled = editable,
-                label = { Text("¿Qué está ocurriendo y dónde?") }, supportingText = { Text("${report.length}/500") },
-                maxLines = 5, modifier = Modifier.fillMaxWidth())
-            Button(onClick = { actions.sendHelp(report) }, enabled = editable && report.isNotBlank(),
-                modifier = Modifier.heightIn(min = 48.dp)) { Text("Enviar primer mensaje") }
-        }
-        if (editable) {
+        } else if (editable) {
             key(person.id, event.id) {
                 HoldSosButton({ actions.sendHelp() }) { confirmSend = true }
-            }
-            TextButton(onClick = { confirmSend = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text("Enviar SOS sin texto con confirmación")
             }
         }
     }
 
     when (sos.outcome) {
         SosOutcome.Ready -> Unit
-        SosOutcome.Confirmed -> Status("Solicitud recibida por el servidor", Tone.Success)
+        SosOutcome.Confirmed -> if (currentChat == null) Status("Solicitud recibida por el servidor", Tone.Success)
         SosOutcome.Cancelled -> Status("Solicitud cancelada en el servidor", Tone.Success)
         SosOutcome.Uncertain -> if (!state.sosWriting) Status(
             if (sos.pending is SosAttempt.Cancel) "No se pudo confirmar la cancelación"
@@ -136,7 +127,7 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
         }
     }
 
-    if (confirmSend && editable && event != null) {
+    if (confirmSend && editable && event != null && currentChat == null) {
         SosConfirmation("¿Enviar SOS?", "Se enviará tu solicitud al personal de ${event.name}.",
             "Enviar SOS", dismiss = { confirmSend = false }, accept = {
                 confirmSend = false
@@ -180,7 +171,7 @@ private fun HoldSosButton(send: () -> Unit, openConfirmation: () -> Unit) {
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).semantics(mergeDescendants = true) {
             role = Role.Button
-            onClick("Solicitar con confirmación") { openConfirmation(); true }
+            onClick("Activar SOS con confirmación") { openConfirmation(); true }
         }.pointerInput(Unit) {
             detectTapGestures(onTap = {}, onPress = {
                 coroutineScope {
@@ -197,9 +188,9 @@ private fun HoldSosButton(send: () -> Unit, openConfirmation: () -> Unit) {
             })
         },
     ) {
-        Box(Modifier.padding(Space.md), contentAlignment = Alignment.Center) {
-            Text(if (pressing) "Mantén pulsado…" else "Mantén pulsado SOS · 1,5 s",
-                style = MaterialTheme.typography.titleMedium)
+        Column(Modifier.padding(Space.md), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("SOS", style = MaterialTheme.typography.titleMedium)
+            Text(if (pressing) "Mantén pulsado…" else "Mantén pulsado 1,5 s")
         }
     }
     if (pressing) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
