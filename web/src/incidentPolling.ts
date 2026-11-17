@@ -46,5 +46,11 @@ export function incidentPolling<T>(
     }
   }
 
-  return { refresh, setVisible };
+  function invalidate() {
+    pending?.abort();
+    pending = null;
+    refresh();
+  }
+
+  return { refresh, setVisible, invalidate };
 }
