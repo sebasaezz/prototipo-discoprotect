@@ -12,6 +12,12 @@ export type WorkerOptions = {
   dailyLimit: number;
 };
 
+export function reserveDailyCall(db: Db, now: number, limit: number) {
+  return db.prepare(`INSERT INTO triage_daily_usage (day_utc, reserved) VALUES (?, 1)
+    ON CONFLICT(day_utc) DO UPDATE SET reserved = reserved + 1 WHERE reserved < ?`)
+    .run(new Date(now).toISOString().slice(0, 10), limit).changes > 0;
+}
+
 type Job = { id: string; reasonCode: ReasonCode | null; description: string | null; queuedAt: number };
 
 const envelope = z.object({
@@ -34,7 +40,8 @@ function validate(value: unknown) {
   return { suggestion, usage, model };
 }
 
-export function createTriageWorker(db: Db, options: WorkerOptions, report: (event: object) => void = () => {}) {
+export function createTriageWorker(db: Db, options: WorkerOptions, report: (event: object) => void = () => {},
+  afterTick?: () => Promise<void>) {
   let timer: ReturnType<typeof setInterval> | undefined;
   let active: Promise<void> | undefined;
   let abort: AbortController | undefined;
@@ -58,10 +65,7 @@ export function createTriageWorker(db: Db, options: WorkerOptions, report: (even
         report({ reason: failure });
         return undefined;
       }
-      const reserved = db.prepare(`INSERT INTO triage_daily_usage (day_utc, reserved) VALUES (?, 1)
-        ON CONFLICT(day_utc) DO UPDATE SET reserved = reserved + 1 WHERE reserved < ?`)
-        .run(new Date(now).toISOString().slice(0, 10), options.dailyLimit);
-      if (!reserved.changes) {
+      if (!reserveDailyCall(db, now, options.dailyLimit)) {
         finishManually(db, job.id, 'DAILY_LIMIT', now);
         report({ reason: 'DAILY_LIMIT' });
         return undefined;
@@ -110,7 +114,7 @@ export function createTriageWorker(db: Db, options: WorkerOptions, report: (even
 
   function tick() {
     if (stopped) return Promise.resolve();
-    active ??= processNext().finally(() => { active = undefined; });
+    active ??= processNext().then(() => afterTick?.()).finally(() => { active = undefined; });
     return active;
   }
 

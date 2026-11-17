@@ -1,5 +1,7 @@
 import { createApp } from './app.js';
-import { readConfig, readTriageConfig } from './config.js';
+import { readChatConfig, readConfig, readTriageConfig } from './config.js';
+import { openAiChat } from './chat-analysis.js';
+import { createChatWorker } from './chat-worker.js';
 import { migrate, openDb } from './db.js';
 import { openAi } from './triage-provider.js';
 import { createTriageWorker } from './triage-worker.js';
@@ -11,11 +13,15 @@ try {
   const { key, ...options } = readTriageConfig(process.env);
   const provider = key ? openAi(options.model, key) : null;
   const app = createApp(db, config.pins, true, provider !== null);
-  const worker = createTriageWorker(db, { ...options, provider }, event => app.log.info(event, 'Triaje SOS'));
+  const { key: chatKey, ...chatOptions } = readChatConfig(process.env);
+  const chatWorker = createChatWorker(db, { ...chatOptions, provider: chatKey ? openAiChat(chatOptions.model, chatKey) : null },
+    event => app.log.info(event, 'Interpretación del chat'));
+  const worker = createTriageWorker(db, { ...options, provider }, event => app.log.info(event, 'Triaje SOS'), chatWorker.tick);
   worker.recover();
+  chatWorker.recover();
   app.addHook('onClose', async () => {
     try {
-      await worker.stop();
+      await Promise.all([worker.stop(), chatWorker.stop()]);
     } finally {
       db.close();
     }

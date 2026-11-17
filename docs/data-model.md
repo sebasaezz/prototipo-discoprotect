@@ -35,6 +35,8 @@ La asignación apunta a la persona y la autorización consulta su membresía vig
 
 La migración `005` añade `incident_conversations` con clave del incidente y contadores de secuencia, e `incident_messages` con mensajes ordenados, autor e idempotencia. Los incidentes previos conservan los registros H5–H7. El historial se conserva al cancelar o resolver.
 
+La migración `006` registra trabajos de IA en `incident_chat_ai_runs`, por incidente y secuencia del asistente. Conserva el análisis válido y la cuenta de intentos reservados, incluidos los interrumpidos o descartados. `zone_aliases` permite asociar hasta cinco alias por zona en el contexto enviado al modelo.
+
 `004_incident_triage.sql` agrega motivo y descripción opcionales a `incidents` y crea las tablas de triaje sin reconstruir la tabla operativa. Los incidentes H6 existentes quedan en `MANUAL` con causa `LEGACY`. Las filas nuevas se crean con su triaje en el mismo commit. La versión de triaje se incrementa cuando se publica una sugerencia, se entra en fallback desde pendiente o se registra una revisión. La reserva interna del intento conserva la versión visible.
 
 | Tabla | Datos y restricciones |

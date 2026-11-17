@@ -50,11 +50,19 @@ function control(row: ConversationRow) {
   return row.status === 'ASSIGNED' || row.status === 'IN_PROGRESS' ? 'STAFF' : 'CLOSED';
 }
 
-function view(row: ConversationRow) {
+function view(db: Db, row: ConversationRow) {
+  const state = control(row);
+  const job = db.prepare(`SELECT status FROM incident_chat_ai_runs
+    WHERE incident_id = ? AND input_seq = ?`).get(row.incidentId, row.lastAttendeeSeq);
+  const replies = Number(db.prepare(`SELECT count(*) AS n FROM incident_messages
+    WHERE incident_id = ? AND author_type = 'AI'`).get(row.incidentId)?.n);
+  const aiStatus = state !== 'AUTO' || replies >= 2 ? 'MANUAL'
+    : job?.status === 'QUEUED' || job?.status === 'RUNNING' ? 'PENDING'
+    : job?.status === 'COMPLETE' ? 'READY' : 'MANUAL';
   return {
-    incidentId: row.incidentId, control: control(row), controlVersion: row.version, lastSeq: row.lastSeq,
+    incidentId: row.incidentId, control: state, controlVersion: row.version, lastSeq: row.lastSeq,
     guard: row.staffId ? { id: row.staffId, displayName: row.staffName } : null,
-    aiStatus: 'MANUAL',
+    aiStatus,
   };
 }
 
@@ -81,6 +89,10 @@ export function append(db: Db, id: string, type: MessageRow['type'], personId: s
     client_message_id, request_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     randomUUID(), id, lastSeq, type, personId, input.text, now,
     input.clientMessageId ?? null, input.clientMessageId ? hashMessage(input.text) : null);
+  if (type === 'ATTENDEE') {
+    db.prepare(`INSERT INTO incident_chat_ai_runs (incident_id, input_seq, queued_at, status)
+      SELECT id, ?, ?, 'QUEUED' FROM incidents WHERE id = ? AND status = 'OPEN'`).run(lastSeq, Date.parse(now), id);
+  }
   return db.prepare(`${messages} AND m.seq = ?`).get(id, lastSeq) as MessageRow;
 }
 
@@ -98,7 +110,7 @@ export function creationReceipt(db: Db, id: string, personId: string, mode?: 'CH
     throw new ApiError(409, 'REQUEST_CONFLICT', 'La clave de solicitud ya se usó con otros datos');
   }
   if (!record) return undefined;
-  return { conversation: view(find(db, id)!), message: original ? messageView(original, personId) : null };
+  return { conversation: view(db, find(db, id)!), message: original ? messageView(original, personId) : null };
 }
 
 export function readConversation(db: Db, session: Session, id: string, eventId: string | undefined,
@@ -106,7 +118,7 @@ export function readConversation(db: Db, session: Session, id: string, eventId: 
   const row = scope(db, session, id, eventId);
   const page = db.prepare(`${messages} AND m.seq > ? ORDER BY m.seq LIMIT ?`).all(id, afterSeq, limit + 1) as MessageRow[];
   const items = page.slice(0, limit).map(message => messageView(message, session.personId));
-  return { conversation: view(row), messages: items, nextAfterSeq: items.at(-1)?.seq ?? afterSeq, hasMore: page.length > limit };
+  return { conversation: view(db, row), messages: items, nextAfterSeq: items.at(-1)?.seq ?? afterSeq, hasMore: page.length > limit };
 }
 
 export function sendMessage(db: Db, session: Session, id: string, eventId: string | undefined, input: MessageInput) {
@@ -120,7 +132,7 @@ export function sendMessage(db: Db, session: Session, id: string, eventId: strin
       if (recorded.personId !== session.personId || recorded.requestHash !== hashMessage(input.text)) {
         throw new ApiError(409, 'REQUEST_CONFLICT', 'La clave de mensaje ya se usó con otros datos');
       }
-      return { created: false, message: messageView(recorded, session.personId), conversation: view(row) };
+      return { created: false, message: messageView(recorded, session.personId), conversation: view(db, row) };
     }
     if (control(row) === 'CLOSED') throw new ApiError(409, 'CHAT_CLOSED', 'La conversación está cerrada');
     const total = db.prepare("SELECT count(*) AS n FROM incident_messages WHERE incident_id = ? AND author_type <> 'AI'").get(id);
@@ -131,6 +143,6 @@ export function sendMessage(db: Db, session: Session, id: string, eventId: strin
       .get(id, session.personId, new Date(now - 60_000).toISOString());
     if (recent) throw new ApiError(429, 'CHAT_RATE_LIMIT', 'Espera antes de enviar otro mensaje', { retryAfter: 60 });
     const message = append(db, id, session.role === 'STAFF' ? 'STAFF' : 'ATTENDEE', session.personId, input, new Date(now).toISOString());
-    return { created: true, message: messageView(message, session.personId), conversation: view(find(db, id)!) };
+    return { created: true, message: messageView(message, session.personId), conversation: view(db, find(db, id)!) };
   });
 }
