@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { requireMembership, type Session } from './auth.js';
 import { atomic, type Db } from './db.js';
-import { createConversation, creationReceipt, messageInput } from './conversations.js';
+import { conversationView, createConversation, creationReceipt, discardChatWork, messageInput } from './conversations.js';
 import { ApiError } from './errors.js';
 import { dangerAlert, reasonCode, type ReasonCode } from './triage-contract.js';
 import { finishManually, initializeTriage, triageView } from './triage.js';
@@ -186,7 +186,8 @@ export function operate(db: Db, session: Session, eventId: string, id: string, a
       if (actorId !== session.personId || recordedHash !== requestHash) {
         throw new ApiError(409, 'REQUEST_CONFLICT', 'La clave de operación ya se usó con otros datos');
       }
-      return { operation: { ...operation, operationId, replayed: true }, incident: eventView(db, previous) };
+      return { operation: { ...operation, operationId, replayed: true }, incident: eventView(db, previous),
+        ...(action === 'claim' && previous.hasConversation ? conversationView(db, id) : {}) };
     }
     const { from, to } = transitions[action];
     if (action !== 'claim' && previous.assignedStaffId && previous.assignedStaffId !== session.personId) {
@@ -198,6 +199,7 @@ export function operate(db: Db, session: Session, eventId: string, id: string, a
     return {
       operation: { operationId, fromStatus: from, toStatus: to, appliedVersion: current.version, appliedAt: current.updatedAt, replayed: false },
       incident: eventView(db, current),
+      ...(action === 'claim' && current.hasConversation ? conversationView(db, id) : {}),
     };
   });
 }
@@ -218,5 +220,8 @@ function applyTransition(db: Db, previous: Incident, session: Session, to: Statu
     from_status, to_status, applied_at, operation_id, request_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(previous.id, version, session.personId, previous.status, to, updatedAt, operationId, requestHash);
   if (to === 'CANCELLED' || to === 'RESOLVED') finishManually(db, previous.id, 'CLOSED', Date.parse(updatedAt));
+  if (previous.hasConversation && (to === 'ASSIGNED' || to === 'CANCELLED' || to === 'RESOLVED')) {
+    discardChatWork(db, previous.id, Date.parse(updatedAt));
+  }
   return findIncident(db, previous.id, 'event', previous.eventId);
 }

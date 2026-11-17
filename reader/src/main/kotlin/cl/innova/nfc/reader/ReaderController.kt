@@ -1,6 +1,7 @@
 package cl.innova.nfc.reader
 
 import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.ChatDraft
 import cl.discoprotect.ui.IncidentStatus
 import cl.discoprotect.ui.IncidentTriage
 import cl.discoprotect.ui.ReviewDecision
@@ -323,6 +324,29 @@ internal class ReaderController(
                     ui = ui.copy(incidentWriting = false, lastIncidentRead = null)
                     refreshIncidents()
                 }
+            }
+        }
+    }
+
+    suspend fun conversation(id: String, after: Long) = chatRequest(id) { remote, active, event ->
+        remote.conversation(active, event, id, after)
+    }
+
+    suspend fun message(id: String, draft: ChatDraft) = chatRequest(id) { remote, active, event ->
+        remote.message(active, event, id, draft)
+    }
+
+    private suspend fun <T> chatRequest(id: String, request: suspend (StaffApi, StaffSession, StaffEvent) -> T): T {
+        if (!checkExpiry()) throw ApiFailure(ApiProblem.Unauthorized)
+        val remote = api ?: throw ApiFailure(ApiProblem.Unavailable)
+        val active = session ?: throw ApiFailure(ApiProblem.Unauthorized)
+        val event = ui.event ?: throw ApiFailure(ApiProblem.Forbidden)
+        if (!ui.incidentsVisible || ui.incidents?.none { it.id == id && it.eventId == event.id } != false) {
+            throw CancellationException()
+        }
+        return request(remote, active, event).also {
+            if (session !== active || api !== remote || !ui.incidentsVisible || ui.event?.id != event.id) {
+                throw CancellationException()
             }
         }
     }

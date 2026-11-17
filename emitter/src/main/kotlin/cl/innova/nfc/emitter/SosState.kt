@@ -1,6 +1,7 @@
 package cl.innova.nfc.emitter
 
 import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.ChatDraft
 import cl.discoprotect.ui.IncidentStatus
 import cl.discoprotect.ui.SosReason
 import java.time.Instant
@@ -26,7 +27,8 @@ internal sealed interface SosAttempt {
     val eventId: String
     fun matches(incident: Incident): Boolean
 
-    data class Create(override val eventId: String, val body: SosRequest) : SosAttempt {
+    data class Create(override val eventId: String, val body: SosRequest, val mode: String? = null,
+        val firstMessage: ChatDraft? = null) : SosAttempt {
         override fun matches(incident: Incident) = incident.eventId == eventId &&
             incident.clientRequestId == body.clientRequestId && incident.zoneId == body.zoneId &&
             incident.locationText == body.locationText

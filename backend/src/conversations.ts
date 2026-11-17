@@ -66,6 +66,16 @@ function view(db: Db, row: ConversationRow) {
   };
 }
 
+export function conversationView(db: Db, id: string) {
+  const row = find(db, id);
+  return row ? { conversation: view(db, row) } : {};
+}
+
+export function discardChatWork(db: Db, id: string, now: number) {
+  db.prepare(`UPDATE incident_chat_ai_runs SET status = 'DISCARDED', reason = 'CONTROL_CHANGED', finished_at = ?
+    WHERE incident_id = ? AND status = 'QUEUED'`).run(now, id);
+}
+
 function scope(db: Db, session: Session, id: string, eventId?: string) {
   if (eventId !== undefined) requireMembership(db, session, eventId);
   const row = find(db, id);

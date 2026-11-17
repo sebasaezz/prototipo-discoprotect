@@ -125,6 +125,13 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       const { created, ...body } = sendMessage(db, current, id, undefined, parse(messageInput, request.body));
       return reply.code(created ? 201 : 200).send(body);
     });
+    api.post(`${incidentPath}/conversation/messages`, async (request, reply) => {
+      const current = session(request);
+      requireRole(current, 'STAFF');
+      const { id, eventId } = parse(incidentParams, request.params);
+      const { created, ...body } = sendMessage(db, current, id, eventId, parse(messageInput, request.body));
+      return reply.code(created ? 201 : 200).send(body);
+    });
     api.get(incidentPath, async request => {
       const current = session(request);
       if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');

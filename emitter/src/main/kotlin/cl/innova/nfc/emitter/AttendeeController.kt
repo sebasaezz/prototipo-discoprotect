@@ -3,6 +3,7 @@ package cl.innova.nfc.emitter
 import cl.discoprotect.ui.SosReason
 
 import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.ChatDraft
 import cl.discoprotect.ui.IncidentStatus
 import cl.discoprotect.ui.currentIncidentSnapshot
 import cl.discoprotect.ui.incidentPollDelay
@@ -286,6 +287,37 @@ internal class AttendeeController(
         submitSos(SosAttempt.Create(requireNotNull(form.event).id, body))
     }
 
+    fun sendHelp(text: String? = null) {
+        val form = ui.sos
+        val event = form.event ?: return
+        if (!canEditSos() || text != null && (text.isBlank() || text.length > 500)) return
+        val body = SosRequest(UUID.randomUUID().toString(), form.zoneId, form.reference.trim().ifEmpty { null }, form.reasonCode)
+        val first = text?.let { ChatDraft.create(it) }
+        submitSos(SosAttempt.Create(event.id, body, if (first == null) "SOS" else "CHAT", first))
+    }
+
+    suspend fun conversation(id: String, after: Long) = chatRequest(id) { remote, active ->
+        remote.conversation(active, id, after)
+    }
+
+    suspend fun message(id: String, draft: ChatDraft) = chatRequest(id) { remote, active ->
+        remote.message(active, id, draft)
+    }
+
+    private suspend fun <T> chatRequest(id: String, request: suspend (AttendeeApi, AttendeeSession) -> T): T {
+        val remote = api ?: throw AttendeeFailure(FailureKind.Offline)
+        val active = validSession() ?: throw AttendeeFailure(FailureKind.Expired)
+        val eventId = ui.sos.event?.id
+        if (ui.section != Section.Sos || ui.sos.incidents?.none { it.id == id && it.eventId == eventId } != false) {
+            throw CancellationException()
+        }
+        return request(remote, active).also {
+            if (session !== active || api !== remote || ui.section != Section.Sos || ui.sos.event?.id != eventId) {
+                throw CancellationException()
+            }
+        }
+    }
+
     fun cancelSos(id: String) {
         if (!canEditSos() || !ui.sos.historyFresh) return
         val incident = ui.sos.incidents?.firstOrNull { it.id == id && it.status == IncidentStatus.OPEN } ?: return
@@ -396,7 +428,7 @@ internal class AttendeeController(
             val retrying = pendingSos[owner] != null
             var sending = false
             try {
-                if (!retrying) remote.health()
+                if (!retrying && (attempt !is SosAttempt.Create || attempt.mode == null)) remote.health()
                 current()
                 pendingSos[owner] = attempt
                 updateSos(ui.sos.copy(pending = attempt, receipt = null))

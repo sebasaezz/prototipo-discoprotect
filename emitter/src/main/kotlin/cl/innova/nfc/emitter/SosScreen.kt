@@ -18,8 +18,8 @@ import kotlinx.coroutines.launch
 
 @Composable
 internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
-    Heading("SOS", "Pide ayuda al personal del evento.")
-    Text("Demostración académica. Esta app no contacta a los servicios públicos de emergencia.")
+    Heading("Chat de ayuda", "Pide ayuda al personal del evento.")
+    Text("Demostración académica. Usa solo casos ficticios.")
     val person = state.person
     if (person == null) {
         Status("Verifica tu cuenta para enviar y consultar solicitudes.", Tone.Info)
@@ -34,6 +34,14 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
     val event = sos.event
     var confirmSend by remember(person.id, event?.id, sos.zoneId, sos.reference, sos.reasonCode, sos.description) { mutableStateOf(false) }
     var confirmCancel by remember(person.id, event?.id) { mutableStateOf<String?>(null) }
+    var chatId by remember(person.id, event?.id) { mutableStateOf<String?>(null) }
+    var report by remember(person.id, event?.id) { mutableStateOf("") }
+    LaunchedEffect(sos.receipt) {
+        if (sos.incidents.orEmpty().any { it.id == sos.receipt && it.hasConversation }) {
+            chatId = sos.receipt
+            report = ""
+        }
+    }
     Field("Cuenta activa", person.name)
 
     if (sos.events.isEmpty()) {
@@ -50,6 +58,22 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
     }
 
     if (event != null) {
+        val currentChat = sos.incidents?.firstOrNull { it.id == chatId && it.hasConversation }
+        if (currentChat != null) {
+            Field("Solicitud recibida", "${currentChat.id} · ${incidentTime(currentChat.createdAt)}")
+            Status(currentChat.status.label, currentChat.status.tone)
+            key(person.id, event.id, currentChat.id) {
+                IncidentChat(currentChat.id, attendee = true,
+                    load = { actions.conversation(currentChat.id, it) }, send = { actions.message(currentChat.id, it) })
+            }
+            TextButton(onClick = { chatId = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Otra solicitud") }
+        } else {
+            OutlinedTextField(report, { if (it.length <= 500) report = it }, enabled = editable,
+                label = { Text("¿Qué ocurre?") }, supportingText = { Text("Si puedes, indica dónde estás. ${report.length}/500") },
+                maxLines = 5, modifier = Modifier.fillMaxWidth())
+            Button(onClick = { actions.sendHelp(report) }, enabled = editable && report.isNotBlank(),
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("Enviar solicitud") }
+        }
         sos.zones?.let { zones ->
             val selected = if (!sos.locationChosen) "Seleccionar zona"
                 else zones.firstOrNull { it.id == sos.zoneId }?.name ?: "No sé dónde estoy"
@@ -75,16 +99,10 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
                     }, modifier = Modifier.heightIn(min = 48.dp))
                 }
             }
-            OutlinedTextField(
-                value = sos.description, onValueChange = actions::updateSosDescription,
-                label = { Text("Descripción (opcional)") }, enabled = editable,
-                supportingText = { Text("Describe qué ocurre. Evita nombres, teléfonos y otros datos personales. ${sos.description.length}/280") },
-                maxLines = 5, modifier = Modifier.fillMaxWidth(),
-            )
         }
-        if (editable && sos.canSend) {
+        if (editable) {
             key(person.id, event.id, sos.zoneId, sos.reference, sos.reasonCode, sos.description) {
-                HoldSosButton(actions::sendSos) { confirmSend = true }
+                HoldSosButton({ actions.sendHelp() }) { confirmSend = true }
             }
             TextButton(onClick = { confirmSend = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text("Solicitar con diálogo de confirmación")
@@ -129,6 +147,10 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
         if (incidents.isEmpty()) Text("No tienes solicitudes registradas en este evento.")
         incidents.forEach { incident ->
             IncidentCard(incident) {
+                if (incident.hasConversation && incident.id != chatId) {
+                    TextButton(onClick = { chatId = incident.id },
+                        modifier = Modifier.heightIn(min = 48.dp)) { Text("Abrir conversación") }
+                }
                 if (incident.status == IncidentStatus.OPEN) {
                     TextButton(onClick = { confirmCancel = incident.id }, enabled = editable && sos.historyFresh,
                         modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancelar solicitud") }
@@ -137,11 +159,11 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
         }
     }
 
-    if (confirmSend && editable && sos.canSend) {
+    if (confirmSend && editable && event != null) {
         SosConfirmation("¿Enviar SOS?", "Se enviará tu solicitud al personal de ${event?.name}.",
             "Enviar SOS", dismiss = { confirmSend = false }, accept = {
                 confirmSend = false
-                actions.sendSos()
+                actions.sendHelp()
             })
     }
     confirmCancel?.takeIf { id ->

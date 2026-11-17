@@ -50,6 +50,7 @@ internal data class Incident(
     val reasonCode: SosReason? = null,
     val dangerAlert: SosReason? = null,
     val triage: IncidentTriage? = null,
+    val hasConversation: Boolean = false,
 ) {
     fun validFor(event: String): Boolean = eventId == event && isIncidentUuid(id) &&
         requesterName.isNotBlank() && (zoneId == null) == (zoneName == null) &&

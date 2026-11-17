@@ -33,6 +33,7 @@ internal fun ReaderScreen(state: ReaderUiState, nfc: NfcAvailability, actions: R
 @Composable
 private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     var confirmation by remember(state.event?.id, state.staffId) { mutableStateOf<Pair<Incident, IncidentAction>?>(null) }
+    var chatId by remember(state.event?.id, state.staffId) { mutableStateOf<String?>(null) }
     var note by remember(confirmation) { mutableStateOf("") }
     Heading("Incidentes", "Solicitudes SOS registradas en el evento.")
     state.staffName?.let { Field("Cuenta activa", it) }
@@ -88,7 +89,18 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
                             if (action == IncidentAction.Start) actions.operateIncident(incident.id, incident.version, action)
                             else confirmation = incident to action
                         }, enabled = state.incidentsCurrent && !state.pendingIncident,
-                            modifier = Modifier.heightIn(min = 48.dp)) { Text(action.label) }
+                            modifier = Modifier.heightIn(min = 48.dp)) {
+                            Text(if (action == IncidentAction.Claim && incident.hasConversation) "Asumir conversación" else action.label)
+                        }
+                    }
+                    if (incident.hasConversation) {
+                        val open = chatId == incident.id
+                        TextButton(onClick = { chatId = if (open) null else incident.id },
+                            modifier = Modifier.heightIn(min = 48.dp)) { Text(if (open) "Cerrar conversación" else "Ver conversación") }
+                        if (open) key(state.staffId, state.event?.id, incident.id) {
+                            IncidentChat(incident.id, attendee = false, staffId = state.staffId,
+                                load = { actions.conversation(incident.id, it) }, send = { actions.message(incident.id, it) })
+                        }
                     }
                     if (incident.triage != null) {
                         if (state.triageId == incident.id) {
@@ -112,7 +124,9 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
                     if (!valid) Text("La solicitud cambió o requiere una consulta vigente.")
-                    else if (action == IncidentAction.Claim) Text("Quedarás a cargo de la atención de este SOS.")
+                    else if (action == IncidentAction.Claim) Text(
+                        if (incident.hasConversation) "El caso quedará asignado a tu cuenta y podrás responder en el chat."
+                        else "Quedarás a cargo de la atención de este SOS.")
                     else OutlinedTextField(note, { if (it.length <= 240) note = it },
                         label = { Text("Nota de cierre (opcional)") }, supportingText = { Text("${note.length}/240") })
                 }

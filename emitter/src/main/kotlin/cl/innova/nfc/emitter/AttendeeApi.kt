@@ -1,9 +1,7 @@
 package cl.innova.nfc.emitter
 
 import cl.innova.nfc.protocol.NfcId
-import cl.discoprotect.ui.Incident
-import cl.discoprotect.ui.IncidentList
-import cl.discoprotect.ui.isIncidentUuid
+import cl.discoprotect.ui.*
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.URI
@@ -61,6 +59,12 @@ internal enum class DemoAccount(val key: String, val label: String) {
 
 internal class AttendeeSession(val token: String, val expiresAt: Instant, val person: Person, val nfcId: NfcId)
 
+@Serializable private data class HelpBody(
+    val clientRequestId: String, val zoneId: String?, val locationText: String?,
+    val reasonCode: SosReason?, val mode: String, val firstMessage: ChatDraft? = null,
+)
+@Serializable private data class HelpReceipt(val incident: Incident, val conversation: ChatState, val message: ChatMessage?)
+
 internal interface AttendeeApi {
     suspend fun health()
     suspend fun login(account: DemoAccount, onCredential: () -> Unit = {}): AttendeeSession
@@ -74,6 +78,10 @@ internal interface AttendeeApi {
     suspend fun incidents(session: AttendeeSession, eventId: String): List<Incident>
     suspend fun createSos(session: AttendeeSession, attempt: SosAttempt.Create): Incident
     suspend fun cancelSos(session: AttendeeSession, attempt: SosAttempt.Cancel): Incident
+    suspend fun conversation(session: AttendeeSession, id: String, after: Long): ChatPage =
+        throw AttendeeFailure(FailureKind.Response)
+    suspend fun message(session: AttendeeSession, id: String, draft: ChatDraft): ChatWrite =
+        throw AttendeeFailure(FailureKind.Response)
 }
 
 internal class HttpAttendeeApi(
@@ -155,10 +163,43 @@ internal class HttpAttendeeApi(
         }
     }
 
-    override suspend fun createSos(session: AttendeeSession, attempt: SosAttempt.Create): Incident =
-        exchange<Incident>(Request.Builder().url(sosEventEndpoint(attempt.eventId, "incidents"))
-            .post(json.encodeToString(attempt.body).toRequestBody(jsonMedia)), session.token)
-            .validated(session, attempt.eventId).also { checkReply(attempt.matches(it)) }
+    override suspend fun createSos(session: AttendeeSession, attempt: SosAttempt.Create): Incident {
+        val body = attempt.body
+        val mode = attempt.mode
+        val payload = if (mode == null) json.encodeToString(body) else json.encodeToString(HelpBody(
+            body.clientRequestId, body.zoneId, body.locationText, body.reasonCode, mode, attempt.firstMessage,
+        ))
+        val request = Request.Builder().url(sosEventEndpoint(attempt.eventId, "incidents")).post(payload.toRequestBody(jsonMedia))
+        val incident = if (mode == null) exchange<Incident>(request, session.token) else {
+            val receipt = exchange<HelpReceipt>(request, session.token)
+            val first = attempt.firstMessage
+            val matched = if (first == null) receipt.message == null else receipt.message?.let {
+                ChatWrite(it, receipt.conversation).valid(receipt.incident.id, first, ChatAuthorType.ATTENDEE) && it.seq == 1L
+            } == true
+            checkReply(receipt.incident.hasConversation && receipt.conversation.incidentId == receipt.incident.id && matched)
+            receipt.incident
+        }
+        return incident.validated(session, attempt.eventId).also { checkReply(attempt.matches(it)) }
+    }
+
+    override suspend fun conversation(session: AttendeeSession, id: String, after: Long): ChatPage {
+        checkReply(isIncidentUuid(id), FailureKind.Invalid)
+        val url = endpoint("me/incidents/$id/conversation").newBuilder().addQueryParameter("afterSeq", after.toString()).build()
+        return exchange<ChatPage>(Request.Builder().url(url), session.token).also { checkReply(it.valid(id, after)) }
+    }
+
+    override suspend fun message(session: AttendeeSession, id: String, draft: ChatDraft): ChatWrite {
+        checkReply(isIncidentUuid(id), FailureKind.Invalid)
+        return try {
+            send<ChatWrite>("POST", "me/incidents/$id/conversation/messages", session.token, json.encodeToString(draft))
+                .also { checkReply(it.valid(id, draft, ChatAuthorType.ATTENDEE)) }
+        } catch (failure: AttendeeFailure) {
+            if (failure.kind in setOf(FailureKind.Conflict, FailureKind.Forbidden, FailureKind.Invalid, FailureKind.Missing)) {
+                throw ChatRejected()
+            }
+            throw failure
+        }
+    }
 
     override suspend fun cancelSos(session: AttendeeSession, attempt: SosAttempt.Cancel): Incident {
         checkReply(isIncidentUuid(attempt.id), FailureKind.Invalid)

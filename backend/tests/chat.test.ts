@@ -121,3 +121,44 @@ test('chat Responses transport sends low reasoning and strict structure using fa
   const provider = openAiChat('gpt-6.1-sol', 'only-fictitious', send);
   assert.deepEqual(await provider({ messages: [], zones: [], allowReply: true }, AbortSignal.timeout(1000)), { status: 'completed' });
 });
+
+test('claim changes chat control atomically and drops in-flight AI while preserving H6 start', async t => {
+  const { app, create, login, db } = await fixture(t);
+  const staff = await login('guardia', pins.STAFF);
+  const other = await login('guardia2', pins.STAFF_2);
+  const incident = await create('Está sentada cerca de la salida.');
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const worker = createChatWorker(db, { ...options, provider: async input => {
+    await gate;
+    return output(input, '¿En qué salida estás?');
+  } });
+  const processing = worker.tick();
+  const path = queue + '/' + incident.id;
+  const write = (headers: typeof staff, payload: ReturnType<typeof command>) =>
+    app.inject({ method: 'POST', url: path + '/conversation/messages', headers, payload });
+  assert.equal((await write(staff, command('Indica tu ubicación.'))).statusCode, 403);
+  const commands = [staff, other].map(headers => ({ headers, payload: { version: 1, operationId: randomUUID() } }));
+  const claim = (body: typeof commands[number]) => app.inject({ method: 'POST', url: path + '/claim', ...body });
+  const results = await Promise.all(commands.map(claim));
+  assert.deepEqual(results.map(result => result.statusCode).sort(), [200, 409]);
+  const winner = results.findIndex(result => result.statusCode === 200);
+  assert.equal(results[winner].json().conversation.control, 'STAFF');
+  assert.equal(results[winner].json().incident.startedAt, null);
+  release();
+  await processing;
+  assert.equal((await incident.page()).messages.length, 1);
+  const message = command('¿Puedes indicar la salida más cercana?');
+  assert.equal((await write(commands[1 - winner].headers, message)).statusCode, 403);
+  assert.equal((await write(commands[winner].headers, message)).statusCode, 201);
+  assert.equal((await write(commands[winner].headers, message)).statusCode, 200);
+  assert.equal((await incident.send('Cerca de la puerta principal.')).statusCode, 201);
+  assert.equal((await incident.page()).messages[1].author.type, 'STAFF');
+  assert.equal(db.prepare("SELECT count(*) AS n FROM incident_chat_ai_runs WHERE status = 'QUEUED'").get()?.n, 0);
+  const start = await app.inject({ method: 'POST', url: path + '/start', headers: commands[winner].headers,
+    payload: { version: 2, operationId: randomUUID() } });
+  assert.equal(start.statusCode, 200, start.body);
+  const retry = (await claim(commands[winner])).json();
+  assert.equal(retry.operation.replayed, true);
+  assert.equal(retry.incident.status, 'IN_PROGRESS');
+});

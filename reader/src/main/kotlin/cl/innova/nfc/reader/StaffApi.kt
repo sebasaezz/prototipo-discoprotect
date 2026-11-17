@@ -1,14 +1,6 @@
 package cl.innova.nfc.reader
 
-import cl.discoprotect.ui.Incident
-import cl.discoprotect.ui.IncidentList
-import cl.discoprotect.ui.IncidentStatus
-import cl.discoprotect.ui.IncidentTriage
-import cl.discoprotect.ui.ReviewDecision
-import cl.discoprotect.ui.TriageCategory
-import cl.discoprotect.ui.TriageReview
-import cl.discoprotect.ui.TriageUrgency
-import cl.discoprotect.ui.isIncidentUuid
+import cl.discoprotect.ui.*
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.URI
@@ -80,6 +72,10 @@ internal interface StaffApi {
     suspend fun triage(session: StaffSession, event: StaffEvent, id: String): TriageDetail
     suspend fun review(session: StaffSession, event: StaffEvent, id: String, body: ReviewBody): ReviewReply
     suspend fun resolve(session: StaffSession, event: StaffEvent, token: String): HealthProfile
+    suspend fun conversation(session: StaffSession, event: StaffEvent, id: String, after: Long): ChatPage =
+        throw ApiFailure(ApiProblem.InvalidResponse)
+    suspend fun message(session: StaffSession, event: StaffEvent, id: String, draft: ChatDraft): ChatWrite =
+        throw ApiFailure(ApiProblem.InvalidResponse)
 }
 
 internal class HttpStaffApi(private val address: HttpUrl, private val client: OkHttpClient) : StaffApi {
@@ -142,6 +138,26 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
         requireReply(isIncidentUuid(id), ApiProblem.InvalidInput)
         return incidentUrl(event).addPathSegment(id).addPathSegment("triage")
     }
+
+    private fun conversationUrl(event: StaffEvent, id: String): HttpUrl.Builder {
+        requireReply(isIncidentUuid(id), ApiProblem.InvalidInput)
+        return incidentUrl(event).addPathSegment(id).addPathSegment("conversation")
+    }
+
+    override suspend fun conversation(session: StaffSession, event: StaffEvent, id: String, after: Long): ChatPage =
+        exchange<ChatPage>(conversationUrl(event, id).addQueryParameter("afterSeq", after.toString()).build(), session)
+            .also { requireReply(it.valid(id, after)) }
+
+    override suspend fun message(session: StaffSession, event: StaffEvent, id: String, draft: ChatDraft): ChatWrite =
+        try {
+            exchange<ChatWrite>(conversationUrl(event, id).addPathSegment("messages").build(), session, json.encodeToString(draft))
+                .also { requireReply(it.valid(id, draft, ChatAuthorType.STAFF)) }
+        } catch (failure: ApiFailure) {
+            if (failure.problem in setOf(ApiProblem.Conflict, ApiProblem.Forbidden, ApiProblem.NotFound, ApiProblem.InvalidInput)) {
+                throw ChatRejected()
+            }
+            throw failure
+        }
 
     override suspend fun triage(session: StaffSession, event: StaffEvent, id: String): TriageDetail =
         exchange<TriageDetail>(triageUrl(event, id).build(), session).also {
