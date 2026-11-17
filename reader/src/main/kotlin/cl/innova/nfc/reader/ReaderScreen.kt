@@ -45,7 +45,7 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     }
     var note by remember(confirmation) { mutableStateOf("") }
     if (selected != null && chatVisible) {
-        Heading("Conversaci髇", selected.requesterName)
+        Heading("Conversaci贸n", selected.requesterName)
         TextButton(onClick = { chatVisible = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a los detalles") }
         key(state.staffId, state.event?.id, selected.id) {
             IncidentChat(selected.id, attendee = false, outbox = actions.chatOutbox, staffId = state.staffId,
@@ -57,9 +57,9 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
         Heading("Incidentes", "Solicitudes SOS registradas en el evento.")
         state.staffName?.let { Field("Cuenta activa", it) }
         EventSelector(state, actions::selectEvent)
-        Heading("Mi atenci髇 activa", if (state.guardBusy) "Tienes una solicitud asignada." else "Sin solicitudes asignadas.")
+        Heading("Mi atenci贸n activa", if (state.guardBusy) "Tienes una solicitud asignada." else "Sin solicitudes asignadas.")
         state.activeIncident?.let { own ->
-            QueueCard(own, if (own.eventId == state.event?.id) "Abrir mi atenci髇" else "Ir al evento de mi atenci髇") {
+            QueueCard(own, if (own.eventId == state.event?.id) "Abrir mi atenci贸n" else "Ir al evento de mi atenci贸n") {
                 if (own.eventId == state.event?.id) selectedId = own.id else actions.selectEvent(own.eventId)
             }
         }
@@ -91,10 +91,10 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     }
     if (selected == null) {
         TextButton(onClick = actions::continueReading, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ir al lector NFC") }
-        TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) { Text("Configuraci髇 y evento") }
+        TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) { Text("Configuraci贸n y evento") }
         state.incidents?.let { incidents ->
             val (active, history) = incidents.partition { it.status.active }
-            Heading("Cola del evento", if (state.guardBusy) "Puedes consultar otros casos mientras est醩 ocupado." else "Solicitudes activas.")
+            Heading("Cola del evento", if (state.guardBusy) "Puedes consultar otros casos mientras est谩s ocupado." else "Solicitudes activas.")
             val others = active.filterNot { it.id == state.activeIncident?.id }
             if (others.isEmpty()) Text("No hay otras solicitudes activas.")
             others.forEach { incident -> QueueCard(incident, "Ver detalles") { selectedId = incident.id } }
@@ -109,7 +109,7 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
             selected.dangerAlert?.alert?.let { Status(it, Tone.Warning) }
             if (selected.hasConversation) {
                 Button(onClick = { chatVisible = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text("Abrir conversaci髇")
+                    Text("Abrir conversaci贸n")
                 }
             }
             listOf(IncidentAction.Claim, IncidentAction.Start, IncidentAction.Close).filter { state.permits(selected, it) }.forEach { action ->
@@ -118,7 +118,7 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
                     else confirmation = selected to action
                 }, enabled = state.incidentsCurrent && !state.pendingIncident,
                     modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text(if (action == IncidentAction.Claim && selected.hasConversation) "Asumir conversaci髇" else action.label)
+                    Text(if (action == IncidentAction.Claim && selected.hasConversation) "Asumir conversaci贸n" else action.label)
                 }
             }
         }
@@ -134,7 +134,11 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
         val valid = state.incidentsCurrent && !state.pendingIncident &&
             state.incidents?.any { it.id == incident.id && it.version == incident.version && state.permits(it, action) } == true
         AlertDialog(onDismissRequest = { confirmation = null },
-            title = { Text(if (action == IncidentAction.Claim) "驴Asumir esta solicitud?" else "驴Resolver esta solicitud?") },
+            title = { Text(when (action) {
+                IncidentAction.Claim -> "驴Asumir esta solicitud?"
+                IncidentAction.Close -> "驴Cerrar esta solicitud?"
+                else -> "驴Resolver esta solicitud?"
+            }) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
                     if (!valid) Text("La solicitud cambi贸 o requiere una consulta vigente.")
@@ -165,7 +169,7 @@ private fun QueueCard(incident: Incident, label: String, open: () -> Unit) {
             incident.dispatch?.let {
                 DispatchBadge(it)
                 Text(it.displayedLocation())
-                if (incident.status.active) Text("${it.elapsedSeconds / 60} min ${it.elapsedSeconds % 60} s desde la emisi髇")
+                if (incident.status.active) Text("${it.elapsedSeconds / 60} min ${it.elapsedSeconds % 60} s desde la emisi贸n")
             }
             TextButton(onClick = open, modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
         }
