@@ -1,6 +1,6 @@
 # API REST v1
 
-Contrato vigente hasta H7.3. Para el recorrido por pantallas, consulta el [flujo actual](current-workflow.md).
+Contrato vigente hasta H8.2. Para el recorrido por pantallas, consulta el [flujo actual](current-workflow.md).
 
 Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token>`. Envía `Content-Type: application/json` para cuerpos JSON. Los nombres de campos son estables y los tiempos son ISO 8601 UTC.
 
@@ -17,7 +17,12 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 | `DELETE /me/contacts/:id` | `{version}` | 200 `{cardVersion}`. Asistente y contacto propio. |
 | `GET /me/nfc-credential` | — | 200 `{id,token,active,createdAt}`. Asistente. |
 | `GET /events` | — | 200 `{events}`. Devuelve las membresías de la cuenta. |
-| `GET /events/:eventId/zones` | — | 200 `{zones:[{id,name}]}`. Membresía en el evento. |
+| `GET /events/:eventId/zones` | — | 200 `{zones:[{id,name}]}` de zonas activas. Membresía en el evento. |
+| `GET /events/:eventId/venue` | — | 200 configuración del recinto. Guardia u organizador miembro. |
+| `POST /events/:eventId/zones` | Campos y versión según Recinto y zonas. | 201 `{zone,version}`. Organizador miembro. |
+| `PATCH /events/:eventId/zones/:zoneId` | Mismos campos que POST. | 200 `{zone,version}`. Organizador miembro. |
+| `POST /events/:eventId/operational-points` | Campos y versión según Recinto y zonas. | 201 `{point,version}`. Organizador miembro. |
+| `PATCH /events/:eventId/operational-points/:pointId` | Mismos campos que POST. | 200 `{point,version}`. Organizador miembro. |
 | `POST /events/:eventId/incidents` | UUID de cliente y modalidad según [creación y conversación](#creación-y-conversación). | 201 creado o 200 en reenvío equivalente. Asistente miembro. |
 | `GET /me/incidents?eventId=…` | — | 200 `{incidents}`. Solicitudes propias del asistente miembro. |
 | `GET /me/incidents/:id` | — | 200 incidente propio. Asistente titular y miembro. |
@@ -31,7 +36,7 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 | `POST /events/:eventId/incidents/:id/resolve` | `{version,operationId,resolutionNote?}` | 200 `{operation,incident}`. Guardia asignado con membresía. `IN_PROGRESS → RESOLVED`. |
 | `POST /events/:eventId/incidents/:id/close` | `{version,operationId,resolutionNote}` | 200 `{operation,incident}`. Guardia asignado con membresía. `ASSIGNED` o `IN_PROGRESS → CLOSED`. |
 | `POST /events/:eventId/incidents/:id/withdraw` | `{version,operationId,resolutionNote}` | 200 `{operation,incident}`. Organizador miembro. Cualquier activo pasa a `WITHDRAWN`. |
-| `PATCH /events/:eventId` | `{name,venue}` | 200 evento modificado. Organizador miembro del evento. |
+| `PATCH /events/:eventId` | `{name,venue,version,description,accessNotes,responseNotes}` o cuerpo histórico `{name,venue}`. | 200 evento modificado. La forma versionada agrega `version`. Organizador miembro del evento. |
 | `POST /nfc/resolve` | `{token,eventId}` | 200 `{person,card,contacts}`. Rol `STAFF` con membresía de guardia en el evento solicitado. La credencial corresponde a un `ATTENDEE` de ese evento. |
 
 - Persona `{id,account,name,age,createdAt,updatedAt}`. Edad en años o `null`.
@@ -106,3 +111,12 @@ El retiro administrativo usa `/withdraw` y conserva incidente, chat y auditoría
 | `POST /events/:eventId/incidents/demo-purge` | `{incidentId?,operationId,selectionHash,confirmation:"ELIMINAR"}`. | 200 `{count,backupName,backupSha256,replayed}`. Una selección vacía u obsoleta devuelve `PURGE_SELECTION_CHANGED`. |
 
 Fastify verifica el respaldo antes de borrar y conserva la auditoría de purga. El UUID de operación permite recuperar el recibo. El reenvío de la creación original devuelve `REQUEST_PURGED` por su tombstone. [Flujo de administración](current-workflow.md#5-administración-de-incidentes)
+
+## Recinto y zonas
+
+- `GET /events/:eventId/venue` devuelve `{eventId,venue,zones,points}`. Para `ORGANIZER` agrega la versión y devuelve también registros inactivos. Para `STAFF` devuelve zonas activas y puntos activos en zonas activas. `ATTENDEE` recibe 403 en esta ruta y conserva el catálogo básico de zonas activas.
+- `venue` contiene `{name,venue,description,accessNotes,responseNotes}`. Nombre de evento y recinto admiten hasta 160 caracteres. Descripción admite hasta 600 y las dos referencias hasta 300 cada una. Los tres campos operativos admiten `null`.
+- Zona `{id,name,kind,description,reference,active}`. El cuerpo de escritura omite el ID y agrega `version`. `kind` admite `STAGE`, `FLOOR`, `ACCESS`, `STANDS`, `SERVICES` u `OTHER`. Nombre obligatorio de hasta 160 caracteres, descripción de hasta 240 y referencia de hasta 160. Descripción y referencia admiten `null`.
+- Punto `{id,name,kind,zoneId,zoneName,reference,active}`. El cuerpo de escritura omite el ID y `zoneName` y agrega `version`. `kind` admite `MEDICAL`, `SECURITY`, `ENTRANCE`, `EXIT` o `MEETING`. Nombre y referencia obligatorios de hasta 160 caracteres. La zona asociada debe pertenecer al mismo evento.
+- La versión corresponde al conjunto de configuración. Una escritura exitosa la incrementa en uno y registra entidad, acción, autor y fecha. Una versión obsoleta devuelve 409 `VENUE_CONFLICT` con `details.currentVersion`. El cuerpo histórico de edición de evento actualiza solo nombre y recinto y también incrementa la versión.
+- Desactivar preserva el ID y las referencias históricas. Crear una solicitud con una zona inactiva devuelve 400 `INVALID_INPUT`. Una repetición exacta de una creación ya confirmada sigue devolviendo su recibo. Los puntos de una zona desactivada quedan fuera de las vistas operativas hasta que la zona se reactive.

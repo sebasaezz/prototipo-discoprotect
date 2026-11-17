@@ -105,9 +105,9 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
   const assessmentRow = db.prepare(`SELECT danger_assessment AS value FROM incident_dispatch_reviews
     WHERE incident_id = ? AND danger_assessment <> 'UNCHANGED' ORDER BY revision DESC LIMIT 1`).get(source.id);
   const danger = (assessmentRow?.value ?? 'UNCHANGED') as Assessment;
-  const results = db.prepare(`SELECT input_seq AS seq, result_json AS json, finished_at AS finishedAt
+  const results = db.prepare(`SELECT input_seq AS seq, result_json AS json, finished_at AS finishedAt, inferred_zone_name AS zoneName
     FROM incident_chat_ai_runs WHERE incident_id = ? AND status = 'COMPLETE' ORDER BY input_seq`).all(source.id) as
-    { seq: number; json: string; finishedAt: number }[];
+    { seq: number; json: string; finishedAt: number; zoneName: string | null }[];
   const analyses = results.map(result => ({ ...result, analysis: JSON.parse(result.json) as Analysis }));
   const latest = analyses.at(-1);
   const analysis = latest?.analysis ?? null;
@@ -121,12 +121,10 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
   const { effectivePriority, prioritySource, priorityReasons } = evaluatePriority(
     { ...source, elapsedSeconds }, humanPriority, latestAiPriority, Boolean(evidence), danger, policy,
   );
-  const inferredZone = analysis?.zoneId ? db.prepare('SELECT name FROM zones WHERE event_id = ? AND id = ?')
-    .get(source.eventId, analysis.zoneId) : undefined;
   const declared = source.zoneName || source.locationText || analysis?.location
     ? { zoneId: source.zoneId, zoneName: source.zoneName, text: source.locationText ?? analysis?.location?.quote ?? null } : null;
-  const inferred = inferredZone && analysis?.zoneId
-    ? { zoneId: analysis.zoneId, zoneName: String(inferredZone.name), text: null } : null;
+  const inferred = latest?.zoneName && analysis?.zoneId
+    ? { zoneId: analysis.zoneId, zoneName: latest.zoneName, text: null } : null;
   return {
     effectivePriority, prioritySource, priorityReasons, initialAiPriority, latestAiPriority, humanPriority,
     policyVersion: policy.version, evaluatedAt: new Date(now).toISOString(), elapsedSeconds,
@@ -162,7 +160,7 @@ export function dispatchAudit(db: Db, id: string, eventId: string, staff: boolea
     JOIN people p ON p.id = t.actor_person_id WHERE t.incident_id = ? ORDER BY t.applied_version`).all(id);
   return {
     reviews: history.map(reviewView), transitions,
-    ...(staff ? { zones: db.prepare('SELECT id, name FROM zones WHERE event_id = ? ORDER BY name, id').all(eventId) } : {}),
+    ...(staff ? { zones: db.prepare('SELECT id, name FROM zones WHERE event_id = ? AND active = 1 ORDER BY name, id').all(eventId) } : {}),
   };
 }
 

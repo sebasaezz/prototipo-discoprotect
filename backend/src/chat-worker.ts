@@ -1,4 +1,4 @@
-import { chatInput, chatPromptVersion, validateAnalysis, type ChatProvider } from './chat-analysis.js';
+import { chatInput, chatPromptVersion, validateAnalysis, venuePromptVersion, type ChatProvider } from './chat-analysis.js';
 import { append } from './conversations.js';
 import { atomic, type Db } from './db.js';
 import { reserveDailyCall } from './triage-worker.js';
@@ -37,8 +37,9 @@ export function createChatWorker(db: Db, options: Options, report: (event: objec
           WHERE incident_id = ? AND input_seq = ?`).run(reason, now, job.id, job.seq);
         return undefined;
       }
-      db.prepare(`UPDATE incident_chat_ai_runs SET status = 'RUNNING', reserved_at = ?, model = ?, prompt_version = ?
-        WHERE incident_id = ? AND input_seq = ?`).run(now, options.model, chatPromptVersion, job.id, job.seq);
+      db.prepare(`UPDATE incident_chat_ai_runs SET status = 'RUNNING', reserved_at = ?, model = ?, prompt_version = ?,
+        venue_revision = ? WHERE incident_id = ? AND input_seq = ?`).run(now, options.model,
+        input.venueContext ? venuePromptVersion : chatPromptVersion, input.venueContext?.revision ?? null, job.id, job.seq);
       return { job, input };
     });
   }
@@ -69,11 +70,12 @@ export function createChatWorker(db: Db, options: Options, report: (event: objec
       const message = accepted?.result.reply ? append(db, job.id, 'AI', null,
         { text: accepted.result.reply }, new Date(now).toISOString()) : null;
       const outcome = accepted && !message ? 'UNSAFE_REPLY' : reason;
-      db.prepare(`UPDATE incident_chat_ai_runs SET status = ?, reason = ?, result_json = ?, message_seq = ?,
+      const inferredZoneName = input.zones.find(zone => zone.id === accepted?.result.zoneId)?.name ?? null;
+      db.prepare(`UPDATE incident_chat_ai_runs SET status = ?, reason = ?, result_json = ?, message_seq = ?, inferred_zone_name = ?,
         finished_at = ?, input_tokens = ?, output_tokens = ? WHERE incident_id = ? AND input_seq = ?`).run(
         accepted ? 'COMPLETE' : reason === 'STALE' ? 'DISCARDED' : 'MANUAL',
         outcome,
-        accepted ? JSON.stringify(accepted.result) : null, message?.seq ?? null, now,
+        accepted ? JSON.stringify(accepted.result) : null, message?.seq ?? null, inferredZoneName, now,
         analysis?.usage?.input_tokens ?? null, analysis?.usage?.output_tokens ?? null, job.id, job.seq);
       return outcome;
     });

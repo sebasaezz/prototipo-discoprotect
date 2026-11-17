@@ -347,6 +347,10 @@ internal class ReaderController(
         remote.dispatch(active, event, id)
     }
 
+    suspend fun venue(id: String) = chatRequest(id) { remote, active, event ->
+        remote.venue(active, event)
+    }
+
     suspend fun reviewDispatch(id: String, body: DispatchReviewBody) = chatRequest(id) { remote, active, event ->
         remote.reviewDispatch(active, event, id, body)
     }.also { refreshIncidents() }

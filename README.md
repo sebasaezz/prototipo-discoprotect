@@ -26,6 +26,8 @@ En otra terminal, desde `web/`, ejecuta `npm ci` y `npm run dev`. Abre `http://1
 
 El Dashboard usa las solicitudes del evento devueltas por Fastify y muestra cero cuando la cola activa está vacía. En **Incidentes** están la cola, el historial y las acciones de H7.3. [GestiónWeb H8.1](docs/current-workflow.md#gestiónweb-h81)
 
+H8.2 está en `codex/discoprotect-h8-2`, construida sobre el [PR #8 de H8.1](https://github.com/sebasaezz/prototipo-discoprotect/pull/8). En **Recinto y zonas** puedes editar el recinto, gestionar zonas y registrar puntos operativos. [Comprobación de H8.2](docs/current-workflow.md#recinto-y-zonas-h82)
+
 ### Android
 
 Para una LAN de desarrollo controlada, configura `HOST=0.0.0.0` en el backend y permite el puerto en el firewall de red privada. Desde la raíz compila ambos APK con `./gradlew.bat :emitter:assembleDebug :reader:assembleDebug` en Windows o `./gradlew :emitter:assembleDebug :reader:assembleDebug` en Linux o macOS. Usa `adb devices -l` y `adb -s <SERIAL> install -r <APK>` para instalarlos. En ambas apps configura `http://<IP-LAN-PC>:3000` y selecciona el mismo evento.

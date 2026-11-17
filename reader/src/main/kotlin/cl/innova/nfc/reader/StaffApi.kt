@@ -69,6 +69,19 @@ internal data class IncidentCommand(val incidentId: String, val action: Incident
 )
 @Serializable internal data class ReviewReply(val review: TriageReview, val triage: IncidentTriage, val replayed: Boolean)
 @Serializable internal data class DispatchZone(val id: String, val name: String)
+@Serializable internal data class VenueInfo(
+    val name: String, val venue: String, val description: String?, val accessNotes: String?, val responseNotes: String?,
+)
+@Serializable internal data class VenueZone(val id: String, val name: String, val description: String?, val reference: String?)
+@Serializable internal enum class PointKind(val label: String) {
+    MEDICAL("Puesto médico"), SECURITY("Puesto de seguridad"), ENTRANCE("Entrada"), EXIT("Salida"), MEETING("Punto de encuentro"),
+}
+@Serializable internal data class VenuePoint(
+    val name: String, val kind: PointKind, val zoneId: String, val zoneName: String, val reference: String,
+)
+@Serializable internal data class StaffVenue(
+    val eventId: String, val venue: VenueInfo, val zones: List<VenueZone>, val points: List<VenuePoint>,
+)
 @Serializable internal data class DispatchLocationInput(val zoneId: String?, val text: String?)
 @Serializable internal data class DispatchReviewBody(
     val expectedRevision: Long, val operationId: String, val humanPriority: DispatchPriority?,
@@ -97,6 +110,8 @@ internal interface StaffApi {
     suspend fun message(session: StaffSession, event: StaffEvent, id: String, draft: ChatDraft): ChatWrite =
         throw ApiFailure(ApiProblem.InvalidResponse)
     suspend fun dispatch(session: StaffSession, event: StaffEvent, id: String): DispatchDetail =
+        throw ApiFailure(ApiProblem.InvalidResponse)
+    suspend fun venue(session: StaffSession, event: StaffEvent): StaffVenue =
         throw ApiFailure(ApiProblem.InvalidResponse)
     suspend fun reviewDispatch(session: StaffSession, event: StaffEvent, id: String, body: DispatchReviewBody): DispatchReply =
         throw ApiFailure(ApiProblem.InvalidResponse)
@@ -138,11 +153,21 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
         }
     }
 
-    private fun incidentUrl(event: StaffEvent): HttpUrl.Builder {
+    private fun eventUrl(event: StaffEvent): HttpUrl.Builder {
         requireReply(event.id.isNotBlank() && event.id !in setOf(".", ".."))
         return address.newBuilder().addPathSegments("api/v1/events")
-            .addPathSegment(event.id).addPathSegment("incidents")
+            .addPathSegment(event.id)
     }
+
+    private fun incidentUrl(event: StaffEvent) = eventUrl(event).addPathSegment("incidents")
+
+    override suspend fun venue(session: StaffSession, event: StaffEvent): StaffVenue =
+        exchange<StaffVenue>(eventUrl(event).addPathSegment("venue").build(), session).also { context ->
+            val zoneIds = context.zones.map { it.id }.toSet()
+            requireReply(context.eventId == event.id && context.venue.venue.isNotBlank() &&
+                context.zones.all { it.id.isNotBlank() && it.name.isNotBlank() } &&
+                context.points.all { it.zoneId in zoneIds && it.name.isNotBlank() && it.reference.isNotBlank() })
+        }
 
     override suspend fun operate(session: StaffSession, event: StaffEvent, command: IncidentCommand): OperationReply {
         requireReply(isIncidentUuid(command.incidentId) && isIncidentUuid(command.body.operationId) && command.body.version > 0,

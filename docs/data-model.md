@@ -8,16 +8,18 @@ Los identificadores se tratan como cadenas opacas y los tiempos se guardan en UT
 | EmergencyCard | Una por persona, grupo sanguíneo declarado, listas JSON de alergias, condiciones y medicamentos, fecha de actualización y versión entera. |
 | EmergencyContact | Varios por ficha, con ID, nombre, relación y teléfono ficticio. |
 | NfcCredential | Una por asistente, 16 bytes únicos como BLOB, indicador activo y creación. El transporte HTTP usa hexadecimal. |
-| Event | ID, nombre, recinto, inicio, término y estado. El estado `ACTIVE` de la demo es explícito. |
+| Event | ID, nombre, recinto, inicio, término y estado. H8.2 agrega descripción, referencias de acceso y respuesta y versión de configuración. |
 | EventMembership | Una membresía por persona y evento. Roles `ATTENDEE`, `STAFF` y `ORGANIZER`. |
 | DemoSession | Hash SHA-256 de un token aleatorio, cuenta, rol y vencimiento. La base guarda el hash; el valor Bearer se entrega al crear la sesión. |
-| Zone | ID estable dentro del evento y nombre visible. El seed agrega cinco zonas para `demo-festival` y conserva las filas existentes. |
+| Zone | ID estable dentro del evento, nombre, función, descripción, referencia y estado activo. El seed agrega cinco zonas para `demo-festival` y conserva las filas existentes. |
+| OperationalPoint | ID estable dentro del evento, zona del mismo evento, nombre, tipo, referencia y estado activo. |
+| VenueConfigurationChange | Evento y revisión únicos, entidad, ID, acción, autor y fecha UTC registrados en la transacción de escritura. |
 | Incident | UUID, evento, solicitante, zona y referencia opcionales, UUID del cliente, estado, versión, guardia asignado y tiempos UTC. El motivo es obligatorio para cierre o retiro y opcional para resolución. |
 | IncidentTransition | Incidente, actor, estados anterior y nuevo, versión resultante y hora UTC. Las acciones versionadas del guardia y organizador agregan UUID de operación y huella del comando normalizado. |
 
 La ficha y sus contactos comparten una versión. Toda mutación exitosa aumenta esa versión y actualiza la fecha. La resolución NFC devuelve ambos en una sola lectura consistente. El seed provisiona seis cuentas y tres fichas ficticias. Las ejecuciones posteriores preservan las ediciones y eliminaciones de contactos de las fichas existentes. La restauración explícita recrea las cuentas, el evento demo y sus registros relacionados con cascada. La cuota diaria y las tablas separadas de purga se conservan.
 
-## Migraciones 001–008
+## Migraciones 001–009
 
 | Migración | Datos que agrega o cambia |
 | --- | --- |
@@ -29,6 +31,7 @@ La ficha y sus contactos comparten una versión. Toda mutación exitosa aumenta 
 | `006` | `incident_chat_ai_runs`, por incidente y secuencia del asistente, y alias de zonas. Persiste reservas, estados, resultados, vínculo al mensaje publicado y métricas. |
 | `007` | `incident_dispatch_reviews` con evaluación humana y motivo, y `dispatch_priority_policies` con versión y umbrales. |
 | `008` | Reconstruye `incidents` e `incident_transitions` para admitir los nuevos estados y transiciones. Agrega un índice único parcial para guardias activos y las tablas de auditoría de purga. |
+| `009` | Extiende eventos y zonas. Crea puntos operativos y auditoría versionada. Registra revisión del contexto de IA y copia el nombre de zona inferida de análisis anteriores según el catálogo al migrar. |
 
 La 008 comprueba si un guardia tiene más de un incidente en `ASSIGNED` o `IN_PROGRESS`. Si detecta duplicados, aborta con un error antes de reconstruir las tablas. Requiere regularizar esas asignaciones de forma explícita. Durante la reconstrucción, el migrador desactiva temporalmente el enforcement de claves foráneas para preservar filas dependientes, ejecuta `PRAGMA foreign_key_check` antes de confirmar y vuelve a activar la validación. [Preparación de una base anterior](current-workflow.md#7-despliegue-local)
 
@@ -37,6 +40,8 @@ La 008 comprueba si un guardia tiene más de un incidente en `ASSIGNED` o `IN_PR
 `incidents` conserva el UUID, estado y versión operativa. La clave `(requester_person_id, client_request_id)` es única entre eventos. El índice `incidents_one_active_per_guard` se aplica solo a `ASSIGNED` e `IN_PROGRESS`. Los estados terminales `RESOLVED`, `CANCELLED`, `CLOSED` y `WITHDRAWN` conservan asignación, inicio y motivo donde corresponda. Dejan de ocupar ese índice. Cada transición actualiza la versión y registra actor, estados y fecha en `incident_transitions` dentro del mismo commit.
 
 Cada chat conserva `last_seq` y `last_attendee_seq`. La secuencia y la clave de mensaje del cliente son únicas por conversación. Los mensajes de IA se enlazan con la fila del trabajo que los originó. Los turnos pueden quedar en cola, en ejecución, completados, en atención manual o descartados. Un análisis válido con respuesta descartada por seguridad puede conservarse sin un mensaje asociado. `triage_daily_usage` cuenta reservas por día UTC compartidas por ambas modalidades de IA. Los intentos se reservan antes de llamar al proveedor.
+
+Los turnos nuevos guardan el nombre de la zona de su catálogo de entrada si la inferencia se acepta. También guardan la revisión cuando reciben contexto ampliado. Una edición posterior del recinto o sus zonas se aplica a nuevas reservas. Conserva las citas y resultados JSON de análisis existentes.
 
 Las revisiones de triaje H7 y de despacho tienen versiones propias, actor y UUID de operación. Despacho conserva prioridad humana, ubicación confirmada, evaluación de peligro y motivo. La prioridad efectiva se calcula en lectura con el estado y el tiempo de espera vigentes. La evidencia crítica se recupera de un análisis corroborado anterior y puede seguir aplicando tras nuevas interpretaciones. [Reglas y transiciones](current-workflow.md)
 

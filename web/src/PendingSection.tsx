@@ -1,9 +1,8 @@
 import type { Section } from './organizerNavigation.js';
 
-type FutureSection = Exclude<Section, 'dashboard' | 'incidentes'>;
+type FutureSection = Exclude<Section, 'dashboard' | 'incidentes' | 'recinto'>;
 
 const descriptions: Record<FutureSection, string> = {
-  recinto: 'Aquí podrás configurar el recinto, sus zonas, accesos, puntos médicos y referencias para la atención.',
   personal: 'Aquí podrás gestionar los guardias autorizados para el evento.',
   estadisticas: 'Aquí podrás consultar métricas históricas y gráficos del evento autorizado.',
   anuncios: 'Aquí podrás gestionar los anuncios y promociones del evento.',

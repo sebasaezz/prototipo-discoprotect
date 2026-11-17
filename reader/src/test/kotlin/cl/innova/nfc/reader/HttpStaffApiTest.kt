@@ -43,6 +43,22 @@ class HttpStaffApiTest {
         fails(ApiProblem.Unavailable) { api.health() }
     }
 
+    @Test fun `venue uses the selected event bearer and rejects another event response`() = runBlocking {
+        val body = """{"eventId":"demo-festival","venue":{"name":"Festival Demo","venue":"Recinto ficticio",
+            "description":null,"accessNotes":null,"responseNotes":"Acceso norte"},
+            "zones":[{"id":"acceso","name":"Acceso","description":null,"reference":null}],
+            "points":[{"name":"Salida A","kind":"EXIT","zoneId":"acceso","zoneName":"Acceso","reference":"Portón norte"}]}"""
+        reply(body)
+        val context = api.venue(session, event)
+        assertEquals("Acceso norte", context.venue.responseNotes)
+        assertEquals(PointKind.EXIT, context.points.single().kind)
+        val sent = request()
+        assertEquals("GET /api/v1/events/demo-festival/venue HTTP/1.1", sent.requestLine)
+        assertEquals("Bearer $token", sent.getHeader("Authorization"))
+        reply(body.replace("demo-festival", "otro-evento"))
+        fails(ApiProblem.InvalidResponse) { api.venue(session, event) }
+    }
+
     @Test fun `closed server and response timeout are distinct`() = runBlocking {
         val closed = MockWebServer()
         closed.start(InetAddress.getLoopbackAddress(), 0)

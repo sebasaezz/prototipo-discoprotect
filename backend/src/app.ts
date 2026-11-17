@@ -11,6 +11,7 @@ import * as records from './records.js';
 import { triageDetail, reviewTriage } from './triage.js';
 import { reviewInput } from './triage-contract.js';
 import { previewPurge, purgeIncidents, purgeInput, purgeTarget } from './incident-purge.js';
+import * as venue from './venue.js';
 
 export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = false,
   thresholds: Thresholds = { earlySeconds: 120, lateSeconds: 300 }, demoPurgeEnabled = false) {
@@ -71,11 +72,44 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       db, attendee(request), parse(records.contactId, request.params).id, parse(records.version, request.body).version));
     api.get('/me/nfc-credential', async request => records.ownCredential(db, attendee(request)));
     api.get('/events', async request => ({ events: records.events(db, session(request).personId) }));
+    api.get('/events/:eventId/venue', async request => {
+      const current = session(request);
+      if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
+      const { eventId } = parse(records.eventId, request.params);
+      requireMembership(db, current, eventId);
+      return venue.configuration(db, eventId, current.role === 'ORGANIZER');
+    });
     api.get('/events/:eventId/zones', async request => {
       const current = session(request);
       const { eventId } = parse(records.eventId, request.params);
       requireMembership(db, current, eventId);
       return { zones: incidents.zones(db, eventId) };
+    });
+    const zoneParams = records.eventId.extend({ zoneId: z.string().min(1).max(128) });
+    const pointParams = records.eventId.extend({ pointId: z.uuid() });
+    api.post('/events/:eventId/zones', async (request, reply) => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId } = parse(records.eventId, request.params);
+      return reply.code(201).send(venue.saveZone(db, current, eventId, parse(venue.zoneEdit, request.body)));
+    });
+    api.patch('/events/:eventId/zones/:zoneId', async request => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId, zoneId } = parse(zoneParams, request.params);
+      return venue.saveZone(db, current, eventId, parse(venue.zoneEdit, request.body), zoneId);
+    });
+    api.post('/events/:eventId/operational-points', async (request, reply) => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId } = parse(records.eventId, request.params);
+      return reply.code(201).send(venue.savePoint(db, current, eventId, parse(venue.pointEdit, request.body)));
+    });
+    api.patch('/events/:eventId/operational-points/:pointId', async request => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId, pointId } = parse(pointParams, request.params);
+      return venue.savePoint(db, current, eventId, parse(venue.pointEdit, request.body), pointId);
     });
     api.post('/events/:eventId/incidents', async (request, reply) => {
       const current = session(request);
@@ -204,8 +238,7 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       const current = session(request);
       requireRole(current, 'ORGANIZER');
       const { eventId } = parse(records.eventId, request.params);
-      requireMembership(db, current, eventId);
-      return records.updateEvent(db, eventId, current.personId, parse(records.eventEdit, request.body));
+      return venue.saveVenue(db, current, eventId, parse(venue.venueEdit, request.body));
     });
     api.post('/nfc/resolve', async request => {
       const current = session(request);

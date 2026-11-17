@@ -123,6 +123,9 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
             }
         }
         selected.dispatch?.let { DispatchPanel(it, selected, actions, state.staffId) }
+        key(state.staffId, state.event?.id, selected.id) {
+            VenuePanel(selected.id, actions)
+        }
         if (selected.triage != null && !selected.hasConversation) {
             if (state.triageId == selected.id) TriagePanel(state, selected, actions)
             else TextButton(onClick = { actions.openTriage(selected.id) }, modifier = Modifier.heightIn(min = 48.dp)) {
@@ -224,7 +227,9 @@ private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, action
         val editable = pending == null && !busy
         DispatchChoice(priority?.label ?: "Sin prioridad humana", editable, listOf(null) + DispatchPriority.entries,
             { it?.label ?: "Sin prioridad humana" }) { priority = it }
-        DispatchChoice(loaded.zones.firstOrNull { it.id == zone }?.name ?: "Zona por confirmar", editable,
+        val zoneName = loaded.zones.firstOrNull { it.id == zone }?.name
+            ?: current.confirmedLocation?.takeIf { it.zoneId == zone }?.zoneName
+        DispatchChoice(zoneName ?: "Zona por confirmar", editable,
             listOf(null) + loaded.zones, { it?.name ?: "Zona por confirmar" }) { zone = it?.id }
         OutlinedTextField(reference, { if (it.length <= 160) reference = it }, enabled = editable,
             label = { Text("Referencia confirmada") }, modifier = Modifier.fillMaxWidth())
@@ -261,6 +266,46 @@ private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, action
         }, enabled = !busy && (pending != null || reason.isNotBlank()), modifier = Modifier.heightIn(min = 48.dp)) {
             Text(if (pending != null && !busy) "Reintentar revisión" else "Guardar revisión")
         }
+    }
+}
+
+@Composable
+private fun VenuePanel(id: String, actions: ReaderController) {
+    var context by remember { mutableStateOf<StaffVenue?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    TextButton(onClick = {
+        if (context != null) context = null
+        else {
+            loading = true
+            error = false
+            scope.launch {
+                try { context = actions.venue(id) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { error = true }
+                finally { loading = false }
+            }
+        }
+    }, enabled = !loading, modifier = Modifier.heightIn(min = 48.dp)) {
+        Text(if (context == null) "Ver recinto y puntos operativos" else "Cerrar información del recinto")
+    }
+    if (loading) Text("Consultando recinto…")
+    if (error) Text("No se pudo consultar el recinto. Vuelve a intentar.")
+    context?.let { info ->
+        Field("Recinto", info.venue.venue)
+        info.venue.description?.let { Field("Descripción operativa", it) }
+        info.venue.accessNotes?.let { Field("Referencias de acceso", it) }
+        info.venue.responseNotes?.let { Field("Referencias para emergencias", it) }
+        info.zones.forEach { zone ->
+            listOfNotNull(zone.description, zone.reference).takeIf { it.isNotEmpty() }?.let {
+                Field(zone.name, it.joinToString(" · "))
+            }
+        }
+        info.points.forEach { point ->
+            Field("${point.kind.label} · ${point.name}", "${point.zoneName} · ${point.reference}")
+        }
+        if (info.points.isEmpty()) Text("Sin puntos operativos activos registrados.")
     }
 }
 

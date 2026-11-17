@@ -16,10 +16,11 @@ function insertDemo(db: Db) {
   const addContact = db.prepare('INSERT INTO emergency_contacts VALUES (?, ?, ?, ?, ?)');
   const addCredential = db.prepare('INSERT INTO nfc_credentials VALUES (?, ?, ?, 1, ?) ON CONFLICT(id) DO NOTHING');
 
-  db.prepare(`INSERT INTO events VALUES ('demo-festival', 'Festival Demo', 'Recinto ficticio', ?, ?, 'ACTIVE')
+  db.prepare(`INSERT INTO events (id, name, venue, starts_at, ends_at, status)
+    VALUES ('demo-festival', 'Festival Demo', 'Recinto ficticio', ?, ?, 'ACTIVE')
     ON CONFLICT(id) DO NOTHING`).run('2026-11-14T22:00:00.000Z', '2026-11-15T06:00:00.000Z');
 
-  const addZone = db.prepare("INSERT INTO zones VALUES ('demo-festival', ?, ?) ON CONFLICT(event_id, id) DO NOTHING");
+  const addZone = db.prepare("INSERT INTO zones (event_id, id, name) VALUES ('demo-festival', ?, ?) ON CONFLICT(event_id, id) DO NOTHING");
   for (const [id, name] of [
     ['acceso', 'Acceso principal'], ['escenario', 'Escenario'], ['comida', 'Zona de comida'],
     ['banos', 'Baños'], ['general', 'Sector general'],

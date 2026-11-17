@@ -92,7 +92,16 @@ Al iniciar sesión con el PIN de organizador, GestiónWeb abre el **Dashboard** 
 
 El Dashboard cuenta solicitudes **Activas**, **Sin asignar**, **Asignadas** y **En atención**. Hasta cinco solicitudes activas siguen el orden de despacho que entrega Fastify. El resumen comparte la consulta con **Incidentes** e indica la hora de la última respuesta correcta. Si falla la conexión, los datos disponibles se marcan como la última consulta. Si el servidor rechaza el acceso al evento, la vista descarta sus solicitudes.
 
-**Recinto y zonas**, **Personal**, **Estadísticas** y **Anuncios y promociones** se muestran en desarrollo. Las seis secciones usan el mismo contexto de sesión y evento. Al cambiar de contexto se cancelan las lecturas y se limpia el estado local de los comandos. Cambiar de sección dentro del mismo evento permite volver a una confirmación o reintentar una operación incierta con el mismo comando.
+**Personal**, **Estadísticas** y **Anuncios y promociones** se muestran en desarrollo. Las seis secciones usan el mismo contexto de sesión y evento. Al cambiar de contexto se cancelan las lecturas y se limpia el estado local de los comandos. Cambiar de sección dentro del mismo evento permite volver a una confirmación de incidentes o reintentar una operación incierta con el mismo comando.
+
+### Recinto y zonas H8.2
+
+1. En GestiónWeb abre **Recinto y zonas**. Edita el evento y el recinto, completa las referencias físicas de acceso y atención y guarda. Comprueba el mensaje de confirmación y recarga para verificar persistencia.
+2. Crea una zona y añade un punto operativo asociado, por ejemplo un puesto médico con referencia «Sector norte». Guarda y verifica sus tipos y referencias.
+3. En AppPersonal, abre una solicitud del mismo evento y pulsa **Ver recinto y puntos operativos**. Comprueba que los datos visibles corresponden al evento. Desactiva la zona en GestiónWeb, vuelve a abrir la consulta y comprueba que el punto sale de la vista operativa. Un incidente previo mantiene su referencia.
+4. Para comprobar el flujo asistido usa las pruebas de backend con proveedor simulado. El chat entrega al modelo referencias filtradas de zonas y puntos activos del evento. Las citas provienen del asistente y el servidor verifica la correspondencia antes de sugerir una zona. El guardia confirma la situación en terreno.
+
+Los textos que parezcan contener datos personales o instrucciones se omiten mediante filtros heurísticos. Los nombres con apariencia de nombre personal también pueden quedar fuera. El resumen de un turno enriquecido se limita a citas y el mensaje al asistente usa una frase controlada. Los puntos se muestran al guardia desde el catálogo vigente. No se calculan rutas ni se garantiza disponibilidad física de un punto. [Contrato de configuración](api-contract.md#recinto-y-zonas)
 
 ### Cola, historial y acciones
 
@@ -118,7 +127,7 @@ npm run db:seed
 npm start
 ```
 
-`db:seed` compila, aplica las migraciones 001–008 y agrega la demo. Arrancar Fastify también aplica las migraciones pendientes. Sobre una base anterior, trabaja primero en una copia consistente con Fastify detenido. La 008 detiene el arranque si un mismo guardia tiene varias asignaciones activas. Conserva los registros originales y requiere regularizarlas antes de reintentar. [Migraciones y persistencia](data-model.md)
+`db:seed` compila, aplica las migraciones 001–009 y agrega la demo. Arrancar Fastify también aplica las migraciones pendientes. Sobre una base anterior, trabaja primero en una copia consistente con Fastify detenido. La 008 detiene el arranque si un mismo guardia tiene varias asignaciones activas. Conserva los registros originales y requiere regularizarlas antes de reintentar. [Migraciones y persistencia](data-model.md)
 
 En otra terminal, desde `web/`, ejecuta `npm ci` y `npm run dev`. Abre `http://127.0.0.1:5173`. Vite reenvía `/api/v1` al backend `http://127.0.0.1:3000`. Ajusta `DISCOPROTECT_API_ORIGIN` en el proceso de Vite si cambias el origen de Fastify.
 

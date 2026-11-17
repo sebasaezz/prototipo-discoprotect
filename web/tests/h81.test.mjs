@@ -61,7 +61,7 @@ test('navigation labels the current section and integrates future destinations w
   assert.match(html, /Festival/);
   assert.match(html, /Activo/);
   assert.doesNotMatch(html, /<select/);
-  for (const section of ['recinto', 'personal', 'estadisticas', 'anuncios']) {
+  for (const section of ['personal', 'estadisticas', 'anuncios']) {
     const placeholder = renderToStaticMarkup(createElement(PendingSection, { section }));
     assert.match(placeholder, /En desarrollo/);
     assert.doesNotMatch(placeholder, /<(a |button|input|select)/);

@@ -89,7 +89,7 @@ function findIncident(db: Db, id: string, scope: 'event' | 'owner', value: strin
 }
 
 export function zones(db: Db, eventId: string) {
-  return db.prepare('SELECT id, name FROM zones WHERE event_id = ? ORDER BY name, id').all(eventId);
+  return db.prepare('SELECT id, name FROM zones WHERE event_id = ? AND active = 1 ORDER BY name, id').all(eventId);
 }
 
 export function ownIncidents(db: Db, eventId: string, personId: string) {
@@ -163,8 +163,8 @@ export function createIncident(db: Db, session: Session, eventId: string, input:
       const receipt = creationReceipt(db, previous.id, session.personId, mode, first);
       return { created: false, body: receipt ? { incident, ...receipt } : incident };
     }
-    if (input.zoneId !== null && !db.prepare('SELECT 1 FROM zones WHERE event_id = ? AND id = ?').get(eventId, input.zoneId)) {
-      throw new ApiError(400, 'INVALID_INPUT', 'La zona no pertenece al evento');
+    if (input.zoneId !== null && !db.prepare('SELECT 1 FROM zones WHERE event_id = ? AND id = ? AND active = 1').get(eventId, input.zoneId)) {
+      throw new ApiError(400, 'INVALID_INPUT', 'Selecciona una zona activa de este evento');
     }
     const id = randomUUID();
     const now = new Date().toISOString();
