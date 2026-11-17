@@ -2,17 +2,22 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { requireMembership, type Session } from './auth.js';
 import { atomic, type Db } from './db.js';
+import { createConversation, creationReceipt, messageInput } from './conversations.js';
 import { ApiError } from './errors.js';
 import { dangerAlert, reasonCode, type ReasonCode } from './triage-contract.js';
 import { finishManually, initializeTriage, triageView } from './triage.js';
 
-export const createInput = z.strictObject({
+const createFields = {
   clientRequestId: z.uuid().transform(value => value.toLowerCase()),
   zoneId: z.string().min(1).max(128).nullish().transform(value => value ?? null),
   locationText: z.string().trim().max(160).nullish().transform(value => value || null),
   reasonCode: reasonCode.nullish().transform(value => value ?? null),
-  description: z.string().max(280).nullish().transform(value => value?.trim() ? value : null),
-});
+};
+export const createInput = z.union([
+  z.strictObject({ ...createFields, description: z.string().max(280).nullish().transform(value => value?.trim() ? value : null) }),
+  z.strictObject({ ...createFields, mode: z.literal('CHAT'), firstMessage: messageInput }),
+  z.strictObject({ ...createFields, mode: z.literal('SOS') }),
+]);
 export const incidentId = z.strictObject({ id: z.uuid() });
 const operationFields = {
   version: z.int().positive(),
@@ -47,6 +52,7 @@ type Incident = {
   resolutionNote: string | null;
   reasonCode: ReasonCode | null;
   description: string | null;
+  hasConversation: number;
 };
 
 const selection = `SELECT i.id, i.event_id AS eventId, i.requester_person_id AS requesterPersonId,
@@ -54,18 +60,20 @@ const selection = `SELECT i.id, i.event_id AS eventId, i.requester_person_id AS 
   i.status, i.client_request_id AS clientRequestId, i.created_at AS createdAt, i.updated_at AS updatedAt,
   i.version, i.assigned_at AS assignedAt, i.started_at AS startedAt, i.resolved_at AS resolvedAt,
   i.assigned_staff_id AS assignedStaffId, guard.name AS assignedStaffName, i.resolution_note AS resolutionNote,
-  i.reason_code AS reasonCode, i.description
+  i.reason_code AS reasonCode, i.description,
+  EXISTS(SELECT 1 FROM incident_conversations c WHERE c.incident_id = i.id) AS hasConversation
   FROM incidents i JOIN people p ON p.id = i.requester_person_id
   LEFT JOIN zones z ON z.event_id = i.event_id AND z.id = i.zone_id
   LEFT JOIN people guard ON guard.id = i.assigned_staff_id`;
 
-function ownView({ assignedStaffId, assignedStaffName, resolutionNote, reasonCode, description, ...incident }: Incident) {
-  return incident;
+function ownView({ assignedStaffId, assignedStaffName, resolutionNote, reasonCode, description, hasConversation, ...incident }: Incident) {
+  return { ...incident, ...(hasConversation ? { hasConversation: true } : {}) };
 }
 
-function eventView(db: Db, { requesterPersonId, clientRequestId, assignedStaffId, assignedStaffName, description, ...incident }: Incident) {
+function eventView(db: Db, { requesterPersonId, clientRequestId, assignedStaffId, assignedStaffName, description, hasConversation, ...incident }: Incident) {
   return {
-    ...incident, assignedStaff: assignedStaffId ? { id: assignedStaffId, name: assignedStaffName } : null,
+    ...incident, ...(hasConversation ? { hasConversation: true } : {}),
+    assignedStaff: assignedStaffId ? { id: assignedStaffId, name: assignedStaffName } : null,
     dangerAlert: dangerAlert(incident.reasonCode), triage: triageView(db, incident.id),
   };
 }
@@ -107,14 +115,19 @@ export function createIncident(db: Db, session: Session, eventId: string, input:
   triageEnabled: boolean) {
   return atomic(db, () => {
     requireMembership(db, session, eventId);
+    const mode = 'mode' in input ? input.mode : undefined;
+    const first = 'firstMessage' in input ? input.firstMessage : undefined;
+    const description = 'description' in input ? input.description : null;
     const previous = db.prepare(`${selection} WHERE i.requester_person_id = ? AND i.client_request_id = ?`)
       .get(session.personId, input.clientRequestId) as Incident | undefined;
     if (previous) {
       if (previous.eventId !== eventId || previous.zoneId !== input.zoneId || previous.locationText !== input.locationText ||
-          previous.reasonCode !== input.reasonCode || previous.description !== input.description) {
+          previous.reasonCode !== input.reasonCode || previous.description !== description) {
         throw new ApiError(409, 'REQUEST_CONFLICT', 'La clave de solicitud ya se usó con otros datos');
       }
-      return { created: false, incident: ownView(previous) };
+      const incident = ownView(previous);
+      const receipt = creationReceipt(db, previous.id, session.personId, mode, first);
+      return { created: false, body: receipt ? { incident, ...receipt } : incident };
     }
     if (input.zoneId !== null && !db.prepare('SELECT 1 FROM zones WHERE event_id = ? AND id = ?').get(eventId, input.zoneId)) {
       throw new ApiError(400, 'INVALID_INPUT', 'La zona no pertenece al evento');
@@ -124,9 +137,11 @@ export function createIncident(db: Db, session: Session, eventId: string, input:
     db.prepare(`INSERT INTO incidents (id, event_id, requester_person_id, zone_id, location_text,
       status, client_request_id, created_at, updated_at, reason_code, description) VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)`)
       .run(id, eventId, session.personId, input.zoneId, input.locationText, input.clientRequestId, now, now,
-        input.reasonCode, input.description);
-    initializeTriage(db, id, Date.parse(now), triageEnabled, input.reasonCode, input.description);
-    return { created: true, incident: ownView(findIncident(db, id, 'owner', session.personId)) };
+        input.reasonCode, description);
+    initializeTriage(db, id, Date.parse(now), !mode && triageEnabled, input.reasonCode, description);
+    const receipt = mode ? createConversation(db, id, mode, session.personId, first, now) : undefined;
+    const incident = ownView(findIncident(db, id, 'owner', session.personId));
+    return { created: true, body: receipt ? { incident, ...receipt } : incident };
   });
 }
 

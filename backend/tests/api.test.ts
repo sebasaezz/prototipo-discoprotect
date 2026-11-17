@@ -12,11 +12,11 @@ const pins = { STAFF: 'test-staff-only', STAFF_2: 'test-second-staff-only', ORGA
 const eventId = 'demo-festival';
 const prefix = '/api/v1';
 
-async function fixture(t: import('node:test').TestContext, path = ':memory:') {
+async function fixture(t: import('node:test').TestContext, path = ':memory:', triageEnabled = false) {
   const db = openDb(path);
   migrate(db);
   seed(db);
-  const app = createApp(db, pins);
+  const app = createApp(db, pins, false, triageEnabled);
   t.after(async () => { await app.close(); db.close(); });
   const login = async (account = 'antonia', pin?: string) => {
     const response = await app.inject({ method: 'POST', url: prefix + '/demo/sessions', payload: { account, pin } });
@@ -26,11 +26,60 @@ async function fixture(t: import('node:test').TestContext, path = ':memory:') {
   return { app, db, login };
 }
 
+test('chat receipt is atomic, paginated, authorized and idempotent, including after cancel', async t => {
+  const { app, db, login } = await fixture(t, ':memory:', true);
+  const headers = await login();
+  const guard = await login('guardia', pins.STAFF);
+  const organizer = await login('organizador', pins.ORGANIZER);
+  const other = await login('martin');
+  const url = `${prefix}/events/${eventId}/incidents`;
+  const firstMessage = { clientMessageId: randomUUID(), text: 'Se cayó cerca de la salida.' };
+  const payload = { mode: 'CHAT', clientRequestId: randomUUID(), firstMessage };
+  const create = (body = payload) => app.inject({ method: 'POST', url, headers, payload: body });
+  const [a, b] = await Promise.all([create(), create()]);
+  assert.deepEqual([a.statusCode, b.statusCode].sort(), [200, 201], a.body);
+  assert.deepEqual(a.json(), b.json());
+  const { incident, message } = a.json();
+  assert.equal(message.seq, 1);
+  assert.equal(incident.createdAt, message.createdAt);
+  assert.equal((await app.inject({ url, headers: guard })).json().incidents[0].id, incident.id);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM incident_messages').get()?.n, 1);
+  assert.equal((await create({ ...payload, firstMessage: { ...firstMessage, text: 'Otro texto.' } })).statusCode, 409);
+  const own = `${prefix}/me/incidents/${incident.id}`;
+  const staff = `${url}/${incident.id}/conversation`;
+  assert.equal((await app.inject({ url: own + '/conversation', headers: other })).statusCode, 404);
+  assert.equal((await app.inject({ url: staff, headers: organizer })).statusCode, 403);
+  const staffPage = (await app.inject({ url: staff, headers: guard })).json();
+  assert.equal(staffPage.messages[0].clientMessageId, undefined);
+  const send = (body: typeof firstMessage) => app.inject({
+    method: 'POST', url: own + '/conversation/messages', headers, payload: body,
+  });
+  const second = { clientMessageId: randomUUID(), text: 'Al lado de la puerta.' };
+  const third = { clientMessageId: randomUUID(), text: 'Estoy esperando.' };
+  const added = await Promise.all([send(second), send(third), send(second)]);
+  assert.deepEqual(added.map(result => result.statusCode).sort(), [200, 201, 201]);
+  const get = async (query: string) => (await app.inject({ url: own + '/conversation?' + query, headers })).json();
+  const head = await get('limit=1');
+  assert.equal(head.hasMore, true);
+  assert.equal(head.nextAfterSeq, 1);
+  const rest = await get('afterSeq=1');
+  assert.deepEqual(rest.messages.map((entry: { seq: number }) => entry.seq), [2, 3]);
+  assert.equal(rest.hasMore, false);
+  assert.equal((await app.inject({ method: 'POST', url: own + '/cancel', headers })).statusCode, 200);
+  assert.equal((await send(second)).statusCode, 200);
+  assert.equal((await send({ ...second, clientMessageId: randomUUID() })).json().error.code, 'CHAT_CLOSED');
+  assert.equal((await create()).json().conversation.control, 'CLOSED');
+  const sos = await app.inject({ method: 'POST', url, headers, payload: { mode: 'SOS', clientRequestId: randomUUID() } });
+  assert.equal(sos.statusCode, 201, sos.body);
+  assert.equal(sos.json().message, null);
+  assert.equal(sos.json().conversation.lastSeq, 0);
+});
+
 test('health, foreign keys, migrations and repeatable seed', async t => {
   const { app, db } = await fixture(t);
   migrate(db);
   seed(db);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 4);
+  assert.ok(db.prepare("SELECT 1 FROM schema_migrations WHERE filename = '005_incident_conversations.sql'").get());
   assert.equal(db.prepare('SELECT count(*) AS n FROM people').get()?.n, 6);
   assert.equal(db.prepare('SELECT count(*) AS n FROM emergency_contacts').get()?.n, 3);
   assert.equal(db.prepare('SELECT count(*) AS n FROM nfc_credentials WHERE length(token) = 16').get()?.n, 3);
@@ -79,9 +128,16 @@ test('updates persist across a server restart and seed preserves changes', async
   const stale = await current.app.inject({ method: 'PUT', url: prefix + '/me/emergency-card', headers, payload });
   assert.equal(stale.statusCode, 409);
   assert.equal(stale.json().error.details.currentVersion, 2);
+  const chat = await current.app.inject({ method: 'POST', url: `${prefix}/events/${eventId}/incidents`, headers,
+    payload: { mode: 'CHAT', clientRequestId: randomUUID(),
+      firstMessage: { clientMessageId: randomUUID(), text: 'Caso ficticio cerca de la entrada.' } } });
+  assert.equal(chat.statusCode, 201, chat.body);
   await current.app.close();
   current.db.close();
   current = open();
+  const page = await current.app.inject({ url: `${prefix}/me/incidents/${chat.json().incident.id}/conversation`, headers });
+  assert.equal(page.statusCode, 200, page.body);
+  assert.deepEqual(page.json().messages, [chat.json().message]);
   assert.deepEqual((await current.app.inject({ url: prefix + '/me/emergency-card', headers })).json(), edited.json());
   const guard = await current.app.inject({ method: 'POST', url: prefix + '/demo/sessions', payload: { account: 'guardia', pin: pins.STAFF } });
   const resolved = await current.app.inject({ method: 'POST', url: prefix + '/nfc/resolve',

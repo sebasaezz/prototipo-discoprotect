@@ -1,6 +1,7 @@
 import Fastify, { LogController, type FastifyRequest } from 'fastify';
 import { authenticate, issueSession, requireMembership, requireRole } from './auth.js';
 import type { Pins } from './config.js';
+import { messageInput, pageInput, readConversation, sendMessage } from './conversations.js';
 import type { Db } from './db.js';
 import { ApiError, parse } from './errors.js';
 import * as incidents from './incidents.js';
@@ -19,6 +20,7 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
+      if (error.code === 'CHAT_RATE_LIMIT') reply.header('Retry-After', '60');
       return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message, details: error.details } });
     }
     const status = error instanceof Error && 'statusCode' in error ? error.statusCode : undefined;
@@ -74,7 +76,7 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       requireRole(current, 'ATTENDEE');
       const { eventId } = parse(records.eventId, request.params);
       const result = incidents.createIncident(db, current, eventId, parse(incidents.createInput, request.body), triageEnabled);
-      return reply.code(result.created ? 201 : 200).send(result.incident);
+      return reply.code(result.created ? 201 : 200).send(result.body);
     });
     api.get('/me/incidents', async request => {
       const current = session(request);
@@ -104,6 +106,25 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
     });
     const incidentParams = records.eventId.extend(incidents.incidentId.shape);
     const incidentPath = '/events/:eventId/incidents/:id';
+    api.get('/me/incidents/:id/conversation', async request => {
+      const current = session(request);
+      requireRole(current, 'ATTENDEE');
+      const { id } = parse(incidents.incidentId, request.params);
+      return readConversation(db, current, id, undefined, parse(pageInput, request.query));
+    });
+    api.get(`${incidentPath}/conversation`, async request => {
+      const current = session(request);
+      requireRole(current, 'STAFF');
+      const { id, eventId } = parse(incidentParams, request.params);
+      return readConversation(db, current, id, eventId, parse(pageInput, request.query));
+    });
+    api.post('/me/incidents/:id/conversation/messages', async (request, reply) => {
+      const current = session(request);
+      requireRole(current, 'ATTENDEE');
+      const { id } = parse(incidents.incidentId, request.params);
+      const { created, ...body } = sendMessage(db, current, id, undefined, parse(messageInput, request.body));
+      return reply.code(created ? 201 : 200).send(body);
+    });
     api.get(incidentPath, async request => {
       const current = session(request);
       if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
