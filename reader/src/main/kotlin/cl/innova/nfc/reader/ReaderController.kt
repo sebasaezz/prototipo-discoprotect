@@ -55,6 +55,8 @@ internal data class ReaderUiState(
     val incidentsVisible: Boolean = false,
     val incidentsLoading: Boolean = false,
     val incidents: List<Incident>? = null,
+    val guardBusy: Boolean = false,
+    val activeIncident: Incident? = null,
     val incidentProblem: ApiProblem? = null,
     val lastIncidentRead: Instant? = null,
     val staffId: String? = null,
@@ -72,9 +74,8 @@ internal data class ReaderUiState(
     val canContinue get() = signedIn && event != null && server == ServerState.Connected
     val canScan get() = !configuring && !incidentsVisible && (local || signedIn && event != null) && scan == ScanState.Ready
     val incidentsCurrent get() = lastIncidentRead != null && incidentProblem == null && !incidentWriting
-    fun actionFor(incident: Incident): IncidentAction? = IncidentAction.entries.firstOrNull {
-        it.from == incident.status && (it == IncidentAction.Claim || staffId != null && incident.assignedStaff?.id == staffId)
-    }
+    fun permits(incident: Incident, action: IncidentAction) = action.accepts(incident.status) &&
+        (if (action == IncidentAction.Claim) !guardBusy else staffId != null && incident.assignedStaff?.id == staffId)
     fun canReview(incident: Incident) = incidentsCurrent && staffId != null &&
         incident.assignedStaff?.id == staffId && incident.status in setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS)
 }
@@ -230,11 +231,12 @@ internal class ReaderController(
         ui = ui.copy(incidentsLoading = true, pendingIncident = pendingCommands.containsKey(active.personId to event.id))
         work {
             try {
-                val incidents = remote.incidents(active, event)
+                val queue = remote.queue(active, event)
                 current()
                 if (checkExpiry()) {
                     incidentFailures = 0
-                    ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, incidents), incidentProblem = null,
+                    ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, queue.incidents), incidentProblem = null,
+                        guardBusy = queue.guardBusy, activeIncident = queue.activeIncident,
                         lastIncidentRead = clock.instant(), server = ServerState.Connected)
                 }
             } catch (failure: ApiFailure) {
@@ -271,7 +273,7 @@ internal class ReaderController(
     fun operateIncident(incidentId: String, version: Long, action: IncidentAction, note: String = "") {
         if (!ui.incidentsCurrent || ui.pendingIncident || note.length > 240) return
         val incident = ui.incidents?.firstOrNull { it.id == incidentId && it.version == version } ?: return
-        if (ui.actionFor(incident) != action) return
+        if (!ui.permits(incident, action) || action == IncidentAction.Close && note.isBlank()) return
         val command = IncidentCommand(incident.id, action,
             OperationBody(incident.version, UUID.randomUUID().toString(), note.trim().ifEmpty { null }))
         submitIncident(command)
@@ -301,6 +303,10 @@ internal class ReaderController(
                 pendingCommands.remove(key)
                 val items = ui.incidents.orEmpty().map { if (it.id == incident.id) incident else it }
                 ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, items),
+                    guardBusy = if (incident.status.active && incident.assignedStaff?.id == active.personId) true
+                        else ui.guardBusy && ui.activeIncident?.id != incident.id,
+                    activeIncident = if (incident.status.active && incident.assignedStaff?.id == active.personId) incident
+                        else ui.activeIncident?.takeUnless { it.id == incident.id },
                     pendingIncident = false,
                     incidentNotice = if (operation.replayed && operation.appliedVersion != incident.version)
                         "Operación original confirmada: ${operation.toStatus.label}. Estado vigente: ${incident.status.label}."
@@ -575,7 +581,8 @@ internal class ReaderController(
         session = null
         ui = ui.copy(signedIn = false, events = emptyList(), event = null,
             incidentsVisible = false, incidents = null, incidentsLoading = false, incidentProblem = null,
-            staffId = null, staffName = null, lastIncidentRead = null, pendingIncident = false, incidentNotice = null)
+            staffId = null, staffName = null, lastIncidentRead = null, pendingIncident = false, incidentNotice = null,
+            guardBusy = false, activeIncident = null)
     }
 
     private fun checkExpiry(): Boolean {

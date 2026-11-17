@@ -3,7 +3,7 @@ import type { FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ApiError, currentIncidentSnapshot, events, incidents, login, messageFor } from './api.js';
 import type { Event, Incident, Session } from './api.js';
-import { IncidentTable } from './IncidentTable.js';
+import { IncidentAdministration } from './IncidentAdministration.js';
 import { incidentPolling } from './incidentPolling.js';
 import './styles.css';
 
@@ -176,7 +176,8 @@ function IncidentList({ session, event, onExpiry }: { session: Session; event: s
       {loading && <p role="status">Consultando incidentes…</p>}
       {error && <p role="alert" className="notice">{error} {items && 'Se muestra la última consulta disponible.'}</p>}
       {lastRead && <p>Última consulta · <time dateTime={lastRead.toISOString()}>{lastRead.toLocaleTimeString('es-CL')}</time></p>}
-      {items && <IncidentTable items={items} session={session} onExpiry={onExpiry} />}
+      {items && <IncidentAdministration items={items} session={session} event={event} onExpiry={onExpiry}
+        refresh={() => refresh.current()} />}
     </section>
   );
 }

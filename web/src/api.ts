@@ -4,7 +4,9 @@ export type Session = { token: string; expiresAt: string };
 export type Event = { id: string; name: string; venue: string; role: string };
 export const incidentLabels = {
   OPEN: 'Abierta', ASSIGNED: 'Asignada', IN_PROGRESS: 'En atención', RESOLVED: 'Resuelta', CANCELLED: 'Cancelada',
+  CLOSED: 'Cerrada', WITHDRAWN: 'Retirada',
 } as const;
+export const activeIncident = (item: Incident) => ['OPEN', 'ASSIGNED', 'IN_PROGRESS'].includes(item.status);
 export const priorityLabels = {
   P0: 'P0 · Crítica', P1: 'P1 · Alta', P2: 'P2 · Media', P3: 'P3 · Baja', PENDING: 'Pendiente de evaluación',
 } as const;
@@ -48,6 +50,32 @@ export class ApiError extends Error {
     super(message);
   }
 }
+
+export type PurgePreview = { enabled: boolean; count: number; selectionHash: string | null };
+export type PurgeCommand = { incidentId?: string; selectionHash: string; operationId: string; confirmation: 'ELIMINAR' };
+export type Withdrawal = { version: number; operationId: string; resolutionNote: string };
+const eventIncidentsPath = (eventId: string) => `events/${encodeURIComponent(eventId)}/incidents`;
+
+export function previewDemoPurge(session: Session, event: string, signal: AbortSignal, id?: string) {
+  return request<PurgePreview>(eventIncidentsPath(event) + '/demo-purge' +
+    (id ? '?incidentId=' + encodeURIComponent(id) : ''), signal, session);
+}
+
+async function incidentCommand<T>(session: Session, path: string, command: PurgeCommand | Withdrawal): Promise<T> {
+  const response = await fetch('/api/v1/' + path, {
+    method: 'POST', headers: { Authorization: 'Bearer ' + session.token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(command), cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(30_000),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new ApiError(response.status, result.error?.message ?? 'El servidor rechazó la operación.');
+  return result as T;
+}
+
+export const purgeDemo = (session: Session, event: string, command: PurgeCommand) =>
+  incidentCommand<{ count: number; backupName: string }>(session, eventIncidentsPath(event) + '/demo-purge', command);
+
+export const withdrawIncident = (session: Session, incident: Incident, command: Withdrawal) =>
+  incidentCommand(session, eventIncidentsPath(incident.eventId) + '/' + encodeURIComponent(incident.id) + '/withdraw', command);
 
 async function request<T>(path: string, signal: AbortSignal, session?: Session, pin?: string): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
@@ -144,12 +172,14 @@ function validIncident(item: Incident, eventId: string) {
   if (Object.hasOwn(item, 'description') || item.reasonCode != null && !Object.hasOwn(reasonLabels, item.reasonCode) ||
       (item.dangerAlert ?? null) !== (item.reasonCode === 'UNRESPONSIVE' || item.reasonCode === 'IMMEDIATE_DANGER'
         ? item.reasonCode : null) || item.triage !== undefined && !validTriage(item.triage)) return false;
-  const assigned = ['ASSIGNED', 'IN_PROGRESS', 'RESOLVED'].includes(item.status);
+  const assigned = typeof item.assignedAt === 'string';
+  if (['ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'].includes(item.status) && !assigned ||
+      item.status === 'OPEN' && assigned) return false;
   if (assigned ? !item.assignedStaff?.id || !item.assignedStaff.name : item.assignedStaff !== null) return false;
-  if ((typeof item.assignedAt === 'string') !== assigned ||
-      (typeof item.startedAt === 'string') !== ['IN_PROGRESS', 'RESOLVED'].includes(item.status) ||
+  if (['IN_PROGRESS', 'RESOLVED'].includes(item.status) && typeof item.startedAt !== 'string' ||
+      typeof item.startedAt === 'string' && (!assigned || item.status === 'ASSIGNED') ||
       (typeof item.resolvedAt === 'string') !== (item.status === 'RESOLVED')) return false;
-  if (item.resolutionNote !== null && (item.status !== 'RESOLVED' || typeof item.resolutionNote !== 'string' ||
+  if (item.resolutionNote !== null && (!['RESOLVED', 'CLOSED', 'WITHDRAWN'].includes(item.status) || typeof item.resolutionNote !== 'string' ||
       !item.resolutionNote.trim() || item.resolutionNote.length > 240)) return false;
   const dates = [item.createdAt, item.assignedAt, item.startedAt, item.resolvedAt, item.updatedAt]
     .filter(value => value !== null).map(value => Date.parse(value));

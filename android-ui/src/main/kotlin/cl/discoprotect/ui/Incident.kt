@@ -23,6 +23,10 @@ internal enum class IncidentStatus(val label: String, val tone: Tone) {
     IN_PROGRESS("En atención", Tone.Info),
     RESOLVED("Resuelta", Tone.Success),
     CANCELLED("Cancelada", Tone.Warning),
+    CLOSED("Cerrada", Tone.Success),
+    WITHDRAWN("Retirada", Tone.Warning);
+
+    val active get() = this == OPEN || this == ASSIGNED || this == IN_PROGRESS
 }
 
 @Serializable
@@ -58,8 +62,10 @@ internal data class Incident(
         (zoneId == null || zoneId.isNotBlank() && !zoneName.isNullOrBlank()) &&
         (locationText == null || locationText.isNotBlank() && locationText.length <= 160) &&
         version > 0 &&
-        (assignedAt != null) == (status in setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS, IncidentStatus.RESOLVED)) &&
-        (startedAt != null) == (status in setOf(IncidentStatus.IN_PROGRESS, IncidentStatus.RESOLVED)) &&
+        (status !in setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS, IncidentStatus.RESOLVED, IncidentStatus.CLOSED) || assignedAt != null) &&
+        (status != IncidentStatus.OPEN || assignedAt == null) &&
+        (status !in setOf(IncidentStatus.IN_PROGRESS, IncidentStatus.RESOLVED) || startedAt != null) &&
+        (startedAt == null || assignedAt != null && status != IncidentStatus.ASSIGNED) &&
         (resolvedAt != null) == (status == IncidentStatus.RESOLVED) &&
         runCatching {
             listOfNotNull(createdAt, assignedAt, startedAt, resolvedAt, updatedAt)

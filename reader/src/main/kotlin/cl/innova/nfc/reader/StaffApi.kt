@@ -47,8 +47,14 @@ internal enum class IncidentAction(val path: String, val label: String, val from
     Claim("claim", "Asumir", IncidentStatus.OPEN, IncidentStatus.ASSIGNED),
     Start("start", "Iniciar atención", IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS),
     Resolve("resolve", "Resolver", IncidentStatus.IN_PROGRESS, IncidentStatus.RESOLVED),
+    Close("close", "Cerrar solicitud", IncidentStatus.ASSIGNED, IncidentStatus.CLOSED);
+
+    fun accepts(status: IncidentStatus) = status == from || this == Close && status == IncidentStatus.IN_PROGRESS
 }
 
+@Serializable internal data class StaffIncidentQueue(
+    val incidents: List<Incident>, val guardBusy: Boolean = false, val activeIncident: Incident? = null,
+)
 internal data class IncidentCommand(val incidentId: String, val action: IncidentAction, val body: OperationBody)
 @Serializable internal data class OperationBody(val version: Long, val operationId: String, val resolutionNote: String? = null)
 @Serializable internal data class AppliedOperation(
@@ -77,6 +83,11 @@ internal interface StaffApi {
     suspend fun login(pin: String, account: StaffAccount = StaffAccount.First): StaffSession
     suspend fun events(session: StaffSession): List<StaffEvent>
     suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident>
+    suspend fun queue(session: StaffSession, event: StaffEvent): StaffIncidentQueue {
+        val incidents = incidents(session, event)
+        val own = incidents.firstOrNull { it.status.active && it.assignedStaff?.id == session.personId }
+        return StaffIncidentQueue(incidents, own != null, own)
+    }
     suspend fun operate(session: StaffSession, event: StaffEvent, command: IncidentCommand): OperationReply
     suspend fun triage(session: StaffSession, event: StaffEvent, id: String): TriageDetail
     suspend fun review(session: StaffSession, event: StaffEvent, id: String, body: ReviewBody): ReviewReply
@@ -114,10 +125,16 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
             StaffEvent(it.id, it.name, it.venue)
         }
 
-    override suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident> {
-        return exchange<IncidentList>(incidentUrl(event).addQueryParameter("order", "dispatch").build(), session).incidents.also { incidents ->
-            requireReply(incidents.all { it.validOperational(event.id) } &&
-                incidents.distinctBy { it.id }.size == incidents.size)
+    override suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident> = queue(session, event).incidents
+
+    override suspend fun queue(session: StaffSession, event: StaffEvent): StaffIncidentQueue {
+        return exchange<StaffIncidentQueue>(incidentUrl(event).addQueryParameter("order", "dispatch").build(), session).also { queue ->
+            requireReply(queue.incidents.all { it.validOperational(event.id) } &&
+                queue.incidents.distinctBy { it.id }.size == queue.incidents.size)
+            queue.activeIncident?.let {
+                requireReply(queue.guardBusy && it.validOperational(it.eventId) &&
+                    it.status.active && it.assignedStaff?.id == session.personId)
+            }
         }
     }
 
@@ -136,10 +153,11 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
                 IncidentAction.Claim -> incident.assignedAt
                 IncidentAction.Start -> incident.startedAt
                 IncidentAction.Resolve -> incident.resolvedAt
+                IncidentAction.Close -> incident.updatedAt
             }
             requireReply(incident.validOperational(event.id) && incident.id == command.incidentId &&
                 incident.assignedStaff?.id == session.personId && operation.operationId == command.body.operationId &&
-                operation.fromStatus == command.action.from && operation.toStatus == command.action.to &&
+                command.action.accepts(operation.fromStatus) && operation.toStatus == command.action.to &&
                 operation.appliedVersion == command.body.version + 1 && operation.appliedAt == actionTime &&
                 incident.version >= operation.appliedVersion &&
                 (operation.replayed || incident.version == operation.appliedVersion) &&
@@ -289,7 +307,8 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
 private fun Incident.validOperational(eventId: String): Boolean = validFor(eventId) &&
     (assignedStaff != null) == (assignedAt != null) &&
     (assignedStaff == null || assignedStaff.id.isNotBlank() && assignedStaff.name.isNotBlank()) &&
-    (resolutionNote == null || status == IncidentStatus.RESOLVED && resolutionNote.isNotBlank() && resolutionNote.length <= 240) &&
+    (resolutionNote == null || status in setOf(IncidentStatus.RESOLVED, IncidentStatus.CLOSED, IncidentStatus.WITHDRAWN) &&
+        resolutionNote.isNotBlank() && resolutionNote.length <= 240) &&
     dangerAlert == reasonCode?.takeIf { it.alert != null } && (triage == null || triage.valid())
 
 private fun requireReply(condition: Boolean, problem: ApiProblem = ApiProblem.InvalidResponse) {

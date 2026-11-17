@@ -143,6 +143,12 @@ class SosControllerTest {
         app.sendHelp()
         runCurrent()
         val id = requireNotNull(app.state.value.sos.receipt)
+        val current = backend.saved.values.single()
+        backend.saved[current.clientRequestId!!] = current.copy(
+            status = IncidentStatus.ASSIGNED, assignedAt = now.toString(), version = 2,
+        )
+        app.refreshSos()
+        runCurrent()
         backend.loseResponse = true
         app.cancelSos(id)
         runCurrent()

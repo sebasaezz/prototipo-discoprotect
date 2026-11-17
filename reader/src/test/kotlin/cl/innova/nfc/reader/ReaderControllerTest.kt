@@ -39,6 +39,17 @@ class ReaderControllerTest {
     private val original = HealthProfile("Antonia", 22, "O+", listOf("Látex"), emptyList(), emptyList(),
         emptyList(), now, 2)
 
+    @Test fun h73BusyGuardCannotClaimAndCanCloseEitherActiveState() {
+        val waiting = incident(eventA)
+        val mine = waiting.copy(status = IncidentStatus.ASSIGNED, assignedStaff = AssignedStaff(session.personId, session.name))
+        val state = ReaderUiState(staffId = session.personId, guardBusy = true, activeIncident = mine.copy(eventId = eventB.id))
+        assertFalse(state.permits(waiting, IncidentAction.Claim))
+        assertTrue(state.permits(mine, IncidentAction.Close))
+        assertTrue(state.permits(mine.copy(status = IncidentStatus.IN_PROGRESS), IncidentAction.Close))
+        assertFalse(state.permits(mine.copy(status = IncidentStatus.CLOSED), IncidentAction.Close))
+        assertTrue(state.copy(guardBusy = false).permits(waiting, IncidentAction.Claim))
+    }
+
     @Test fun `incident list requires a staff event, never scans and refreshes serially`() = runTest {
         val backend = FakeApi().apply { availableEvents = listOf(eventA, eventB) }
         val screen = controller(backend)
@@ -364,7 +375,8 @@ class ReaderControllerTest {
         screen.reviewTriage(2, ReviewDecision.CORRECT, TriageCategory.OTHER, TriageUrgency.PRIORITY)
         runCurrent()
         assertTrue(screen.state.value.triagePending)
-        assertEquals(IncidentAction.Start, screen.state.value.actionFor(assigned))
+        assertTrue(screen.state.value.permits(assigned, IncidentAction.Start))
+        assertTrue(screen.state.value.permits(assigned, IncidentAction.Close))
         screen.retryTriage()
         runCurrent()
         assertEquals(2, attempts.size)

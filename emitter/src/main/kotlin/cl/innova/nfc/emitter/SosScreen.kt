@@ -117,18 +117,21 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
     }
 
     sos.incidents?.let { incidents ->
-        Heading("Mis solicitudes", "Historial de este evento.")
         if (incidents.isEmpty()) Text("No tienes solicitudes registradas en este evento.")
-        incidents.forEach { incident ->
+        val (active, history) = incidents.partition { it.status.active }
+        listOf("Solicitudes activas" to active, "Historial" to history).forEach { (title, items) ->
+            if (items.isNotEmpty()) Text(title, style = MaterialTheme.typography.titleMedium)
+            items.forEach { incident ->
             IncidentCard(incident) {
                 if (incident.hasConversation && incident.id != chatId) {
                     TextButton(onClick = { chatId = incident.id },
                         modifier = Modifier.heightIn(min = 48.dp)) { Text("Abrir conversación") }
                 }
-                if (incident.status == IncidentStatus.OPEN) {
+                if (incident.status.active) {
                     TextButton(onClick = { confirmCancel = incident.id }, enabled = editable && sos.historyFresh,
                         modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancelar solicitud") }
                 }
+            }
             }
         }
     }
@@ -141,9 +144,9 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
             })
     }
     confirmCancel?.takeIf { id ->
-        editable && sos.historyFresh && sos.incidents?.any { it.id == id && it.status == IncidentStatus.OPEN } == true
+        editable && sos.historyFresh && sos.incidents?.any { it.id == id && it.status.active } == true
     }?.let { id ->
-        SosConfirmation("¿Cancelar esta solicitud?", "Se conservará el registro con estado Cancelada.",
+        SosConfirmation("¿Cancelar esta solicitud?", "Se cerrará la conversación y la solicitud quedará en el historial.",
             "Cancelar solicitud", dismiss = { confirmCancel = null }, accept = {
                 confirmCancel = null
                 actions.cancelSos(id)

@@ -291,7 +291,7 @@ internal class AttendeeController(
 
     fun cancelSos(id: String) {
         if (!canEditSos() || !ui.sos.historyFresh) return
-        val incident = ui.sos.incidents?.firstOrNull { it.id == id && it.status == IncidentStatus.OPEN } ?: return
+        val incident = ui.sos.incidents?.firstOrNull { it.id == id && it.status.active } ?: return
         submitSos(SosAttempt.Cancel(incident.eventId, id))
     }
 
@@ -323,10 +323,10 @@ internal class AttendeeController(
         if (recovered != null) {
             confirmSos(active, recovered)
         } else if (pending is SosAttempt.Cancel &&
-            incidents.any { it.id == pending.id && it.status != IncidentStatus.OPEN }) {
+            incidents.any { it.id == pending.id && !it.status.active }) {
             pendingSos.remove(active.person.id)
             updateSos(ui.sos.copy(pending = null, outcome = SosOutcome.Rejected,
-                error = "El personal ya asumió la solicitud. La cancelación no se aplicó."))
+                error = "La solicitud ya terminó. La cancelación no se aplicó."))
         }
     }
 

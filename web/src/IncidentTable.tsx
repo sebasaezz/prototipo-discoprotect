@@ -16,13 +16,16 @@ function displayLocation(dispatch: Dispatch) {
   return 'Ubicación desconocida';
 }
 
-export function IncidentTable({ items, session, onExpiry }: { items: Incident[]; session: Session; onExpiry: () => void }) {
+export function IncidentTable({ items, session, onExpiry, actions }: {
+  items: Incident[]; session: Session; onExpiry: () => void; actions?: (item: Incident) => React.ReactNode;
+}) {
   if (!items.length) return <p className="empty">Este evento aún no tiene solicitudes registradas.</p>;
   return (
     <div className="table-scroll" tabIndex={0} role="region" aria-label="Solicitudes SOS del evento">
       <table>
         <thead><tr><th scope="col">Solicitante e ID</th><th scope="col">Ubicación</th>
-          <th scope="col">Estado</th><th scope="col">Prioridad y triaje</th><th scope="col">Guardia asignado</th><th scope="col">Tiempos</th></tr></thead>
+          <th scope="col">Estado</th><th scope="col">Prioridad y triaje</th><th scope="col">Guardia asignado</th><th scope="col">Tiempos</th>
+          {actions && <th scope="col">Acciones</th>}</tr></thead>
         <tbody>
           {items.map(item => (
             <tr key={item.id}>
@@ -42,6 +45,7 @@ export function IncidentTable({ items, session, onExpiry }: { items: Incident[];
               ] as const).map(([label, value]) => value && <small key={label}>
                 {label}{' · '}<time dateTime={value}>{date.format(new Date(value))}</time>
               </small>)}</td>
+              {actions && <td>{actions(item)}</td>}
             </tr>
           ))}
         </tbody>

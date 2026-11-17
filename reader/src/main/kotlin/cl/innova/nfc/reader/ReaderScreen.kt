@@ -1,5 +1,6 @@
 package cl.innova.nfc.reader
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,11 +37,36 @@ internal fun ReaderScreen(state: ReaderUiState, nfc: NfcAvailability, actions: R
 @Composable
 private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     var confirmation by remember(state.event?.id, state.staffId) { mutableStateOf<Pair<Incident, IncidentAction>?>(null) }
-    var chatId by remember(state.event?.id, state.staffId) { mutableStateOf<String?>(null) }
+    var selectedId by remember(state.event?.id, state.staffId) { mutableStateOf<String?>(null) }
+    var chatVisible by remember(selectedId) { mutableStateOf(false) }
+    val selected = state.incidents?.firstOrNull { it.id == selectedId }
+    BackHandler(selected != null) {
+        if (chatVisible) chatVisible = false else selectedId = null
+    }
     var note by remember(confirmation) { mutableStateOf("") }
-    Heading("Incidentes", "Solicitudes SOS registradas en el evento.")
-    state.staffName?.let { Field("Cuenta activa", it) }
-    EventSelector(state, actions::selectEvent)
+    if (selected != null && chatVisible) {
+        Heading("Conversaci髇", selected.requesterName)
+        TextButton(onClick = { chatVisible = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a los detalles") }
+        key(state.staffId, state.event?.id, selected.id) {
+            IncidentChat(selected.id, attendee = false, outbox = actions.chatOutbox, staffId = state.staffId,
+                load = { actions.conversation(selected.id, it) }, send = { actions.message(selected.id, it) })
+        }
+        return
+    }
+    if (selected == null) {
+        Heading("Incidentes", "Solicitudes SOS registradas en el evento.")
+        state.staffName?.let { Field("Cuenta activa", it) }
+        EventSelector(state, actions::selectEvent)
+        Heading("Mi atenci髇 activa", if (state.guardBusy) "Tienes una solicitud asignada." else "Sin solicitudes asignadas.")
+        state.activeIncident?.let { own ->
+            QueueCard(own, if (own.eventId == state.event?.id) "Abrir mi atenci髇" else "Ir al evento de mi atenci髇") {
+                if (own.eventId == state.event?.id) selectedId = own.id else actions.selectEvent(own.eventId)
+            }
+        }
+    } else {
+        TextButton(onClick = { selectedId = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a incidentes") }
+        Heading("Detalle de la solicitud", selected.requesterName)
+    }
     OutlinedButton(onClick = actions::refreshIncidents, enabled = !state.incidentsLoading && !state.incidentWriting,
         modifier = Modifier.heightIn(min = 48.dp)) {
         Text("Actualizar incidentes")
@@ -63,81 +89,50 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
         Status(message, Tone.Warning)
         if (state.incidents != null) Text("Se muestra la 煤ltima consulta disponible.")
     }
-    TextButton(onClick = actions::continueReading, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ir al lector NFC") }
-    TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) { Text("Configuraci贸n y evento") }
-    state.incidents?.let { incidents ->
-        if (incidents.isEmpty()) Text("Este evento a煤n no tiene solicitudes registradas.")
-        val groups = listOf(
-            "Cola activa" to setOf(IncidentStatus.OPEN, IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS),
-            "Cerradas" to setOf(IncidentStatus.RESOLVED, IncidentStatus.CANCELLED),
-        )
-        groups.forEach { (label, statuses) ->
-            val items = incidents.filter { it.status in statuses }
-            if (items.isNotEmpty()) Text(label, style = MaterialTheme.typography.titleMedium)
-            items.forEach { incident ->
-                IncidentCard(incident) {
-                    incident.dispatch?.let { dispatch ->
-                        DispatchBadge(dispatch)
-                        Text(dispatch.priorityReasons.joinToString(" 路 "))
-                        Text("${dispatch.elapsedSeconds / 60} min ${dispatch.elapsedSeconds % 60} s desde la emisi贸n")
-                    }
-                    incident.dangerAlert?.alert?.let { Status(it, Tone.Warning) }
-                    incident.triage?.takeUnless { incident.hasConversation }?.let { triage ->
-                        val review = triage.latestReview
-                        Text(if (review != null) "Revisi贸n humana" else triage.status.label)
-                        val category = review?.category ?: triage.suggestion?.category ?: triage.fallback?.category
-                        val urgency = review?.urgency ?: triage.suggestion?.urgency ?: triage.fallback?.urgency
-                        if (category != null && urgency != null) {
-                            Text("${category.label} 路 Prioridad ${urgency.label.lowercase()}")
-                        }
-                    }
-                    state.actionFor(incident)?.let { action ->
-                        Button(onClick = {
-                            if (action == IncidentAction.Start) actions.operateIncident(incident.id, incident.version, action)
-                            else confirmation = incident to action
-                        }, enabled = state.incidentsCurrent && !state.pendingIncident,
-                            modifier = Modifier.heightIn(min = 48.dp)) {
-                            Text(if (action == IncidentAction.Claim && incident.hasConversation) "Asumir conversaci贸n" else action.label)
-                        }
-                    }
-                    if (incident.hasConversation) {
-                        val open = chatId == incident.id
-                        TextButton(onClick = { chatId = if (open) null else incident.id },
-                            modifier = Modifier.heightIn(min = 48.dp)) { Text(if (open) "Cerrar conversaci贸n" else "Ver conversaci贸n") }
-                        if (open) key(state.staffId, state.event?.id, incident.id) {
-                            incident.dispatch?.let { dispatch ->
-                                DispatchPanel(dispatch, incident, actions, state.staffId)
-                            }
-                            IncidentChat(incident.id, attendee = false, outbox = actions.chatOutbox, staffId = state.staffId,
-                                load = { actions.conversation(incident.id, it) }, send = { actions.message(incident.id, it) })
-                        }
-                    }
-                    if (!incident.hasConversation && incident.dispatch != null && chatId == incident.id) {
-                        key(state.staffId, state.event?.id, incident.id) {
-                            DispatchPanel(incident.dispatch, incident, actions, state.staffId)
-                        }
-                    } else if (!incident.hasConversation && incident.dispatch != null) {
-                        TextButton(onClick = { chatId = incident.id }, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Text("Ver despacho")
-                        }
-                    }
-                    if (incident.triage != null && !incident.hasConversation) {
-                        if (state.triageId == incident.id) {
-                            TriagePanel(state, incident, actions)
-                        } else {
-                            TextButton(onClick = { actions.openTriage(incident.id) },
-                                enabled = !state.triageWriting, modifier = Modifier.heightIn(min = 48.dp)) {
-                                Text("Ver triaje")
-                            }
-                        }
-                    }
+    if (selected == null) {
+        TextButton(onClick = actions::continueReading, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ir al lector NFC") }
+        TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) { Text("Configuraci髇 y evento") }
+        state.incidents?.let { incidents ->
+            val (active, history) = incidents.partition { it.status.active }
+            Heading("Cola del evento", if (state.guardBusy) "Puedes consultar otros casos mientras est醩 ocupado." else "Solicitudes activas.")
+            val others = active.filterNot { it.id == state.activeIncident?.id }
+            if (others.isEmpty()) Text("No hay otras solicitudes activas.")
+            others.forEach { incident -> QueueCard(incident, "Ver detalles") { selectedId = incident.id } }
+            if (history.isNotEmpty()) {
+                Heading("Historial", "Solicitudes terminadas de este evento.")
+                history.forEach { incident -> QueueCard(incident, "Ver detalles") { selectedId = incident.id } }
+            }
+        }
+    } else {
+        IncidentCard(selected) {
+            selected.dispatch?.let { DispatchBadge(it) }
+            selected.dangerAlert?.alert?.let { Status(it, Tone.Warning) }
+            if (selected.hasConversation) {
+                Button(onClick = { chatVisible = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Abrir conversaci髇")
                 }
+            }
+            listOf(IncidentAction.Claim, IncidentAction.Start, IncidentAction.Close).filter { state.permits(selected, it) }.forEach { action ->
+                Button(onClick = {
+                    if (action == IncidentAction.Start) actions.operateIncident(selected.id, selected.version, action)
+                    else confirmation = selected to action
+                }, enabled = state.incidentsCurrent && !state.pendingIncident,
+                    modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text(if (action == IncidentAction.Claim && selected.hasConversation) "Asumir conversaci髇" else action.label)
+                }
+            }
+        }
+        selected.dispatch?.let { DispatchPanel(it, selected, actions, state.staffId) }
+        if (selected.triage != null && !selected.hasConversation) {
+            if (state.triageId == selected.id) TriagePanel(state, selected, actions)
+            else TextButton(onClick = { actions.openTriage(selected.id) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("Ver triaje")
             }
         }
     }
     confirmation?.let { (incident, action) ->
         val valid = state.incidentsCurrent && !state.pendingIncident &&
-            state.incidents?.any { it.id == incident.id && it.version == incident.version && state.actionFor(it) == action } == true
+            state.incidents?.any { it.id == incident.id && it.version == incident.version && state.permits(it, action) } == true
         AlertDialog(onDismissRequest = { confirmation = null },
             title = { Text(if (action == IncidentAction.Claim) "驴Asumir esta solicitud?" else "驴Resolver esta solicitud?") },
             text = {
@@ -147,16 +142,33 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
                         if (incident.hasConversation) "El caso quedar谩 asignado a tu cuenta y podr谩s responder en el chat."
                         else "Quedar谩s a cargo de la atenci贸n de este SOS.")
                     else OutlinedTextField(note, { if (it.length <= 240) note = it },
-                        label = { Text("Nota de cierre (opcional)") }, supportingText = { Text("${note.length}/240") })
+                        label = { Text("Motivo de cierre") }, supportingText = { Text("${note.length}/240") })
                 }
             },
             confirmButton = {
                 Button(onClick = {
                     actions.operateIncident(incident.id, incident.version, action, note)
                     confirmation = null
-                }, enabled = valid, modifier = Modifier.heightIn(min = 48.dp)) { Text(action.label) }
+                }, enabled = valid && (action != IncidentAction.Close || note.isNotBlank()),
+                    modifier = Modifier.heightIn(min = 48.dp)) { Text(action.label) }
             },
             dismissButton = { TextButton(onClick = { confirmation = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver") } })
+    }
+}
+
+@Composable
+private fun QueueCard(incident: Incident, label: String, open: () -> Unit) {
+    Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.padding(Space.sm), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+            Text(incident.requesterName, style = MaterialTheme.typography.titleMedium)
+            Status(incident.status.label, incident.status.tone)
+            incident.dispatch?.let {
+                DispatchBadge(it)
+                Text(it.displayedLocation())
+                if (incident.status.active) Text("${it.elapsedSeconds / 60} min ${it.elapsedSeconds % 60} s desde la emisi髇")
+            }
+            TextButton(onClick = open, modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
+        }
     }
 }
 
