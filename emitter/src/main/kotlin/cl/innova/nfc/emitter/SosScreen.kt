@@ -63,7 +63,7 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
             Field("Solicitud recibida", "${currentChat.id} · ${incidentTime(currentChat.createdAt)}")
             Status(currentChat.status.label, currentChat.status.tone)
             key(person.id, event.id, currentChat.id) {
-                IncidentChat(currentChat.id, attendee = true,
+                IncidentChat(currentChat.id, attendee = true, outbox = actions.chatOutbox,
                     load = { actions.conversation(currentChat.id, it) }, send = { actions.message(currentChat.id, it) })
             }
             TextButton(onClick = { chatId = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Otra solicitud") }

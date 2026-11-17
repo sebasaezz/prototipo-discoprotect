@@ -2,6 +2,7 @@ package cl.innova.nfc.reader
 
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.ChatDraft
+import cl.discoprotect.ui.ChatOutbox
 import cl.discoprotect.ui.IncidentStatus
 import cl.discoprotect.ui.IncidentTriage
 import cl.discoprotect.ui.ReviewDecision
@@ -98,6 +99,7 @@ internal class ReaderController(
     private var incidentTimer: Job? = null
     private var incidentFailures = 0
     private val pendingCommands = mutableMapOf<Pair<String, String>, IncidentCommand>()
+    val chatOutbox = ChatOutbox()
     private val pendingReviews = mutableMapOf<Triple<String, String, String>, ReviewBody>()
     private var detailRequest: Job? = null
     private var reviewRequest: Job? = null
@@ -297,7 +299,7 @@ internal class ReaderController(
                 val (operation, incident) = remote.operate(active, event, command)
                 current()
                 pendingCommands.remove(key)
-                val items = ui.incidents.orEmpty().filterNot { it.id == incident.id } + incident
+                val items = ui.incidents.orEmpty().map { if (it.id == incident.id) incident else it }
                 ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, items),
                     pendingIncident = false,
                     incidentNotice = if (operation.replayed && operation.appliedVersion != incident.version)
@@ -567,6 +569,7 @@ internal class ReaderController(
 
     private fun clearSession() {
         closeTriage()
+        chatOutbox.clearSession()
         expiry?.cancel()
         expiry = null
         session = null

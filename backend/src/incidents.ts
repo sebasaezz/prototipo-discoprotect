@@ -183,10 +183,16 @@ type RecordedOperation = {
   actorId: string; requestHash: string; fromStatus: Status; toStatus: Status; appliedVersion: number; appliedAt: string;
 };
 
-export function operate(db: Db, session: Session, eventId: string, id: string, action: Action, input: OperationInput) {
+export function operate(db: Db, session: Session, eventId: string, id: string, action: Action, input: OperationInput,
+  policy?: DispatchPolicy) {
   return atomic(db, () => {
     requireMembership(db, session, eventId);
     const previous = findIncident(db, id, 'event', eventId);
+    const operational = (row: Incident) => {
+      const incident = eventView(db, row);
+      return policy && row.hasConversation
+        ? { ...incident, dispatch: dispatchView(db, row, incident.triage, policy, Date.now()) } : incident;
+    };
     const { operationId, version, resolutionNote = null } = input;
     const requestHash = createHash('sha256').update(JSON.stringify([action, version, resolutionNote])).digest('hex');
     const recorded = db.prepare(`SELECT actor_person_id AS actorId, request_hash AS requestHash,
@@ -197,7 +203,7 @@ export function operate(db: Db, session: Session, eventId: string, id: string, a
       if (actorId !== session.personId || recordedHash !== requestHash) {
         throw new ApiError(409, 'REQUEST_CONFLICT', 'La clave de operación ya se usó con otros datos');
       }
-      return { operation: { ...operation, operationId, replayed: true }, incident: eventView(db, previous),
+      return { operation: { ...operation, operationId, replayed: true }, incident: operational(previous),
         ...(action === 'claim' && previous.hasConversation ? conversationView(db, id) : {}) };
     }
     const { from, to } = transitions[action];
@@ -209,7 +215,7 @@ export function operate(db: Db, session: Session, eventId: string, id: string, a
     const current = applyTransition(db, previous, session, to, resolutionNote, operationId, requestHash);
     return {
       operation: { operationId, fromStatus: from, toStatus: to, appliedVersion: current.version, appliedAt: current.updatedAt, replayed: false },
-      incident: eventView(db, current),
+      incident: operational(current),
       ...(action === 'claim' && current.hasConversation ? conversationView(db, id) : {}),
     };
   });

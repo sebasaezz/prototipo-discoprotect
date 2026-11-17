@@ -27,4 +27,17 @@ class IncidentChatTest {
         assertFalse(ChatWrite(message, state).valid(id, draft, ChatAuthorType.STAFF))
         assertFalse(ChatWrite(message, state).valid(id, ChatDraft.create(draft.text), ChatAuthorType.ATTENDEE))
     }
+
+    @Test
+    fun outboxKeepsTheSameRequestAcrossReopeningAndClearsOnSessionChange() {
+        val outbox = ChatOutbox()
+        val first = outbox.reserve(id, "Estoy en la salida.")
+        assertEquals(first, outbox[id])
+        assertEquals(first, outbox.reserve(id, "Otro relato."))
+        outbox.clear(id, ChatDraft.create(first.text))
+        assertEquals(first, outbox[id])
+        outbox.clearSession()
+        assertNull(outbox[id])
+        assertNotEquals(first.clientMessageId, outbox.reserve(id, first.text).clientMessageId)
+    }
 }

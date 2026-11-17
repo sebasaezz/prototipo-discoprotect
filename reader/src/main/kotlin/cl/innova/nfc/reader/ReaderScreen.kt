@@ -108,7 +108,7 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
                             incident.dispatch?.let { dispatch ->
                                 DispatchPanel(dispatch, incident, actions, state.staffId)
                             }
-                            IncidentChat(incident.id, attendee = false, staffId = state.staffId,
+                            IncidentChat(incident.id, attendee = false, outbox = actions.chatOutbox, staffId = state.staffId,
                                 load = { actions.conversation(incident.id, it) }, send = { actions.message(incident.id, it) })
                         }
                     }

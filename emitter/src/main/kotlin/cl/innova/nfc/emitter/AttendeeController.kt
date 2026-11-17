@@ -4,6 +4,7 @@ import cl.discoprotect.ui.SosReason
 
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.ChatDraft
+import cl.discoprotect.ui.ChatOutbox
 import cl.discoprotect.ui.IncidentStatus
 import cl.discoprotect.ui.currentIncidentSnapshot
 import cl.discoprotect.ui.incidentPollDelay
@@ -98,6 +99,7 @@ internal class AttendeeController(
     private var generation = 0L
     // Scoped to the current server. Only the original person can recover an attempt.
     private val pendingSos = mutableMapOf<String, SosAttempt>()
+    val chatOutbox = ChatOutbox()
     private var foreground = true
     private var sosRead: Job? = null
     private var sosTimer: Job? = null
@@ -637,6 +639,7 @@ internal class AttendeeController(
 
     private fun clearSession(): IdentitySlot? {
         stopSosPolling()
+        chatOutbox.clearSession()
         sosFailures = 0
         val pending = sharing.invalidate(identityOwner)
         expiry?.cancel()

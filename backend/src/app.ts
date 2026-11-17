@@ -179,7 +179,7 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
         const { eventId, id } = parse(incidentParams, request.params);
         const input = action === 'resolve' ? parse(incidents.resolutionInput, request.body)
           : parse(incidents.operationInput, request.body);
-        return incidents.operate(db, current, eventId, id, action, input);
+        return incidents.operate(db, current, eventId, id, action, input, dispatch);
       });
     }
     api.patch('/events/:eventId', async request => {

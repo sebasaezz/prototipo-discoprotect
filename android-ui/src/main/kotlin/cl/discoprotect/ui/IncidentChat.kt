@@ -15,6 +15,8 @@ import androidx.lifecycle.repeatOnLifecycle
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
@@ -56,10 +58,28 @@ internal fun ChatWrite.valid(id: String, draft: ChatDraft, author: ChatAuthorTyp
 
 internal class ChatRejected : Exception()
 
+internal class ChatOutbox {
+    private val drafts = MutableStateFlow<Map<String, ChatDraft>>(emptyMap())
+    val pending = drafts.asStateFlow()
+
+    operator fun get(incidentId: String) = drafts.value[incidentId]
+
+    fun reserve(incidentId: String, text: String): ChatDraft {
+        return this[incidentId] ?: ChatDraft.create(text).also { drafts.value = drafts.value + (incidentId to it) }
+    }
+
+    fun clear(incidentId: String, attempt: ChatDraft) {
+        if (this[incidentId] == attempt) drafts.value = drafts.value - incidentId
+    }
+
+    fun clearSession() { drafts.value = emptyMap() }
+}
+
 @Composable
 internal fun IncidentChat(
     incidentId: String,
     attendee: Boolean,
+    outbox: ChatOutbox,
     staffId: String? = null,
     load: suspend (Long) -> ChatPage,
     send: suspend (ChatDraft) -> ChatWrite,
@@ -71,8 +91,9 @@ internal fun IncidentChat(
     var cursor by remember(incidentId) { mutableLongStateOf(0L) }
     var chat by remember(incidentId) { mutableStateOf<ChatState?>(null) }
     var messages by remember(incidentId) { mutableStateOf(emptyList<ChatMessage>()) }
-    var draft by remember(incidentId) { mutableStateOf("") }
-    var pending by remember(incidentId) { mutableStateOf<ChatDraft?>(null) }
+    var draft by remember(incidentId) { mutableStateOf(outbox[incidentId]?.text.orEmpty()) }
+    val outbound by outbox.pending.collectAsState()
+    val pending = outbound[incidentId]
     var sending by remember(incidentId) { mutableStateOf(false) }
     var disconnected by remember(incidentId) { mutableStateOf(false) }
     var rejected by remember(incidentId) { mutableStateOf(false) }
@@ -85,10 +106,12 @@ internal fun IncidentChat(
                     var more: Boolean
                     do {
                         val page = loader(cursor)
-                        chat = page.conversation
+                        if ((chat?.controlVersion ?: 0) <= page.conversation.controlVersion &&
+                            (chat?.lastSeq ?: 0) <= page.conversation.lastSeq) chat = page.conversation
                         messages = (messages + page.messages).distinctBy { it.seq }.sortedBy { it.seq }
-                        if (page.messages.any { it.clientMessageId == pending?.clientMessageId && pending != null }) {
-                            pending = null
+                        val attempted = outbox[incidentId]
+                        if (attempted != null && page.messages.any { it.clientMessageId == attempted.clientMessageId }) {
+                            outbox.clear(incidentId, attempted)
                             draft = ""
                         }
                         cursor = page.nextAfterSeq
@@ -137,21 +160,21 @@ internal fun IncidentChat(
         if (pending != null && !sending) Status("Envío sin confirmar", Tone.Warning)
         Button(enabled = !sending && (pending != null || allowed && !disconnected && draft.isNotBlank()),
             modifier = Modifier.heightIn(min = 48.dp), onClick = {
-                val attempt = pending ?: ChatDraft.create(draft)
-                pending = attempt
+                val attempt = outbox.reserve(incidentId, draft)
                 sending = true
                 rejected = false
                 scope.launch {
                     try {
                         val reply = sender(attempt)
                         messages = (messages + reply.message).distinctBy { it.seq }.sortedBy { it.seq }
-                        if ((chat?.controlVersion ?: 0) <= reply.conversation.controlVersion) chat = reply.conversation
-                        pending = null
+                        if ((chat?.controlVersion ?: 0) <= reply.conversation.controlVersion &&
+                            (chat?.lastSeq ?: 0) <= reply.conversation.lastSeq) chat = reply.conversation
+                        outbox.clear(incidentId, attempt)
                         draft = ""
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: ChatRejected) {
-                        pending = null
+                        outbox.clear(incidentId, attempt)
                         rejected = true
                     } catch (_: Exception) {
                         disconnected = true

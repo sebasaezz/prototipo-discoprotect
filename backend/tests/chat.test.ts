@@ -146,6 +146,7 @@ test('claim changes chat control atomically and drops in-flight AI while preserv
   const winner = results.findIndex(result => result.statusCode === 200);
   assert.equal(results[winner].json().conversation.control, 'STAFF');
   assert.equal(results[winner].json().incident.startedAt, null);
+  assert.equal(results[winner].json().incident.dispatch.effectivePriority, 'PENDING');
   release();
   await processing;
   assert.equal((await incident.page()).messages.length, 1);
