@@ -2,7 +2,6 @@ package cl.innova.nfc.emitter
 
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.IncidentStatus
-import cl.discoprotect.ui.SosReason
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -23,7 +22,6 @@ import org.junit.Test
 class SosControllerTest {
     private val now = Instant.parse("2026-11-15T21:30:00Z")
     private val event = SosEvent("demo-festival", "Festival Demo", "Recinto ficticio", "ATTENDEE")
-    private val zone = SosZone("escenario", "Escenario")
 
     @Test fun `hold completes once after 1500 ms and cancellation stops it`() = runTest {
         var progress = 0f
@@ -41,28 +39,26 @@ class SosControllerTest {
         assertEquals(1, completions)
     }
 
-    @Test fun `event and location must be selected and confirmation comes from server`() = runTest {
+    @Test fun `text-free SOS only needs an authorized event and server confirmation`() = runTest {
         val backend = Server()
         val app = open(backend)
         assertEquals(listOf(event), app.state.value.sos.events)
-        app.sendSos()
+        app.sendHelp()
         assertEquals(0, backend.attempts.size)
         app.selectSosEvent(event.id)
         runCurrent()
-        app.selectSosZone("otra")
-        assertFalse(app.state.value.sos.canSend)
-        app.selectSosZone(zone.id)
-        app.updateSosReference(" Junto a la salida ")
-        app.sendSos()
-        app.sendSos()
+        app.sendHelp()
+        app.sendHelp()
         assertEquals(Task.SosSending, app.state.value.task)
         assertNull(app.state.value.sos.receipt)
         runCurrent()
         assertEquals(SosOutcome.Confirmed, app.state.value.sos.outcome)
         val item = app.state.value.sos.incidents!!.single()
         assertEquals(item.id, app.state.value.sos.receipt)
-        assertEquals(zone.id, item.zoneId)
-        assertEquals("Junto a la salida", item.locationText)
+        assertNull(item.zoneId)
+        assertNull(item.locationText)
+        assertEquals("SOS", backend.attempts.single().mode)
+        assertNull(backend.attempts.single().firstMessage)
         assertEquals(1, backend.attempts.size)
         app.cancelSos(item.id)
         runCurrent()
@@ -74,11 +70,11 @@ class SosControllerTest {
         val backend = Server()
         val app = ready(backend)
         val report = "  Se fue de hocico y quedó medio ido.  "
-        app.selectSosReason(SosReason.ILLNESS_OR_INJURY)
-        app.updateSosDescription(report)
-        app.updateSosDescription("x".repeat(281))
+        app.sendHelp(" ")
+        app.sendHelp("x".repeat(501))
+        assertTrue(backend.attempts.isEmpty())
         backend.loseResponse = true
-        app.sendSos()
+        app.sendHelp(report)
         runCurrent()
         assertEquals(SosOutcome.Uncertain, app.state.value.sos.outcome)
         assertNull(app.state.value.sos.receipt)
@@ -87,25 +83,27 @@ class SosControllerTest {
         runCurrent()
         assertEquals(2, backend.attempts.size)
         assertEquals(backend.attempts.first(), backend.attempts.last())
-        val sent = (backend.attempts.first() as SosAttempt.Create).body
-        assertEquals(report, sent.description)
-        assertEquals(SosReason.ILLNESS_OR_INJURY, sent.reasonCode)
-        assertEquals("", app.state.value.sos.description)
+        val sent = backend.attempts.first()
+        assertEquals("CHAT", sent.mode)
+        assertEquals(report.trim(), sent.firstMessage?.text)
+        assertNull(sent.body.zoneId)
+        assertNull(sent.body.locationText)
+        assertNull(sent.body.reasonCode)
         val incident = backend.saved.values.single()
         assertEquals(incident.id, app.state.value.sos.receipt)
         assertNull(incident.zoneId)
         assertEquals(listOf(incident), ready(backend).state.value.sos.incidents)
     }
 
-    @Test fun `failed preflight never sends and late reads cannot publish after switching account`() = runTest {
+    @Test fun `offline chat preserves the attempt and late reads cannot publish after switching account`() = runTest {
         val backend = Server()
         val app = ready(backend)
         backend.offline = true
-        app.sendSos()
+        app.sendHelp()
         runCurrent()
-        assertEquals(SosOutcome.Offline, app.state.value.sos.outcome)
-        assertTrue(backend.attempts.isEmpty())
-        assertNull(app.state.value.sos.pending)
+        assertEquals(SosOutcome.Uncertain, app.state.value.sos.outcome)
+        assertEquals(backend.attempts.single(), app.state.value.sos.pending)
+        assertTrue(backend.saved.isEmpty())
         backend.offline = false
         lateinit var resume: Continuation<Unit>
         backend.pauseList = { suspendCoroutine { resume = it } }
@@ -119,10 +117,30 @@ class SosControllerTest {
         assertEquals(SosState(), app.state.value.sos)
     }
 
+    @Test fun `history cannot confirm a chat with a legacy receipt carrying the same key`() = runTest {
+        val backend = Server()
+        val app = ready(backend)
+        backend.loseResponse = true
+        app.sendHelp("Ayuda junto a la puerta.")
+        runCurrent()
+        val pending = backend.attempts.single()
+        val original = backend.saved.getValue(pending.body.clientRequestId)
+        backend.saved[pending.body.clientRequestId] = original.copy(hasConversation = false)
+        app.refreshSos()
+        runCurrent()
+        assertEquals(pending, app.state.value.sos.pending)
+        assertNull(app.state.value.sos.receipt)
+        backend.saved[pending.body.clientRequestId] = original
+        app.refreshSos()
+        runCurrent()
+        assertNull(app.state.value.sos.pending)
+        assertEquals(original.id, app.state.value.sos.receipt)
+    }
+
     @Test fun `lost cancellation response is resolved by the authoritative history`() = runTest {
         val backend = Server()
         val app = ready(backend)
-        app.sendSos()
+        app.sendHelp()
         runCurrent()
         val id = requireNotNull(app.state.value.sos.receipt)
         backend.loseResponse = true
@@ -142,7 +160,7 @@ class SosControllerTest {
         val backend = Server()
         val app = ready(backend)
         backend.loseResponse = true
-        app.sendSos()
+        app.sendHelp()
         app.selectAccount(DemoAccount.Martin)
         runCurrent()
         assertEquals(DemoAccount.Antonia.key, app.state.value.person?.account)
@@ -167,7 +185,7 @@ class SosControllerTest {
         val backend = Server()
         val app = ready(backend)
         backend.loseResponse = true
-        app.sendSos()
+        app.sendHelp()
         runCurrent()
         backend.expireReads = true
         app.refreshSos()
@@ -183,19 +201,17 @@ class SosControllerTest {
         assertEquals(SosOutcome.Confirmed, app.state.value.sos.outcome)
     }
 
-    @Test fun `visible history polls without disturbing the form and ignores lower versions`() = runTest {
+    @Test fun `visible history polls and ignores lower versions`() = runTest {
         val backend = Server()
         val app = ready(backend)
-        app.sendSos()
+        app.sendHelp()
         runCurrent()
         val original = backend.saved.values.single()
         val key = requireNotNull(original.clientRequestId)
         backend.saved[key] = original.copy(status = IncidentStatus.ASSIGNED, version = 2, assignedAt = now.toString())
-        app.updateSosReference("Referencia en edición")
         advanceTimeBy(5000)
         runCurrent()
         assertEquals(IncidentStatus.ASSIGNED, app.state.value.sos.incidents?.single()?.status)
-        assertEquals("Referencia en edición", app.state.value.sos.reference)
         backend.saved[key] = original
         app.pause()
         val reads = backend.reads
@@ -220,7 +236,6 @@ class SosControllerTest {
     private fun TestScope.ready(backend: Server) = open(backend).also {
         it.selectSosEvent(event.id)
         runCurrent()
-        it.selectSosZone(null)
     }
 
     private inner class Server : H4AttendeeApi() {
@@ -247,7 +262,6 @@ class SosControllerTest {
         override suspend fun deleteContact(session: AttendeeSession, version: Long, id: String): Long = error("unexpected")
 
         override suspend fun events(session: AttendeeSession) = listOf(event)
-        override suspend fun zones(session: AttendeeSession, eventId: String) = listOf(zone)
         override suspend fun incidents(session: AttendeeSession, eventId: String): List<Incident> {
             reads++
             if (expireReads) throw AttendeeFailure(FailureKind.Expired)
@@ -257,11 +271,12 @@ class SosControllerTest {
 
         override suspend fun createSos(session: AttendeeSession, attempt: SosAttempt.Create): Incident {
             attempts += attempt
+            if (offline) throw AttendeeFailure(FailureKind.Offline)
             val body = attempt.body
             val incident = saved.getOrPut(body.clientRequestId) {
                 Incident(UUID.randomUUID().toString(), attempt.eventId, session.person.name,
-                    body.zoneId, zone.name.takeIf { body.zoneId == zone.id }, body.locationText,
-                    IncidentStatus.OPEN, now.toString(), now.toString(), session.person.id, body.clientRequestId)
+                    body.zoneId, null, body.locationText,
+                    IncidentStatus.OPEN, now.toString(), now.toString(), session.person.id, body.clientRequestId, hasConversation = true)
             }
             if (loseResponse) throw AttendeeFailure(FailureKind.Timeout)
             return incident

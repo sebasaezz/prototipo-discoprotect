@@ -1,7 +1,5 @@
 package cl.innova.nfc.emitter
 
-import cl.discoprotect.ui.SosReason
-
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.ChatDraft
 import cl.discoprotect.ui.ChatOutbox
@@ -232,7 +230,7 @@ internal class AttendeeController(
 
     fun refreshSos() {
         if (!foreground || ui.section != Section.Sos || ui.task != null || sosRead?.isActive == true) return
-        if (ui.sos.event != null && ui.sos.zones != null) {
+        if (ui.sos.event != null) {
             refreshSosHistory()
         } else {
             loadSosContext()
@@ -260,40 +258,11 @@ internal class AttendeeController(
         sosWork(Task.SosReading) { remote, active -> loadSosEvent(remote, active, event) }
     }
 
-    fun selectSosZone(id: String?) {
-        val zones = ui.sos.zones ?: return
-        if (!canEditSos() || id != null && zones.none { it.id == id }) return
-        updateSos(ui.sos.copy(locationChosen = true, zoneId = id, outcome = SosOutcome.Ready, error = null))
-    }
-
-    fun updateSosReference(value: String) {
-        if (!canEditSos() || value.length > 160) return
-        updateSos(ui.sos.copy(reference = value, outcome = SosOutcome.Ready, error = null))
-    }
-
-    fun selectSosReason(value: SosReason?) {
-        if (!canEditSos()) return
-        updateSos(ui.sos.copy(reasonCode = value, outcome = SosOutcome.Ready, error = null))
-    }
-
-    fun updateSosDescription(value: String) {
-        if (!canEditSos() || value.length > 280) return
-        updateSos(ui.sos.copy(description = value, outcome = SosOutcome.Ready, error = null))
-    }
-
-    fun sendSos() {
-        val form = ui.sos
-        if (!canEditSos() || !form.canSend) return
-        val body = SosRequest(UUID.randomUUID().toString(), form.zoneId, form.reference.trim().ifEmpty { null },
-            form.reasonCode, form.description.takeUnless { it.isBlank() })
-        submitSos(SosAttempt.Create(requireNotNull(form.event).id, body))
-    }
-
     fun sendHelp(text: String? = null) {
         val form = ui.sos
         val event = form.event ?: return
         if (!canEditSos() || text != null && (text.isBlank() || text.length > 500)) return
-        val body = SosRequest(UUID.randomUUID().toString(), form.zoneId, form.reference.trim().ifEmpty { null }, form.reasonCode)
+        val body = SosRequest(UUID.randomUUID().toString(), zoneId = null, locationText = null)
         val first = text?.let { ChatDraft.create(it) }
         submitSos(SosAttempt.Create(event.id, body, if (first == null) "SOS" else "CHAT", first))
     }
@@ -339,15 +308,9 @@ internal class AttendeeController(
     }
 
     private suspend fun Operation.loadSosEvent(remote: AttendeeApi, active: AttendeeSession, event: SosEvent) {
-        // Recover writes before loading the form, even if zones are temporarily unavailable.
         val incidents = remote.incidents(active, event.id)
         current()
         applySosHistory(active, incidents)
-        val zones = remote.zones(active, event.id)
-        current()
-        val state = ui.sos
-        val chosen = state.locationChosen && (state.zoneId == null || zones.any { it.id == state.zoneId })
-        updateSos(state.copy(zones = zones, locationChosen = chosen, zoneId = state.zoneId.takeIf { chosen }))
     }
 
     private fun applySosHistory(active: AttendeeSession, incoming: List<Incident>) {
@@ -430,7 +393,7 @@ internal class AttendeeController(
             val retrying = pendingSos[owner] != null
             var sending = false
             try {
-                if (!retrying && (attempt !is SosAttempt.Create || attempt.mode == null)) remote.health()
+                if (!retrying && attempt is SosAttempt.Cancel) remote.health()
                 current()
                 pendingSos[owner] = attempt
                 updateSos(ui.sos.copy(pending = attempt, receipt = null))
@@ -472,10 +435,7 @@ internal class AttendeeController(
     private fun confirmSos(active: AttendeeSession, incident: Incident) {
         pendingSos.remove(active.person.id)
         val items = ui.sos.incidents.orEmpty().filterNot { it.id == incident.id } + incident
-        val sending = ui.sos.pending is SosAttempt.Create
         updateSos(ui.sos.copy(pending = null, receipt = incident.id, error = null,
-            reasonCode = ui.sos.reasonCode.takeUnless { sending },
-            description = if (sending) "" else ui.sos.description,
             outcome = if (incident.status == IncidentStatus.CANCELLED) SosOutcome.Cancelled else SosOutcome.Confirmed,
             incidents = currentIncidentSnapshot(ui.sos.incidents, items)
                 .sortedWith(compareByDescending<Incident> { it.createdAt }.thenByDescending { it.id })))

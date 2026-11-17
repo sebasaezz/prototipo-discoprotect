@@ -75,6 +75,29 @@ test('chat receipt is atomic, paginated, authorized and idempotent, including af
   assert.equal(sos.json().conversation.lastSeq, 0);
 });
 
+test('legacy creation key cannot be reused to open a conversation', async t => {
+  const { app, db, login } = await fixture(t);
+  const headers = await login();
+  const url = `${prefix}/events/${eventId}/incidents`;
+  const original = { clientRequestId: randomUUID() };
+  const send = (payload: object) => app.inject({ method: 'POST', url, headers, payload });
+  const created = await send(original);
+  assert.equal(created.statusCode, 201);
+  for (const command of [
+    { ...original, mode: 'CHAT', firstMessage: { clientMessageId: randomUUID(), text: 'Necesito ayuda.' } },
+    { ...original, mode: 'SOS' },
+  ]) {
+    const conflict = await send(command);
+    assert.equal(conflict.statusCode, 409);
+    assert.equal(conflict.json().error.code, 'REQUEST_CONFLICT');
+  }
+  const replay = await send(original);
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.json(), created.json());
+  assert.equal(db.prepare('SELECT count(*) AS n FROM incidents').get()?.n, 1);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM incident_conversations').get()?.n, 0);
+});
+
 test('health, foreign keys, migrations and repeatable seed', async t => {
   const { app, db } = await fixture(t);
   migrate(db);

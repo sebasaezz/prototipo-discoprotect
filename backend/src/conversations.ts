@@ -115,8 +115,10 @@ export function createConversation(db: Db, id: string, mode: 'CHAT' | 'SOS', per
 
 export function creationReceipt(db: Db, id: string, personId: string, mode?: 'CHAT' | 'SOS', first?: MessageInput) {
   const record = db.prepare('SELECT creation_mode AS mode FROM incident_conversations WHERE incident_id = ?').get(id);
-  const original = record?.mode === 'CHAT' ? db.prepare(`${messages} AND m.seq = 1`).get(id) as MessageRow : null;
-  if (record?.mode !== mode || (original && (original.clientMessageId !== first?.clientMessageId || original.text !== first.text))) {
+  const storedMode = record?.mode ?? 'LEGACY';
+  const original = storedMode === 'CHAT' ? db.prepare(`${messages} AND m.seq = 1`).get(id) as MessageRow | undefined : undefined;
+  if (storedMode !== (mode ?? 'LEGACY') ||
+      (mode === 'CHAT' && (!first || !original || original.clientMessageId !== first.clientMessageId || original.text !== first.text))) {
     throw new ApiError(409, 'REQUEST_CONFLICT', 'La clave de solicitud ya se usó con otros datos');
   }
   if (!record) return undefined;

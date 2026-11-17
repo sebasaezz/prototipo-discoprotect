@@ -78,18 +78,44 @@ function canPublishReply(reply: string, input: ChatInput) {
     !input.messages.some(message => message.type === 'AI' && normalize(message.text) === normalized);
 }
 const dangerSignal: Record<typeof dangerKinds[number], RegExp> = {
-  UNRESPONSIVE: /\b(?:no (?:me |nos )?responde|no reacciona|inconsciente|no despierta)\b/u,
+  UNRESPONSIVE: /\b(?:no (?:me |nos )?responde|no reacciona|inconsciente|no despierta|no pesca ni reacciona)\b/u,
   ONGOING_VIOLENCE: /\b(?:estan (?:pegando|golpeando|disparando)|pelea en curso|agresion en curso|sigue (?:pegando|golpeando)|amenaza con (?:un |una )?(?:arma|cuchillo|pistola))\b/u,
   FIRE: /\b(?:hay (?:un )?(?:incendio|fuego|llamas)|se esta quemando|esta en llamas)\b/u,
   CRUSH: /\b(?:nos (?:aplastan|estan aplastando)|estan aplastando|gente aplastada|estampida en curso)\b/u,
-  BREATHING: /\b(?:no respira|no puede respirar|se esta ahogando|se esta asfixiando|no logro respirar)\b/u,
+  BREATHING: /\b(?:no (?:esta respirando|respira)|no puede respirar|se esta ahogando|se esta asfixiando|no logro respirar)\b/u,
 };
+
+const dangerEnded: Record<typeof dangerKinds[number], RegExp> = {
+  UNRESPONSIVE: /\b(?:(?:ya|ahora) (?:me |nos )?(?:responde|responde bien|reacciona|desperto|pesca)|volvio a (?:responder|reaccionar)|recobro (?:el conocimiento|la conciencia))\b/u,
+  ONGOING_VIOLENCE: /\b(?:(?:la pelea|la agresion|los disparos) (?:ya )?(?:termino|terminaron|paro|pararon)|(?:ya )?se dejaron de pegar|ya no se (?:pegan|golpean)|ya los separaron)\b/u,
+  FIRE: /\b(?:(?:ya )?(?:apagaron|controlaron|se apago) (?:el (?:fuego|incendio)|las llamas)|(?:el fuego|el incendio) (?:ya )?(?:se apago|esta apagado)|ya no hay (?:fuego|incendio|llamas))\b/u,
+  CRUSH: /\b(?:(?:ya )?dejo de aplastar|ya no nos aplastan|(?:la estampida|el aplastamiento) (?:ya )?(?:termino|paro))\b/u,
+  BREATHING: /\b(?:(?:ya|ahora) (?:respira|puede respirar)|volvio a respirar|ya no se (?:esta )?(?:ahoga|ahogando|asfixia|asfixiando))\b/u,
+};
+const clauseBreak = /[.!?;,:]|\b(?:y|pero|aunque|sin embargo)\b/u;
+const uncertainPrefix = /\b(?:creo que|pensaba que|supuse que|puede que|quizas|tal vez|si|hubo|habia)\b/u;
+const negatedPrefix = /\b(?:no|nunca)\s+(?:(?:esta|estan|sigue|siguen|es|son)\s+)?$/u;
+const adjacentCorrection = /^\s*(?:(?:ya (?:paso|termino|paro)|falsa alarma)\s*$|(?:fue|era|es) (?:solo )?(?:un simulacro|una falsa alarma)\b)/u;
 
 function corroboratesDanger(danger: NonNullable<Analysis['danger']>, input: ChatInput) {
   const { evidence, kind } = danger;
   const source = input.messages.find(message => message.seq === evidence.seq)?.text ?? '';
-  const doubtful = /\b(?:ya (?:respira|respondio|responde|termino|paso)|falsa alarma|simulacro|no (?:hay|hubo|esta)|creo que|si (?:hubiera|hay)|pensaba que)\b/u;
-  return dangerSignal[kind].test(normalize(evidence.quote)) && !doubtful.test(normalize(source));
+  const statement = normalize(source);
+  const quote = normalize(evidence.quote);
+  const signal = dangerSignal[kind].exec(quote);
+  const citedAt = statement.indexOf(quote);
+  if (!signal || citedAt < 0) return false;
+  const start = citedAt + signal.index;
+  const before = statement.slice(0, start).split(clauseBreak).at(-1) ?? '';
+  const following = statement.slice(start + signal[0].length);
+  const [same = '', ...rest] = following.split(clauseBreak);
+  const next = rest.find(clause => clause.trim()) ?? '';
+  if (uncertainPrefix.test(before) || negatedPrefix.test(before) ||
+      /\b(?:simulacro|falsa alarma)\b/u.test(same) || adjacentCorrection.test(next)) return false;
+  return ![same, next].some(clause => {
+    const ended = dangerEnded[kind].exec(clause);
+    return ended !== null && !/\b(?:no|si|cuando|ojala|creo que|otr[oa]|alguien mas)\b/u.test(clause.slice(0, ended.index));
+  });
 }
 
 export function validateAnalysis(value: unknown, input: ChatInput) {

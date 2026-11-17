@@ -32,7 +32,7 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
     val idle = state.task == null
     val editable = idle && sos.pending == null
     val event = sos.event
-    var confirmSend by remember(person.id, event?.id, sos.zoneId, sos.reference, sos.reasonCode, sos.description) { mutableStateOf(false) }
+    var confirmSend by remember(person.id, event?.id) { mutableStateOf(false) }
     var confirmCancel by remember(person.id, event?.id) { mutableStateOf<String?>(null) }
     var chatId by remember(person.id, event?.id) { mutableStateOf<String?>(null) }
     var report by remember(person.id, event?.id) { mutableStateOf("") }
@@ -69,49 +69,23 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
             TextButton(onClick = { chatId = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Otra solicitud") }
         } else {
             OutlinedTextField(report, { if (it.length <= 500) report = it }, enabled = editable,
-                label = { Text("¿Qué ocurre?") }, supportingText = { Text("Si puedes, indica dónde estás. ${report.length}/500") },
+                label = { Text("¿Qué está ocurriendo y dónde?") }, supportingText = { Text("${report.length}/500") },
                 maxLines = 5, modifier = Modifier.fillMaxWidth())
             Button(onClick = { actions.sendHelp(report) }, enabled = editable && report.isNotBlank(),
-                modifier = Modifier.heightIn(min = 48.dp)) { Text("Enviar solicitud") }
-        }
-        sos.zones?.let { zones ->
-            val selected = if (!sos.locationChosen) "Seleccionar zona"
-                else zones.firstOrNull { it.id == sos.zoneId }?.name ?: "No sé dónde estoy"
-            SosMenu("Zona", selected, editable) { close ->
-                (zones + SosZone("", "No sé dónde estoy")).forEach { zone ->
-                    DropdownMenuItem(text = { Text(zone.name) }, onClick = {
-                        close()
-                        actions.selectSosZone(zone.id.ifEmpty { null })
-                    }, modifier = Modifier.heightIn(min = 48.dp))
-                }
-            }
-            OutlinedTextField(
-                value = sos.reference, onValueChange = actions::updateSosReference,
-                label = { Text("Referencia breve (opcional)") }, enabled = editable,
-                supportingText = { Text("${sos.reference.length}/160") },
-                maxLines = 3, modifier = Modifier.fillMaxWidth(),
-            )
-            SosMenu("Motivo (opcional)", sos.reasonCode?.label ?: "Sin motivo seleccionado", editable) { close ->
-                (listOf(null) + SosReason.entries).forEach { reason ->
-                    DropdownMenuItem(text = { Text(reason?.label ?: "Sin motivo") }, onClick = {
-                        close()
-                        actions.selectSosReason(reason)
-                    }, modifier = Modifier.heightIn(min = 48.dp))
-                }
-            }
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("Enviar primer mensaje") }
         }
         if (editable) {
-            key(person.id, event.id, sos.zoneId, sos.reference, sos.reasonCode, sos.description) {
+            key(person.id, event.id) {
                 HoldSosButton({ actions.sendHelp() }) { confirmSend = true }
             }
             TextButton(onClick = { confirmSend = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text("Solicitar con diálogo de confirmación")
+                Text("Enviar SOS sin texto con confirmación")
             }
         }
     }
 
     when (sos.outcome) {
-        SosOutcome.Ready -> if (idle && sos.canSend) Status("Preparado para solicitar ayuda", Tone.Info)
+        SosOutcome.Ready -> Unit
         SosOutcome.Confirmed -> Status("Solicitud recibida por el servidor", Tone.Success)
         SosOutcome.Cancelled -> Status("Solicitud cancelada en el servidor", Tone.Success)
         SosOutcome.Uncertain -> if (!state.sosWriting) Status(
@@ -160,7 +134,7 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
     }
 
     if (confirmSend && editable && event != null) {
-        SosConfirmation("¿Enviar SOS?", "Se enviará tu solicitud al personal de ${event?.name}.",
+        SosConfirmation("¿Enviar SOS?", "Se enviará tu solicitud al personal de ${event.name}.",
             "Enviar SOS", dismiss = { confirmSend = false }, accept = {
                 confirmSend = false
                 actions.sendHelp()

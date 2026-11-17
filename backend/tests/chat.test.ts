@@ -177,10 +177,10 @@ test('dispatch promotes only evidence-backed P0 and preserves authorized human c
     const generated = output(input, null);
     const content = generated.output[0].content[0];
     const last = input.messages.at(-1)!;
-    content.text = JSON.stringify({ ...JSON.parse(content.text), severity: 'P0', zoneId: 'escenario',
-      location: { seq: last.seq, quote: 'la tarima' }, danger: {
+    content.text = JSON.stringify({ ...JSON.parse(content.text), severity: last.seq === 1 ? 'P0' : 'P2', zoneId: 'escenario',
+      location: { seq: last.seq, quote: 'la tarima' }, danger: last.seq === 1 ? {
         kind: 'UNRESPONSIVE', evidence: { seq: last.seq, quote: 'no responde' },
-      } });
+      } : null });
     return generated;
   } });
   await worker.tick();
@@ -195,6 +195,14 @@ test('dispatch promotes only evidence-backed P0 and preserves authorized human c
   assert.equal(guardQueue[0].dispatch.declaredLocation.text, 'la tarima');
   assert.equal(guardQueue[0].dispatch.inferredLocation.zoneId, 'escenario');
   assert.equal(guardQueue[0].status, 'OPEN');
+  assert.equal((await critical.send('Estamos detrás de la tarima.')).statusCode, 201);
+  await worker.tick();
+  const retained = (await list(staff))[0].dispatch;
+  assert.equal(retained.latestAiPriority, 'P2');
+  assert.equal(retained.effectivePriority, 'P0');
+  assert.equal(retained.prioritySource, 'AI_PROVISIONAL');
+  assert.equal(retained.analysis.inputSeq, 2);
+  assert.deepEqual(retained.criticalEvidence, { kind: 'UNRESPONSIVE', messageSeq: 1, analysisSeq: 1 });
   const route = queue + '/' + critical.id;
   await app.inject({ method: 'POST', url: route + '/claim', headers: staff, payload: { version: 1, operationId: randomUUID() } });
   const correction = { expectedRevision: 0, operationId: randomUUID(), humanPriority: 'P2',
@@ -204,6 +212,11 @@ test('dispatch promotes only evidence-backed P0 and preserves authorized human c
     method: 'POST', url: route + '/dispatch/reviews', headers: auth, payload,
   });
   assert.equal((await review(organizer)).statusCode, 403);
+  const unchanged = await review(staff, { ...correction, operationId: randomUUID(),
+    dangerAssessment: 'UNCHANGED', reason: 'Ubicación verificada, peligro por revisar.' });
+  assert.equal(unchanged.statusCode, 200);
+  assert.equal(unchanged.json().dispatch.effectivePriority, 'P0');
+  correction.expectedRevision = 1;
   const saved = await review(staff);
   assert.equal(saved.statusCode, 200, saved.body);
   assert.equal(saved.json().dispatch.effectivePriority, 'P2');
@@ -211,7 +224,9 @@ test('dispatch promotes only evidence-backed P0 and preserves authorized human c
   assert.equal((await review(staff)).json().replayed, true);
   assert.equal((await review(staff, { ...correction, operationId: randomUUID() })).json().error.code, 'DISPATCH_CONFLICT');
   const audit = (await app.inject({ url: route + '/dispatch', headers: organizer })).json();
-  assert.equal(audit.reviews.length, 1);
+  assert.equal(audit.reviews.length, 2);
+  assert.equal(audit.reviews[1].dangerAssessment, 'CLEARED');
+  assert.deepEqual(audit.dispatch.criticalEvidence, retained.criticalEvidence);
   assert.equal(audit.transitions[0].toStatus, 'ASSIGNED');
   assert.equal(audit.messages, undefined);
   assert.equal(audit.zones, undefined);
@@ -245,4 +260,30 @@ test('explicit textual danger rejects negation and unrelated or invented evidenc
   assert.equal(result.reply, null);
   content.text = JSON.stringify({ ...initial, severity: 'P0', danger: { kind: 'FIRE', evidence: { seq: 1, quote: 'El lugar está en llamas' } } });
   assert.throws(() => validateAnalysis(generated, input), /Invalid citation/);
+});
+
+test('danger corroboration scopes negation and resolution to the cited signal', () => {
+  const cases = [
+    ['No hay médicos y mi amigo no respira.', 'no respira', 'BREATHING', true],
+    ['No está el guardia, pero el cabro no pesca ni reacciona.', 'no pesca ni reacciona', 'UNRESPONSIVE', true],
+    ['No hay nadie en la salida. Se está ahogando.', 'Se está ahogando', 'BREATHING', true],
+    ['Mi amigo no respira y ya pasó el personal por la otra puerta.', 'no respira', 'BREATHING', true],
+    ['Mi amigo no respira, pero el otro ya respira.', 'no respira', 'BREATHING', true],
+    ['El loco no está respirando.', 'no está respirando', 'BREATHING', true],
+    ['Están pegando junto a la reja.', 'Están pegando', 'ONGOING_VIOLENCE', true],
+    ['No hay fuego en la tarima.', 'hay fuego', 'FIRE', false],
+    ['El cabro no está inconsciente.', 'inconsciente', 'UNRESPONSIVE', false],
+    ['Creí ver humo. Creo que hay fuego.', 'hay fuego', 'FIRE', false],
+    ['Mi amigo no respira, pero ahora respira.', 'no respira', 'BREATHING', false],
+    ['Hay fuego en la tarima. Ya apagaron el fuego.', 'Hay fuego', 'FIRE', false],
+    ['Están pegando junto a la reja, pero ya los separaron.', 'Están pegando', 'ONGOING_VIOLENCE', false],
+    ['No pesca ni reacciona. Ahora volvió a responder.', 'No pesca ni reacciona', 'UNRESPONSIVE', false],
+  ] as const;
+  for (const [text, quote, kind, expected] of cases) {
+    const input: ChatInput = { messages: [{ seq: 1, type: 'ATTENDEE', text }], zones: [], allowReply: false };
+    const generated = output(input, null);
+    const content = generated.output[0].content[0];
+    content.text = JSON.stringify({ ...JSON.parse(content.text), severity: 'P0', danger: { kind, evidence: { seq: 1, quote } } });
+    assert.equal(validateAnalysis(generated, input).result.danger !== null, expected, text);
+  }
 });

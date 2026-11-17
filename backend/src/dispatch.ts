@@ -9,7 +9,7 @@ import { dangerAlert, type ReasonCode } from './triage-contract.js';
 
 export type Thresholds = { earlySeconds: number; lateSeconds: number };
 export function activatePolicy(db: Db, thresholds: Thresholds) {
-  const version = `h7.2-v1-${thresholds.earlySeconds}-${thresholds.lateSeconds}`;
+  const version = `h7.2-v2-${thresholds.earlySeconds}-${thresholds.lateSeconds}`;
   db.prepare('INSERT OR IGNORE INTO dispatch_priority_policies VALUES (?, ?, ?, ?)')
     .run(version, thresholds.earlySeconds, thresholds.lateSeconds, new Date().toISOString());
   return { ...thresholds, version };
@@ -69,8 +69,8 @@ export function evaluatePriority(
   human: Priority | null, ai: Priority | null, evidence: boolean, danger: Assessment, thresholds: Thresholds,
 ) {
   const explicitDanger = dangerAlert(source.reasonCode) !== null && danger !== 'CLEARED';
-  const provisional = !human && ai === 'P0' && evidence && danger !== 'CLEARED';
-  let effectivePriority: Priority = human ?? (ai === 'P0' && !provisional ? 'P1' : ai) ?? 'PENDING';
+  const provisional = evidence && danger !== 'CLEARED';
+  let effectivePriority: Priority = human ?? (ai === 'P0' ? 'P1' : ai) ?? 'PENDING';
   const priorityReasons = [human ? 'Revisión del guardia' : provisional ? 'Peligro textual identificado por IA'
     : ai === 'P0' ? 'Sugerencia crítica pendiente de corroboración' : ai && ai !== 'PENDING'
       ? 'Gravedad sugerida por IA' : 'Pendiente de evaluación · Información insuficiente'];
@@ -83,6 +83,10 @@ export function evaluatePriority(
     effectivePriority = 'P0';
     prioritySource = 'DECLARED_DANGER';
     priorityReasons.unshift('Peligro inmediato declarado');
+  } else if (provisional) {
+    effectivePriority = 'P0';
+    if (human) priorityReasons.unshift('Peligro textual pendiente de revisión');
+    prioritySource = 'AI_PROVISIONAL';
   }
   if (source.status === 'OPEN' && source.elapsedSeconds >= thresholds.earlySeconds) {
     const next = effectivePriority === 'P3' ? source.elapsedSeconds >= thresholds.lateSeconds ? 'P1' : 'P2'
@@ -102,17 +106,20 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
     WHERE incident_id = ? AND danger_assessment <> 'UNCHANGED' ORDER BY revision DESC LIMIT 1`).get(source.id);
   const danger = (assessmentRow?.value ?? 'UNCHANGED') as Assessment;
   const results = db.prepare(`SELECT input_seq AS seq, result_json AS json, finished_at AS finishedAt
-    FROM incident_chat_ai_runs WHERE incident_id = ? AND status = 'COMPLETE' ORDER BY input_seq`).all(source.id);
-  const first = results[0];
-  const latest = results.at(-1);
-  const analysis = latest ? JSON.parse(String(latest.json)) as Analysis : null;
+    FROM incident_chat_ai_runs WHERE incident_id = ? AND status = 'COMPLETE' ORDER BY input_seq`).all(source.id) as
+    { seq: number; json: string; finishedAt: number }[];
+  const analyses = results.map(result => ({ ...result, analysis: JSON.parse(result.json) as Analysis }));
+  const latest = analyses.at(-1);
+  const analysis = latest?.analysis ?? null;
+  const critical = analyses.filter(result => result.analysis.severity === 'P0' && result.analysis.danger !== null).at(-1);
+  const evidence = critical?.analysis.danger;
   const oldAiPriority = legacyPriority(triage.suggestion?.urgency);
-  const initialAiPriority = first ? (JSON.parse(String(first.json)) as Analysis).severity : oldAiPriority;
+  const initialAiPriority = analyses[0]?.analysis.severity ?? oldAiPriority;
   const latestAiPriority = analysis?.severity ?? oldAiPriority;
   const humanPriority = row ? row.humanPriority : legacyPriority(triage.latestReview?.urgency);
   const elapsedSeconds = Math.max(0, Math.floor((now - Date.parse(source.createdAt)) / 1000));
   const { effectivePriority, prioritySource, priorityReasons } = evaluatePriority(
-    { ...source, elapsedSeconds }, humanPriority, latestAiPriority, Boolean(analysis?.danger), danger, policy,
+    { ...source, elapsedSeconds }, humanPriority, latestAiPriority, Boolean(evidence), danger, policy,
   );
   const inferredZone = analysis?.zoneId ? db.prepare('SELECT name FROM zones WHERE event_id = ? AND id = ?')
     .get(source.eventId, analysis.zoneId) : undefined;
@@ -125,9 +132,12 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
     policyVersion: policy.version, evaluatedAt: new Date(now).toISOString(), elapsedSeconds,
     revision: row?.revision ?? 0, confirmedLocation: confirmedLocation(row),
     declaredLocation: declared, inferredLocation: inferred, dangerAssessment: danger,
+    criticalEvidence: critical && evidence ? {
+      kind: evidence.kind, messageSeq: evidence.evidence.seq, analysisSeq: critical.seq,
+    } : null,
     analysis: analysis && latest ? {
       category: analysis.category, summary: analysis.summary, uncertainty: analysis.uncertainty,
-      observedAt: new Date(Number(latest.finishedAt)).toISOString(), inputSeq: Number(latest.seq),
+      observedAt: new Date(latest.finishedAt).toISOString(), inputSeq: latest.seq,
     } : null,
   };
 }

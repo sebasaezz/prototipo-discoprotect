@@ -30,7 +30,7 @@ internal sealed interface SosAttempt {
     data class Create(override val eventId: String, val body: SosRequest, val mode: String? = null,
         val firstMessage: ChatDraft? = null) : SosAttempt {
         override fun matches(incident: Incident) = incident.eventId == eventId &&
-            incident.clientRequestId == body.clientRequestId && incident.zoneId == body.zoneId &&
+            incident.clientRequestId == body.clientRequestId && incident.hasConversation == (mode != null) && incident.zoneId == body.zoneId &&
             incident.locationText == body.locationText
     }
 
@@ -45,12 +45,6 @@ internal enum class SosOutcome { Ready, Confirmed, Cancelled, Uncertain, Offline
 internal data class SosState(
     val events: List<SosEvent> = emptyList(),
     val event: SosEvent? = null,
-    val zones: List<SosZone>? = null,
-    val locationChosen: Boolean = false,
-    val zoneId: String? = null,
-    val reference: String = "",
-    val reasonCode: SosReason? = null,
-    val description: String = "",
     val incidents: List<Incident>? = null,
     val pending: SosAttempt? = null,
     val outcome: SosOutcome = SosOutcome.Ready,
@@ -59,9 +53,7 @@ internal data class SosState(
     val historyError: String? = null,
     val lastConsultedAt: Instant? = null,
     val historyFresh: Boolean = false,
-) {
-    val canSend get() = event != null && zones != null && locationChosen && pending == null
-}
+)
 
 private const val holdSteps = 30
 private const val holdIntervalMillis = 50L
