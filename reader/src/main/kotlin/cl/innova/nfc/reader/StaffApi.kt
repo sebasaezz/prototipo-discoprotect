@@ -1,9 +1,6 @@
 package cl.innova.nfc.reader
 
-import cl.discoprotect.ui.Incident
-import cl.discoprotect.ui.IncidentList
-import cl.discoprotect.ui.IncidentStatus
-import cl.discoprotect.ui.isIncidentUuid
+import cl.discoprotect.ui.*
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.URI
@@ -50,8 +47,14 @@ internal enum class IncidentAction(val path: String, val label: String, val from
     Claim("claim", "Asumir", IncidentStatus.OPEN, IncidentStatus.ASSIGNED),
     Start("start", "Iniciar atención", IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS),
     Resolve("resolve", "Resolver", IncidentStatus.IN_PROGRESS, IncidentStatus.RESOLVED),
+    Close("close", "Cerrar solicitud", IncidentStatus.ASSIGNED, IncidentStatus.CLOSED);
+
+    fun accepts(status: IncidentStatus) = status == from || this == Close && status == IncidentStatus.IN_PROGRESS
 }
 
+@Serializable internal data class StaffIncidentQueue(
+    val incidents: List<Incident>, val guardBusy: Boolean = false, val activeIncident: Incident? = null,
+)
 internal data class IncidentCommand(val incidentId: String, val action: IncidentAction, val body: OperationBody)
 @Serializable internal data class OperationBody(val version: Long, val operationId: String, val resolutionNote: String? = null)
 @Serializable internal data class AppliedOperation(
@@ -59,14 +62,44 @@ internal data class IncidentCommand(val incidentId: String, val action: Incident
     val appliedVersion: Long, val appliedAt: String, val replayed: Boolean,
 )
 @Serializable internal data class OperationReply(val operation: AppliedOperation, val incident: Incident)
+@Serializable internal data class TriageDetail(val triage: IncidentTriage, val description: String?)
+@Serializable internal data class ReviewBody(
+    val triageVersion: Long, val operationId: String, val decision: ReviewDecision,
+    val category: TriageCategory? = null, val urgency: TriageUrgency? = null,
+)
+@Serializable internal data class ReviewReply(val review: TriageReview, val triage: IncidentTriage, val replayed: Boolean)
+@Serializable internal data class DispatchZone(val id: String, val name: String)
+@Serializable internal data class DispatchLocationInput(val zoneId: String?, val text: String?)
+@Serializable internal data class DispatchReviewBody(
+    val expectedRevision: Long, val operationId: String, val humanPriority: DispatchPriority?,
+    val confirmedLocation: DispatchLocationInput?, val dangerAssessment: DangerAssessment, val reason: String,
+)
+@Serializable internal data class DispatchDetail(val dispatch: IncidentDispatch, val zones: List<DispatchZone>)
+@Serializable internal data class DispatchReview(val revision: Long, val operationId: String)
+@Serializable internal data class DispatchReply(val review: DispatchReview, val dispatch: IncidentDispatch, val replayed: Boolean)
 
 internal interface StaffApi {
     suspend fun health()
     suspend fun login(pin: String, account: StaffAccount = StaffAccount.First): StaffSession
     suspend fun events(session: StaffSession): List<StaffEvent>
     suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident>
+    suspend fun queue(session: StaffSession, event: StaffEvent): StaffIncidentQueue {
+        val incidents = incidents(session, event)
+        val own = incidents.firstOrNull { it.status.active && it.assignedStaff?.id == session.personId }
+        return StaffIncidentQueue(incidents, own != null, own)
+    }
     suspend fun operate(session: StaffSession, event: StaffEvent, command: IncidentCommand): OperationReply
+    suspend fun triage(session: StaffSession, event: StaffEvent, id: String): TriageDetail
+    suspend fun review(session: StaffSession, event: StaffEvent, id: String, body: ReviewBody): ReviewReply
     suspend fun resolve(session: StaffSession, event: StaffEvent, token: String): HealthProfile
+    suspend fun conversation(session: StaffSession, event: StaffEvent, id: String, after: Long): ChatPage =
+        throw ApiFailure(ApiProblem.InvalidResponse)
+    suspend fun message(session: StaffSession, event: StaffEvent, id: String, draft: ChatDraft): ChatWrite =
+        throw ApiFailure(ApiProblem.InvalidResponse)
+    suspend fun dispatch(session: StaffSession, event: StaffEvent, id: String): DispatchDetail =
+        throw ApiFailure(ApiProblem.InvalidResponse)
+    suspend fun reviewDispatch(session: StaffSession, event: StaffEvent, id: String, body: DispatchReviewBody): DispatchReply =
+        throw ApiFailure(ApiProblem.InvalidResponse)
 }
 
 internal class HttpStaffApi(private val address: HttpUrl, private val client: OkHttpClient) : StaffApi {
@@ -92,10 +125,16 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
             StaffEvent(it.id, it.name, it.venue)
         }
 
-    override suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident> {
-        return exchange<IncidentList>(incidentUrl(event).build(), session).incidents.also { incidents ->
-            requireReply(incidents.all { it.validOperational(event.id) } &&
-                incidents.distinctBy { it.id }.size == incidents.size)
+    override suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident> = queue(session, event).incidents
+
+    override suspend fun queue(session: StaffSession, event: StaffEvent): StaffIncidentQueue {
+        return exchange<StaffIncidentQueue>(incidentUrl(event).addQueryParameter("order", "dispatch").build(), session).also { queue ->
+            requireReply(queue.incidents.all { it.validOperational(event.id) } &&
+                queue.incidents.distinctBy { it.id }.size == queue.incidents.size)
+            queue.activeIncident?.let {
+                requireReply(queue.guardBusy && it.validOperational(it.eventId) &&
+                    it.status.active && it.assignedStaff?.id == session.personId)
+            }
         }
     }
 
@@ -114,14 +153,71 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
                 IncidentAction.Claim -> incident.assignedAt
                 IncidentAction.Start -> incident.startedAt
                 IncidentAction.Resolve -> incident.resolvedAt
+                IncidentAction.Close -> incident.updatedAt
             }
             requireReply(incident.validOperational(event.id) && incident.id == command.incidentId &&
                 incident.assignedStaff?.id == session.personId && operation.operationId == command.body.operationId &&
-                operation.fromStatus == command.action.from && operation.toStatus == command.action.to &&
+                command.action.accepts(operation.fromStatus) && operation.toStatus == command.action.to &&
                 operation.appliedVersion == command.body.version + 1 && operation.appliedAt == actionTime &&
                 incident.version >= operation.appliedVersion &&
                 (operation.replayed || incident.version == operation.appliedVersion) &&
                 (incident.version > operation.appliedVersion || incident.status == operation.toStatus))
+        }
+    }
+
+    private fun triageUrl(event: StaffEvent, id: String): HttpUrl.Builder {
+        requireReply(isIncidentUuid(id), ApiProblem.InvalidInput)
+        return incidentUrl(event).addPathSegment(id).addPathSegment("triage")
+    }
+
+    private fun conversationUrl(event: StaffEvent, id: String): HttpUrl.Builder {
+        requireReply(isIncidentUuid(id), ApiProblem.InvalidInput)
+        return incidentUrl(event).addPathSegment(id).addPathSegment("conversation")
+    }
+
+    private fun dispatchUrl(event: StaffEvent, id: String): HttpUrl.Builder {
+        requireReply(isIncidentUuid(id), ApiProblem.InvalidInput)
+        return incidentUrl(event).addPathSegment(id).addPathSegment("dispatch")
+    }
+
+    override suspend fun dispatch(session: StaffSession, event: StaffEvent, id: String): DispatchDetail =
+        exchange(dispatchUrl(event, id).build(), session)
+
+    override suspend fun reviewDispatch(session: StaffSession, event: StaffEvent, id: String, body: DispatchReviewBody): DispatchReply =
+        exchange<DispatchReply>(dispatchUrl(event, id).addPathSegment("reviews").build(), session, json.encodeToString(body)).also {
+            requireReply(it.review.operationId == body.operationId && it.review.revision == body.expectedRevision + 1 &&
+                it.dispatch.revision >= it.review.revision)
+        }
+
+    override suspend fun conversation(session: StaffSession, event: StaffEvent, id: String, after: Long): ChatPage =
+        exchange<ChatPage>(conversationUrl(event, id).addQueryParameter("afterSeq", after.toString()).build(), session)
+            .also { requireReply(it.valid(id, after)) }
+
+    override suspend fun message(session: StaffSession, event: StaffEvent, id: String, draft: ChatDraft): ChatWrite =
+        try {
+            exchange<ChatWrite>(conversationUrl(event, id).addPathSegment("messages").build(), session, json.encodeToString(draft))
+                .also { requireReply(it.valid(id, draft, ChatAuthorType.STAFF)) }
+        } catch (failure: ApiFailure) {
+            if (failure.problem in setOf(ApiProblem.Conflict, ApiProblem.Forbidden, ApiProblem.NotFound, ApiProblem.InvalidInput)) {
+                throw ChatRejected()
+            }
+            throw failure
+        }
+
+    override suspend fun triage(session: StaffSession, event: StaffEvent, id: String): TriageDetail =
+        exchange<TriageDetail>(triageUrl(event, id).build(), session).also {
+            requireReply(it.triage.valid() && (it.description == null ||
+                it.description.isNotBlank() && it.description.length <= 280))
+        }
+
+    override suspend fun review(session: StaffSession, event: StaffEvent, id: String, body: ReviewBody): ReviewReply {
+        val url = triageUrl(event, id).addPathSegment("reviews").build()
+        return exchange<ReviewReply>(url, session, json.encodeToString(body)).also { (review, triage, replayed) ->
+            requireReply(review.valid() && triage.valid() && review.actor.id == session.personId &&
+                review.operationId == body.operationId && review.reviewedTriageVersion == body.triageVersion &&
+                review.decision == body.decision &&
+                (body.decision == ReviewDecision.CONFIRM || review.category == body.category && review.urgency == body.urgency) &&
+                triage.triageVersion >= review.reviewVersion && (replayed || triage.latestReview == review))
         }
     }
 
@@ -211,7 +307,9 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
 private fun Incident.validOperational(eventId: String): Boolean = validFor(eventId) &&
     (assignedStaff != null) == (assignedAt != null) &&
     (assignedStaff == null || assignedStaff.id.isNotBlank() && assignedStaff.name.isNotBlank()) &&
-    (resolutionNote == null || status == IncidentStatus.RESOLVED && resolutionNote.isNotBlank() && resolutionNote.length <= 240)
+    (resolutionNote == null || status in setOf(IncidentStatus.RESOLVED, IncidentStatus.CLOSED, IncidentStatus.WITHDRAWN) &&
+        resolutionNote.isNotBlank() && resolutionNote.length <= 240) &&
+    dangerAlert == reasonCode?.takeIf { it.alert != null } && (triage == null || triage.valid())
 
 private fun requireReply(condition: Boolean, problem: ApiProblem = ApiProblem.InvalidResponse) {
     if (!condition) throw ApiFailure(problem)

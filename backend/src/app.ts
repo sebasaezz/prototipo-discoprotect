@@ -1,13 +1,22 @@
 import Fastify, { LogController, type FastifyRequest } from 'fastify';
 import { authenticate, issueSession, requireMembership, requireRole } from './auth.js';
 import type { Pins } from './config.js';
+import { messageInput, pageInput, readConversation, sendMessage } from './conversations.js';
 import type { Db } from './db.js';
 import { ApiError, parse } from './errors.js';
+import { activatePolicy, dispatchAudit, dispatchReviewInput, reviewDispatch, type Thresholds } from './dispatch.js';
+import { z } from 'zod';
 import * as incidents from './incidents.js';
 import * as records from './records.js';
+import { triageDetail, reviewTriage } from './triage.js';
+import { reviewInput } from './triage-contract.js';
+import { previewPurge, purgeIncidents, purgeInput, purgeTarget } from './incident-purge.js';
 
-export function createApp(db: Db, pins: Pins, logging = false) {
+export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = false,
+  thresholds: Thresholds = { earlySeconds: 120, lateSeconds: 300 }, demoPurgeEnabled = false) {
   const app = Fastify({ logger: logging, logController: new LogController({ disableRequestLogging: true }), bodyLimit: 32 * 1024 });
+  const dispatch = activatePolicy(db, thresholds);
+  const queueQuery = z.strictObject({ order: z.literal('dispatch').optional() });
   const session = (request: FastifyRequest) => authenticate(db, request.headers.authorization);
   const attendee = (request: FastifyRequest) => {
     const current = session(request);
@@ -17,6 +26,7 @@ export function createApp(db: Db, pins: Pins, logging = false) {
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
+      if (error.code === 'CHAT_RATE_LIMIT') reply.header('Retry-After', '60');
       return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message, details: error.details } });
     }
     const status = error instanceof Error && 'statusCode' in error ? error.statusCode : undefined;
@@ -71,8 +81,8 @@ export function createApp(db: Db, pins: Pins, logging = false) {
       const current = session(request);
       requireRole(current, 'ATTENDEE');
       const { eventId } = parse(records.eventId, request.params);
-      const result = incidents.createIncident(db, current, eventId, parse(incidents.createInput, request.body));
-      return reply.code(result.created ? 201 : 200).send(result.incident);
+      const result = incidents.createIncident(db, current, eventId, parse(incidents.createInput, request.body), triageEnabled);
+      return reply.code(result.created ? 201 : 200).send(result.body);
     });
     api.get('/me/incidents', async request => {
       const current = session(request);
@@ -86,7 +96,9 @@ export function createApp(db: Db, pins: Pins, logging = false) {
       if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
       const { eventId } = parse(records.eventId, request.params);
       requireMembership(db, current, eventId);
-      return { incidents: incidents.eventIncidents(db, eventId) };
+      const { order } = parse(queueQuery, request.query);
+      return { incidents: incidents.eventIncidents(db, eventId, order === 'dispatch' ? dispatch : undefined),
+        ...(current.role === 'STAFF' ? incidents.guardAttention(db, current, dispatch) : {}) };
     });
     api.post('/me/incidents/:id/cancel', async request => {
       const current = session(request);
@@ -102,6 +114,47 @@ export function createApp(db: Db, pins: Pins, logging = false) {
     });
     const incidentParams = records.eventId.extend(incidents.incidentId.shape);
     const incidentPath = '/events/:eventId/incidents/:id';
+    const purgePath = '/events/:eventId/incidents/demo-purge';
+    api.get(purgePath, async request => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId } = parse(records.eventId, request.params);
+      requireMembership(db, current, eventId);
+      return previewPurge(db, eventId, demoPurgeEnabled, parse(purgeTarget, request.query).incidentId);
+    });
+    api.post(purgePath, async request => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId } = parse(records.eventId, request.params);
+      requireMembership(db, current, eventId);
+      return purgeIncidents(db, eventId, current, demoPurgeEnabled, parse(purgeInput, request.body));
+    });
+    api.get('/me/incidents/:id/conversation', async request => {
+      const current = session(request);
+      requireRole(current, 'ATTENDEE');
+      const { id } = parse(incidents.incidentId, request.params);
+      return readConversation(db, current, id, undefined, parse(pageInput, request.query));
+    });
+    api.get(`${incidentPath}/conversation`, async request => {
+      const current = session(request);
+      requireRole(current, 'STAFF');
+      const { id, eventId } = parse(incidentParams, request.params);
+      return readConversation(db, current, id, eventId, parse(pageInput, request.query));
+    });
+    api.post('/me/incidents/:id/conversation/messages', async (request, reply) => {
+      const current = session(request);
+      requireRole(current, 'ATTENDEE');
+      const { id } = parse(incidents.incidentId, request.params);
+      const { created, ...body } = sendMessage(db, current, id, undefined, parse(messageInput, request.body));
+      return reply.code(created ? 201 : 200).send(body);
+    });
+    api.post(`${incidentPath}/conversation/messages`, async (request, reply) => {
+      const current = session(request);
+      requireRole(current, 'STAFF');
+      const { id, eventId } = parse(incidentParams, request.params);
+      const { created, ...body } = sendMessage(db, current, id, eventId, parse(messageInput, request.body));
+      return reply.code(created ? 201 : 200).send(body);
+    });
     api.get(incidentPath, async request => {
       const current = session(request);
       if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
@@ -109,14 +162,42 @@ export function createApp(db: Db, pins: Pins, logging = false) {
       requireMembership(db, current, eventId);
       return incidents.eventIncident(db, eventId, id);
     });
-    for (const action of ['claim', 'start', 'resolve'] as const) {
+    api.get(`${incidentPath}/triage`, async request => {
+      const current = session(request);
+      if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
+      const { eventId, id } = parse(incidentParams, request.params);
+      return triageDetail(db, current, eventId, id);
+    });
+    api.get(`${incidentPath}/dispatch`, async request => {
+      const current = session(request);
+      if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
+      const { id, eventId } = parse(incidentParams, request.params);
+      requireMembership(db, current, eventId);
+      return { dispatch: incidents.incidentDispatch(db, eventId, id, dispatch),
+        ...dispatchAudit(db, id, eventId, current.role === 'STAFF') };
+    });
+    api.post(`${incidentPath}/dispatch/reviews`, async request => {
+      const current = session(request);
+      requireRole(current, 'STAFF');
+      const { id, eventId } = parse(incidentParams, request.params);
+      return reviewDispatch(db, current, eventId, id, parse(dispatchReviewInput, request.body),
+        () => incidents.incidentDispatch(db, eventId, id, dispatch));
+    });
+    api.post(`${incidentPath}/triage/reviews`, async request => {
+      const current = session(request);
+      requireRole(current, 'STAFF');
+      const { eventId, id } = parse(incidentParams, request.params);
+      return reviewTriage(db, current, eventId, id, parse(reviewInput, request.body));
+    });
+    for (const action of ['claim', 'start', 'resolve', 'close', 'withdraw'] as const) {
       api.post(`${incidentPath}/${action}`, async request => {
         const current = session(request);
-        requireRole(current, 'STAFF');
+        requireRole(current, action === 'withdraw' ? 'ORGANIZER' : 'STAFF');
         const { eventId, id } = parse(incidentParams, request.params);
-        const input = action === 'resolve' ? parse(incidents.resolutionInput, request.body)
-          : parse(incidents.operationInput, request.body);
-        return incidents.operate(db, current, eventId, id, action, input);
+        const schema = action === 'close' || action === 'withdraw' ? incidents.terminationInput
+          : action === 'resolve' ? incidents.resolutionInput : incidents.operationInput;
+        const input = parse(schema, request.body);
+        return incidents.operate(db, current, eventId, id, action, input, dispatch);
       });
     }
     api.patch('/events/:eventId', async request => {

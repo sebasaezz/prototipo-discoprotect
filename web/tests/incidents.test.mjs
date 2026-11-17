@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ApiError, currentIncidentSnapshot, events, incidents, login } from '../.test-build/api.js';
+import { ApiError, currentIncidentSnapshot, events, incidents, incidentDispatch, incidentTriage, login } from '../.test-build/api.js';
 import { IncidentTable } from '../.test-build/IncidentTable.js';
 import { incidentPolling } from '../.test-build/incidentPolling.js';
 
@@ -23,6 +23,48 @@ const incident = {
   resolutionNote: null,
 };
 
+const suggested = {
+  triageVersion: 2, status: 'SUGGESTED', fallback: null, fallbackReason: null, latestReview: null,
+  suggestion: { category: 'SECURITY', urgency: 'IMMEDIATE', summary: 'Se reportó un peligro.',
+    missingInformation: ['ONGOING_DANGER'], uncertainty: 'HIGH' },
+};
+const review = { reviewVersion: 3, reviewedTriageVersion: 2, operationId: incident.id, decision: 'CORRECT',
+  category: 'OTHER', urgency: 'PRIORITY', reviewedAt: incident.createdAt, actor: { id: 'guard', name: 'Guardia ficticio' } };
+const reviewed = { ...suggested, triageVersion: 3, latestReview: review };
+
+test('review and deterministic danger remain visible when operational and triage versions arrive out of order', () => {
+  const alert = { reasonCode: 'IMMEDIATE_DANGER', dangerAlert: 'IMMEDIATE_DANGER' };
+  const current = { ...incident, ...alert, version: 2, triage: suggested };
+  const late = { ...incident, ...alert, triage: reviewed };
+  const [merged] = currentIncidentSnapshot([current], [late]);
+  assert.equal(merged.version, 2);
+  assert.equal(merged.triage, reviewed);
+  assert.equal(currentIncidentSnapshot([merged], [current])[0].triage, reviewed);
+  const html = renderToStaticMarkup(createElement(IncidentTable, { items: [merged] }));
+  for (const text of ['Se reportó peligro inmediato', 'Revisión humana', 'Prioritaria', 'Detalle e historial']) {
+    assert.ok(html.includes(text));
+  }
+});
+
+test('organizer history validates ordering and rejects a leaked original description', async t => {
+  const signal = new AbortController().signal;
+  const session = { token: 'a'.repeat(43), expiresAt: new Date(Date.now() + 60000).toISOString() };
+  const replies = [
+    { triage: reviewed, reviews: [review] },
+    { triage: reviewed, reviews: [review, review] },
+    { triage: reviewed, reviews: [review], description: 'Solo para el guardia' },
+  ];
+  t.mock.method(globalThis, 'fetch', async (path, options) => {
+    assert.equal(path, `/api/v1/events/demo-festival/incidents/${incident.id}/triage`);
+    assert.equal(options.headers.Authorization, 'Bearer ' + session.token);
+    assert.equal(options.signal, signal);
+    return Response.json(replies.shift());
+  });
+  assert.deepEqual((await incidentTriage(session, incident.eventId, incident.id, signal)).reviews, [review]);
+  await assert.rejects(incidentTriage(session, incident.eventId, incident.id, signal), { status: 502 });
+  await assert.rejects(incidentTriage(session, incident.eventId, incident.id, signal), { status: 502 });
+});
+
 test('table renders the ID, location, reference, timestamp and textual status', () => {
   const html = renderToStaticMarkup(createElement(IncidentTable, { items: [
     incident, { ...incident, id: 'different', status: 'CANCELLED', zoneName: 'Escenario', locationText: null },
@@ -30,6 +72,34 @@ test('table renders the ID, location, reference, timestamp and textual status', 
   for (const text of [incident.id, 'Antonia Reyes', 'Ubicación desconocida', '&lt;referencia ficticia&gt;',
     incident.createdAt, 'Abierta', 'Escenario', 'Cancelada']) assert.ok(html.includes(text));
   assert.ok(renderToStaticMarkup(createElement(IncidentTable, { items: [] })).includes('aún no tiene solicitudes'));
+});
+
+test('dispatch view distinguishes provisional P0 and pending and honors server queue order', () => {
+  const provisional = { effectivePriority: 'P0', prioritySource: 'AI_PROVISIONAL',
+    priorityReasons: ['Peligro textual identificado por IA'], elapsedSeconds: 20, revision: 0,
+    inferredLocation: { zoneName: 'Escenario' }, analysis: { summary: 'Caída reportada', uncertainty: [] },
+  };
+  const pending = { ...provisional, effectivePriority: 'PENDING', prioritySource: 'PENDING', inferredLocation: null, analysis: null };
+  const items = [
+    { ...incident, requesterName: 'Primero en cola', hasConversation: true, dispatch: provisional },
+    { ...incident, id: 'other', requesterName: 'Segundo en cola', hasConversation: true, dispatch: pending },
+  ];
+  const html = renderToStaticMarkup(createElement(IncidentTable, { items }));
+  assert.ok(html.indexOf('Primero en cola') < html.indexOf('Segundo en cola'));
+  for (const text of ['Provisional IA', 'Pendiente de evaluación', 'Inferida por IA', 'Despacho y auditoría']) {
+    assert.ok(html.includes(text));
+  }
+});
+
+test('dispatch audit rejects a leaked conversation', async t => {
+  const session = { token: 'a'.repeat(43), expiresAt: new Date(Date.now() + 60000).toISOString() };
+  const result = { dispatch: { effectivePriority: 'PENDING', revision: 0, elapsedSeconds: 0, priorityReasons: [] },
+    reviews: [], transitions: [], messages: [] };
+  t.mock.method(globalThis, 'fetch', async path => {
+    assert.ok(path.endsWith('/dispatch'));
+    return Response.json(result);
+  });
+  await assert.rejects(incidentDispatch(session, incident.eventId, incident.id, new AbortController().signal), { status: 502 });
 });
 
 test('API uses organizer PIN, accepts only its events and sends the Bearer to the same origin', async t => {
@@ -48,7 +118,7 @@ test('API uses organizer PIN, accepts only its events and sends the Bearer to th
       case '/api/v1/events':
         assert.equal(options.headers.Authorization, 'Bearer ' + session.token);
         return json({ events: [{ id: 'demo-festival', role: 'ORGANIZER' }, { id: 'otro', role: 'STAFF' }] });
-      case '/api/v1/events/demo-festival/incidents':
+      case '/api/v1/events/demo-festival/incidents?order=dispatch':
         assert.equal(options.headers.Authorization, 'Bearer ' + session.token);
         return json({ incidents: [incident] });
       default:

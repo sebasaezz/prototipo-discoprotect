@@ -69,3 +69,21 @@ test('003 refuses unexpected references to H5 incidents before dropping the tabl
   assert.throws(() => migrate(db), /referencias entrantes/);
   assert.equal(db.prepare('SELECT count(*) AS count FROM incidents').get()?.count, 2);
 });
+
+test('005 preserves existing H6 and H7 incident records', async t => {
+  for (const through of [3, 4]) {
+    await t.test('upgrade from ' + through, nested => {
+      const db = legacy(nested);
+      const names = ['003_incident_lifecycle.sql', '004_incident_triage.sql'].slice(0, through - 2);
+      for (const name of names) {
+        db.exec(readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'));
+        db.prepare("INSERT INTO schema_migrations VALUES (?, 'existing')").run(name);
+      }
+      const before = db.prepare(`SELECT ${legacyFields} FROM incidents ORDER BY id`).all();
+      migrate(db);
+      assert.deepEqual(db.prepare(`SELECT ${legacyFields} FROM incidents ORDER BY id`).all(), before);
+      assert.equal(db.prepare('SELECT count(*) AS n FROM incident_conversations').get()?.n, 0);
+      assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+    });
+  }
+});

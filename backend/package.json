@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13.0" },
+  "engines": { "node": ">=22.16.0" },
   "scripts": {
     "build": "tsc",
     "dev": "npm run build && node --env-file-if-exists=.env --watch dist/src/main.js",
@@ -11,7 +11,8 @@
     "db:migrate": "npm run build && node --env-file-if-exists=.env dist/src/db-cli.js migrate",
     "db:seed": "npm run build && node --env-file-if-exists=.env dist/src/db-cli.js seed",
     "db:reset": "npm run build && node --env-file-if-exists=.env dist/src/db-cli.js reset",
-    "test": "npm run build && node --test dist/tests/*.test.js"
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "smoke:chat": "node --env-file-if-exists=.env scripts/smoke-chat.mjs"
   },
   "dependencies": { "fastify": "5.12.8", "zod": "4.6.7" },
   "devDependencies": { "@types/node": "^22.0.0", "typescript": "~5.9.3" }

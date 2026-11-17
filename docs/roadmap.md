@@ -10,29 +10,24 @@ El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre
 | H3 · Implementado y validado físicamente por el usuario el 2026-11-15 | Edición de ficha y contactos desde AppAsistente. Depende de H2. | Guardar desde AppAsistente y recuperar el cambio por NFC en AppPersonal. | Flujos completos, errores y conflictos de versiones. Riesgo de edición concurrente. |
 | H4 · Completado y validado físicamente el 15 de noviembre de 2026 | Sesión seleccionable y credenciales dinámicas. Depende de H3. | Cambiar de cuenta y obtener su ficha por NFC. | Alternar identidades y verificar consistencia HCE al reanudar. Riesgo de credencial anterior. |
 | H5 · Implementado y validado físicamente el 15/11/2026 | SOS persistente, zona manual, guardia y vista web básica. Depende de H4, API y LAN. | Una pulsación prolongada crea un incidente que conserva el mismo ID en AppPersonal y en la web tras reiniciar Fastify. | [Aceptación H5, 27/27](checkpoints/h5-2026-11-15.md) · [Guion de regresión](h5-integration.md). |
-| H6 · Implementado y validado físicamente, integración pendiente | Atención, transiciones y sincronización. Depende de H5. | Un guardia asume, atiende y resuelve. Asistente y GestiónWeb reciben los estados. | [Checkpoint H6](checkpoints/h6-2026-11-15.md). 95 pruebas automatizadas reportadas y 26/26 comprobaciones físicas aprobadas, incluida la regresión NFC. Simultaneidad HTTP estricta verificada en la integración automatizada. |
-| H7 · Pendiente | Triaje con IA, fallback y corrección humana. Depende de H5–H6. | Categoría, urgencia, resumen y evidencias inciertas sin bloquear SOS. | Respuestas válidas, timeout, fallback y revisión humana. Riesgo de clasificación errónea. |
-| H8 · Pendiente | GestiónWeb para organizadores. Depende del API de eventos e incidentes. | Administrar eventos/personal y consultar métricas e historial persistentes. | Permisos, consistencia de métricas y flujos web. Riesgo de exponer registros de otro evento. |
+| H6 · Implementado, validado e integrado en `main` por PR #6 | Atención, transiciones y sincronización. Depende de H5. | Un guardia asume, atiende y resuelve. Asistente y GestiónWeb reciben los estados. | [Checkpoint H6](checkpoints/h6-2026-11-15.md). 95 pruebas automatizadas reportadas y 26/26 comprobaciones físicas aprobadas, incluida la regresión NFC. |
+| H7–H7.3 · Implementados en el PR #7, aceptación física pendiente | Triaje, chat SOS, prioridad efectiva, traspaso, atención, retiro y purga demo. | Recorrido completo sobre SQLite con asignación activa única y auditoría. | [Checkpoint H7.3](checkpoints/h7-3-2026-11-17.md) · [Guion físico vigente](h7-2-integration.md). |
+| H8 · Pendiente | Administración de eventos y personal autorizado, y métricas en GestiónWeb. | Ampliar la edición de eventos y membresías con permisos explícitos. | Aislamiento entre eventos, consistencia de métricas y auditoría de cambios. |
 | H9 · Pendiente | Entradas QR ficticias, promociones, acompañantes y búsqueda autorizada. Depende de apps y GestiónWeb. | Publicar una promoción y verla durante la vigencia. Completar flujos complementarios. | Vigencias, zonas horarias, accesos y entradas inválidas. Riesgo de campañas fuera de plazo. |
 | H10 · Pendiente | Estabilizar apps y demo integrada. Depende de H0–H9. | Ejecutar el guion completo con los dos Samsung y el computador, con datos restaurables. | E2E, reinicio, caída de LAN y fallback IA. Riesgos de hardware, firmware y red del recinto. |
 
 ## Plan de ejecución H6–H10 · Visión integral
 
-### H6 · Gestión operativa de incidentes
+### H6–H7.3 · Gestión operativa integrada
 
-- **Objetivo y base.** Convertir el SOS de H5 en una solicitud que el personal del evento pueda asignar, atender y resolver. Reutilizar la API Fastify, SQLite, la membresía por evento y las vistas de AppAsistente, AppPersonal y web. Extender el modelo de incidentes `OPEN`/`CANCELLED`.
-- **Diseño y riesgo.** Acordar estados, transiciones, permisos, concurrencia y reglas de cancelación antes de fijar el contrato. Fastify y SQLite conservan la autoridad. Evaluar primero consulta periódica o actualización explícita con reconexión. El riesgo principal es que dos guardias actúen sobre el mismo estado o que una vista muestre un estado obsoleto.
-- **Aceptación física.** El guardia recibe, asigna, atiende y resuelve un SOS. El asistente y el organizador consultan el estado persistido, incluso tras recuperar la conexión. El triaje IA y la administración de eventos quedan para H7 y H8.
+H6 está en `main` y cuenta con aceptación física. H7–H7.3 están implementados y propuestos en el [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7). El [flujo actual](current-workflow.md) cubre el chat, despacho, atención y gestión de solicitudes. La [aceptación física](h7-2-integration.md) sigue pendiente.
 
-### H7 · Triaje asistido por IA
+### H8 · Administración de eventos y personal
 
-- **Objetivo y base.** Ayudar al personal a revisar incidentes de H5–H6 con categoría, urgencia sugerida y resumen. Añadir un servicio desacoplado del envío y del flujo operativo. Validar respuestas estructuradas y prever timeout, fallback, incertidumbre, corrección humana y registro de revisiones.
-- **Aceptación física.** Con las apps y la web conectadas, un operador revisa y corrige una sugerencia. Una prueba de fallo o timeout conserva la recepción del SOS y la atención manual. El riesgo principal es una clasificación errónea. Las decisiones críticas siguen bajo responsabilidad humana. Fuera de alcance quedan la asignación automática y los bloqueos del flujo por falta de IA.
-
-### H8 · GestiónWeb para organizadores
-
-- **Objetivo y base.** Evolucionar la vista React de H5 para administrar eventos y personal autorizado y consultar incidentes, historial y métricas. Reutilizar sesiones, miembros por evento y API operativa de H6. Definir permisos administrativos antes de implementar. Las pantallas y el diseño de permisos pueden planificarse en paralelo a H7, con la API de eventos e incidentes como dependencia principal.
-- **Aceptación física.** Desde el navegador, un organizador administra los datos autorizados de un evento y verifica que el historial y las métricas persisten y concuerdan con las apps. Prueba que otro evento queda fuera de su acceso. El riesgo principal es la filtración entre eventos. Entradas, acompañantes y promociones se reservan para H9.
+- Ampliar la administración web de eventos a partir de la edición existente de nombre y recinto. Definir las operaciones de eventos, zonas y membresías que necesita un organizador y su autorización por ámbito.
+- Incorporar gestión de guardias y definir cómo retirar acceso o reasignar una atención cuando sea necesario. Mantener la unicidad de asignaciones activas y el historial.
+- Agregar métricas del evento con definiciones y filtros verificables. Reutilizar las vistas ya disponibles de cola, historial y auditoría, así como el retiro y la purga demo.
+- Validar que los cambios y métricas persistan y se limiten al evento autorizado. Entradas, acompañantes y promociones siguen en H9.
 
 ### H9 · Flujos complementarios de eventos
 
@@ -46,6 +41,6 @@ El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre
 
 ### Decisiones transversales
 
-- Entregar flujos completos y verificables por hito. Reutilizar módulos y contratos. Validar físicamente antes de integrar a `main`.
+- Entregar flujos completos y verificables por hito. Reutilizar módulos y contratos. Registrar la aceptación física por separado y documentar su estado al integrar a `main`.
 - Aplicar migraciones SQLite incrementales que conserven datos. Autorizar por sesión, rol y evento. Mantener persistencia e idempotencia en operaciones críticas y distinguir desconexión de resultado incierto.
 - Preservar NFC H0–H4 y separar datos de emergencia de servicios complementarios. Mantener la IA no bloqueante y bajo supervisión humana. Usar datos ficticios y documentar los límites de seguridad del prototipo.

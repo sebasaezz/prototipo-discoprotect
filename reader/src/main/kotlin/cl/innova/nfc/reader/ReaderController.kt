@@ -1,6 +1,13 @@
 package cl.innova.nfc.reader
 
 import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.ChatDraft
+import cl.discoprotect.ui.ChatOutbox
+import cl.discoprotect.ui.IncidentStatus
+import cl.discoprotect.ui.IncidentTriage
+import cl.discoprotect.ui.ReviewDecision
+import cl.discoprotect.ui.TriageCategory
+import cl.discoprotect.ui.TriageUrgency
 import cl.discoprotect.ui.currentIncidentSnapshot
 import cl.discoprotect.ui.incidentPollDelay
 import java.time.Clock
@@ -48,6 +55,8 @@ internal data class ReaderUiState(
     val incidentsVisible: Boolean = false,
     val incidentsLoading: Boolean = false,
     val incidents: List<Incident>? = null,
+    val guardBusy: Boolean = false,
+    val activeIncident: Incident? = null,
     val incidentProblem: ApiProblem? = null,
     val lastIncidentRead: Instant? = null,
     val staffId: String? = null,
@@ -55,13 +64,20 @@ internal data class ReaderUiState(
     val incidentWriting: Boolean = false,
     val pendingIncident: Boolean = false,
     val incidentNotice: String? = null,
+    val triageId: String? = null,
+    val triageDetail: TriageDetail? = null,
+    val triageLoading: Boolean = false,
+    val triageWriting: Boolean = false,
+    val triagePending: Boolean = false,
+    val triageNotice: String? = null,
 ) {
     val canContinue get() = signedIn && event != null && server == ServerState.Connected
     val canScan get() = !configuring && !incidentsVisible && (local || signedIn && event != null) && scan == ScanState.Ready
     val incidentsCurrent get() = lastIncidentRead != null && incidentProblem == null && !incidentWriting
-    fun actionFor(incident: Incident): IncidentAction? = IncidentAction.entries.firstOrNull {
-        it.from == incident.status && (it == IncidentAction.Claim || staffId != null && incident.assignedStaff?.id == staffId)
-    }
+    fun permits(incident: Incident, action: IncidentAction) = action.accepts(incident.status) &&
+        (if (action == IncidentAction.Claim) !guardBusy else staffId != null && incident.assignedStaff?.id == staffId)
+    fun canReview(incident: Incident) = incidentsCurrent && staffId != null &&
+        incident.assignedStaff?.id == staffId && incident.status in setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS)
 }
 
 /** Coordinates foreground work. All public methods and state updates run on the UI dispatcher. */
@@ -84,6 +100,10 @@ internal class ReaderController(
     private var incidentTimer: Job? = null
     private var incidentFailures = 0
     private val pendingCommands = mutableMapOf<Pair<String, String>, IncidentCommand>()
+    val chatOutbox = ChatOutbox()
+    private val pendingReviews = mutableMapOf<Triple<String, String, String>, ReviewBody>()
+    private var detailRequest: Job? = null
+    private var reviewRequest: Job? = null
 
     private val mutable = MutableStateFlow(ReaderUiState(
         address = address?.toString().orEmpty(),
@@ -112,6 +132,7 @@ internal class ReaderController(
         if (target != address) {
             clearSession()
             pendingCommands.clear()
+            pendingReviews.clear()
             address = target
             api = apiFor(target)
             saveAddress(target.toString())
@@ -210,17 +231,19 @@ internal class ReaderController(
         ui = ui.copy(incidentsLoading = true, pendingIncident = pendingCommands.containsKey(active.personId to event.id))
         work {
             try {
-                val incidents = remote.incidents(active, event)
+                val queue = remote.queue(active, event)
                 current()
                 if (checkExpiry()) {
                     incidentFailures = 0
-                    ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, incidents), incidentProblem = null,
+                    ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, queue.incidents), incidentProblem = null,
+                        guardBusy = queue.guardBusy, activeIncident = queue.activeIncident,
                         lastIncidentRead = clock.instant(), server = ServerState.Connected)
                 }
             } catch (failure: ApiFailure) {
                 current()
                 if (failure.problem == ApiProblem.Unauthorized) expire()
                 else {
+                    if (failure.problem == ApiProblem.Forbidden) closeTriage()
                     incidentFailures = (incidentFailures + 1).coerceAtMost(3)
                     ui = ui.copy(
                         incidentProblem = failure.problem,
@@ -250,7 +273,7 @@ internal class ReaderController(
     fun operateIncident(incidentId: String, version: Long, action: IncidentAction, note: String = "") {
         if (!ui.incidentsCurrent || ui.pendingIncident || note.length > 240) return
         val incident = ui.incidents?.firstOrNull { it.id == incidentId && it.version == version } ?: return
-        if (ui.actionFor(incident) != action) return
+        if (!ui.permits(incident, action) || action == IncidentAction.Close && note.isBlank()) return
         val command = IncidentCommand(incident.id, action,
             OperationBody(incident.version, UUID.randomUUID().toString(), note.trim().ifEmpty { null }))
         submitIncident(command)
@@ -270,7 +293,7 @@ internal class ReaderController(
         val event = ui.event ?: return
         val key = active.personId to event.id
         val retrying = pendingCommands.containsKey(key)
-        cancelWork()
+        cancelWork(keepTriage = true)
         pendingCommands[key] = command
         ui = ui.copy(incidentWriting = true, pendingIncident = true, incidentNotice = null)
         work {
@@ -278,9 +301,12 @@ internal class ReaderController(
                 val (operation, incident) = remote.operate(active, event, command)
                 current()
                 pendingCommands.remove(key)
-                val items = ui.incidents.orEmpty().filterNot { it.id == incident.id } + incident
-                ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, items)
-                    .sortedWith(compareByDescending<Incident> { it.createdAt }.thenByDescending { it.id }),
+                val items = ui.incidents.orEmpty().map { if (it.id == incident.id) incident else it }
+                ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, items),
+                    guardBusy = if (incident.status.active && incident.assignedStaff?.id == active.personId) true
+                        else ui.guardBusy && ui.activeIncident?.id != incident.id,
+                    activeIncident = if (incident.status.active && incident.assignedStaff?.id == active.personId) incident
+                        else ui.activeIncident?.takeUnless { it.id == incident.id },
                     pendingIncident = false,
                     incidentNotice = if (operation.replayed && operation.appliedVersion != incident.version)
                         "Operación original confirmada: ${operation.toStatus.label}. Estado vigente: ${incident.status.label}."
@@ -307,6 +333,135 @@ internal class ReaderController(
                 }
             }
         }
+    }
+
+    suspend fun conversation(id: String, after: Long) = chatRequest(id) { remote, active, event ->
+        remote.conversation(active, event, id, after)
+    }
+
+    suspend fun message(id: String, draft: ChatDraft) = chatRequest(id) { remote, active, event ->
+        remote.message(active, event, id, draft)
+    }
+
+    suspend fun dispatch(id: String) = chatRequest(id) { remote, active, event ->
+        remote.dispatch(active, event, id)
+    }
+
+    suspend fun reviewDispatch(id: String, body: DispatchReviewBody) = chatRequest(id) { remote, active, event ->
+        remote.reviewDispatch(active, event, id, body)
+    }.also { refreshIncidents() }
+
+    private suspend fun <T> chatRequest(id: String, request: suspend (StaffApi, StaffSession, StaffEvent) -> T): T {
+        if (!checkExpiry()) throw ApiFailure(ApiProblem.Unauthorized)
+        val remote = api ?: throw ApiFailure(ApiProblem.Unavailable)
+        val active = session ?: throw ApiFailure(ApiProblem.Unauthorized)
+        val event = ui.event ?: throw ApiFailure(ApiProblem.Forbidden)
+        if (!ui.incidentsVisible || ui.incidents?.none { it.id == id && it.eventId == event.id } != false) {
+            throw CancellationException()
+        }
+        return request(remote, active, event).also {
+            if (session !== active || api !== remote || !ui.incidentsVisible || ui.event?.id != event.id) {
+                throw CancellationException()
+            }
+        }
+    }
+
+    fun openTriage(id: String) {
+        if (!foreground || !ui.incidentsVisible || ui.triageWriting || !checkExpiry() ||
+            ui.incidents?.none { it.id == id && it.triage != null } != false) return
+        val remote = api ?: return
+        val active = session ?: return
+        val event = ui.event ?: return
+        detailRequest?.cancel()
+        ui = ui.copy(triageId = id, triageDetail = null, triageLoading = true, triageNotice = null,
+            triagePending = pendingReviews.containsKey(Triple(active.personId, event.id, id)))
+        detailRequest = scope.launch {
+            try {
+                val detail = remote.triage(active, event, id)
+                coroutineContext.ensureActive()
+                if (checkExpiry()) {
+                    updateTriage(id, detail.triage)
+                    ui = ui.copy(triageDetail = detail)
+                }
+            } catch (failure: ApiFailure) {
+                coroutineContext.ensureActive()
+                if (failure.problem == ApiProblem.Unauthorized) expire()
+                else ui = ui.copy(triageNotice = failure.problem.description())
+            } finally {
+                if (coroutineContext[Job]?.isActive == true) ui = ui.copy(triageLoading = false)
+            }
+        }
+    }
+
+    fun closeTriage() {
+        detailRequest?.cancel()
+        reviewRequest?.cancel()
+        ui = ui.copy(triageId = null, triageDetail = null, triageNotice = null,
+            triageLoading = false, triageWriting = false, triagePending = false)
+    }
+
+    fun reviewTriage(version: Long, decision: ReviewDecision, category: TriageCategory? = null, urgency: TriageUrgency? = null) {
+        val id = ui.triageId ?: return
+        val incident = ui.incidents?.firstOrNull { it.id == id && it.triage?.triageVersion == version } ?: return
+        if (!ui.canReview(incident) || ui.triageDetail == null || ui.triagePending ||
+            decision == ReviewDecision.CONFIRM && incident.triage?.suggestion == null ||
+            decision == ReviewDecision.CORRECT && (category == null || urgency == null)) return
+        submitReview(id, ReviewBody(version, UUID.randomUUID().toString(), decision, category, urgency))
+    }
+
+    fun retryTriage() {
+        val id = ui.triageId ?: return
+        val active = session ?: return
+        val event = ui.event ?: return
+        pendingReviews[Triple(active.personId, event.id, id)]?.let { submitReview(id, it) }
+    }
+
+    private fun submitReview(id: String, body: ReviewBody) {
+        if (!foreground || !ui.incidentsVisible || ui.triageWriting || !checkExpiry()) return
+        val remote = api ?: return
+        val active = session ?: return
+        val event = ui.event ?: return
+        val key = Triple(active.personId, event.id, id)
+        pendingReviews[key] = body
+        ui = ui.copy(triageWriting = true, triagePending = true, triageNotice = null)
+        reviewRequest = scope.launch {
+            var reload = false
+            try {
+                val reply = remote.review(active, event, id, body)
+                coroutineContext.ensureActive()
+                pendingReviews.remove(key)
+                updateTriage(id, reply.triage)
+                ui = ui.copy(triagePending = false, triageNotice = "Revisión guardada.")
+            } catch (failure: ApiFailure) {
+                coroutineContext.ensureActive()
+                when (failure.problem) {
+                    ApiProblem.Unauthorized -> expire()
+                    ApiProblem.Conflict, ApiProblem.InvalidInput, ApiProblem.Forbidden, ApiProblem.NotFound -> {
+                        pendingReviews.remove(key)
+                        reload = failure.problem == ApiProblem.Conflict
+                        ui = ui.copy(triagePending = false, triageDetail = null, triageNotice = failure.problem.description())
+                    }
+                    else -> ui = ui.copy(triageNotice = "Resultado sin confirmar. Reintenta la misma revisión.")
+                }
+            } finally {
+                if (coroutineContext[Job]?.isActive == true) {
+                    ui = ui.copy(triageWriting = false)
+                    if (reload) {
+                        openTriage(id)
+                        ui = ui.copy(triageNotice = "El triaje cambió. Revisa la versión vigente antes de enviar.")
+                        refreshIncidents()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun updateTriage(id: String, triage: IncidentTriage) {
+        ui = ui.copy(incidents = ui.incidents?.map { incident ->
+            if (incident.id == id && triage.triageVersion >= (incident.triage?.triageVersion ?: 0)) {
+                incident.copy(triage = triage)
+            } else incident
+        })
     }
 
     fun useLocal() {
@@ -379,7 +534,8 @@ internal class ReaderController(
         }
     }
 
-    private fun cancelWork() {
+    private fun cancelWork(keepTriage: Boolean = false) {
+        if (!keepTriage) closeTriage()
         generation++
         operation?.cancel()
         operation = null
@@ -418,12 +574,15 @@ internal class ReaderController(
     }
 
     private fun clearSession() {
+        closeTriage()
+        chatOutbox.clearSession()
         expiry?.cancel()
         expiry = null
         session = null
         ui = ui.copy(signedIn = false, events = emptyList(), event = null,
             incidentsVisible = false, incidents = null, incidentsLoading = false, incidentProblem = null,
-            staffId = null, staffName = null, lastIncidentRead = null, pendingIncident = false, incidentNotice = null)
+            staffId = null, staffName = null, lastIncidentRead = null, pendingIncident = false, incidentNotice = null,
+            guardBusy = false, activeIncident = null)
     }
 
     private fun checkExpiry(): Boolean {

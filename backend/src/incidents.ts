@@ -2,13 +2,23 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { requireMembership, type Session } from './auth.js';
 import { atomic, type Db } from './db.js';
+import { compareDispatch, dispatchView, type DispatchPolicy } from './dispatch.js';
+import { conversationView, createConversation, creationReceipt, discardChatWork, messageInput } from './conversations.js';
 import { ApiError } from './errors.js';
+import { dangerAlert, reasonCode, type ReasonCode } from './triage-contract.js';
+import { finishManually, initializeTriage, triageView } from './triage.js';
 
-export const createInput = z.strictObject({
+const createFields = {
   clientRequestId: z.uuid().transform(value => value.toLowerCase()),
   zoneId: z.string().min(1).max(128).nullish().transform(value => value ?? null),
   locationText: z.string().trim().max(160).nullish().transform(value => value || null),
-});
+  reasonCode: reasonCode.nullish().transform(value => value ?? null),
+};
+export const createInput = z.union([
+  z.strictObject({ ...createFields, description: z.string().max(280).nullish().transform(value => value?.trim() ? value : null) }),
+  z.strictObject({ ...createFields, mode: z.literal('CHAT'), firstMessage: messageInput }),
+  z.strictObject({ ...createFields, mode: z.literal('SOS') }),
+]);
 export const incidentId = z.strictObject({ id: z.uuid() });
 const operationFields = {
   version: z.int().positive(),
@@ -20,7 +30,9 @@ export const resolutionInput = z.strictObject({
   resolutionNote: z.string().trim().max(240).nullish().transform(value => value || null),
 });
 
-type Status = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS' | 'RESOLVED' | 'CANCELLED';
+export const terminationInput = z.strictObject({ ...operationFields, resolutionNote: z.string().trim().min(1).max(240) });
+type Status = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS' | 'RESOLVED' | 'CANCELLED' | 'CLOSED' | 'WITHDRAWN';
+const active = (status: Status) => status === 'OPEN' || status === 'ASSIGNED' || status === 'IN_PROGRESS';
 
 type Incident = {
   id: string;
@@ -41,23 +53,32 @@ type Incident = {
   assignedStaffId: string | null;
   assignedStaffName: string | null;
   resolutionNote: string | null;
+  reasonCode: ReasonCode | null;
+  description: string | null;
+  hasConversation: number;
 };
 
 const selection = `SELECT i.id, i.event_id AS eventId, i.requester_person_id AS requesterPersonId,
   p.name AS requesterName, i.zone_id AS zoneId, z.name AS zoneName, i.location_text AS locationText,
   i.status, i.client_request_id AS clientRequestId, i.created_at AS createdAt, i.updated_at AS updatedAt,
   i.version, i.assigned_at AS assignedAt, i.started_at AS startedAt, i.resolved_at AS resolvedAt,
-  i.assigned_staff_id AS assignedStaffId, guard.name AS assignedStaffName, i.resolution_note AS resolutionNote
+  i.assigned_staff_id AS assignedStaffId, guard.name AS assignedStaffName, i.resolution_note AS resolutionNote,
+  i.reason_code AS reasonCode, i.description,
+  EXISTS(SELECT 1 FROM incident_conversations c WHERE c.incident_id = i.id) AS hasConversation
   FROM incidents i JOIN people p ON p.id = i.requester_person_id
   LEFT JOIN zones z ON z.event_id = i.event_id AND z.id = i.zone_id
   LEFT JOIN people guard ON guard.id = i.assigned_staff_id`;
 
-function ownView({ assignedStaffId, assignedStaffName, resolutionNote, ...incident }: Incident) {
-  return incident;
+function ownView({ assignedStaffId, assignedStaffName, resolutionNote, reasonCode, description, hasConversation, ...incident }: Incident) {
+  return { ...incident, ...(hasConversation ? { hasConversation: true } : {}) };
 }
 
-function eventView({ requesterPersonId, clientRequestId, assignedStaffId, assignedStaffName, ...incident }: Incident) {
-  return { ...incident, assignedStaff: assignedStaffId ? { id: assignedStaffId, name: assignedStaffName } : null };
+function eventView(db: Db, { requesterPersonId, clientRequestId, assignedStaffId, assignedStaffName, description, hasConversation, ...incident }: Incident) {
+  return {
+    ...incident, ...(hasConversation ? { hasConversation: true } : {}),
+    assignedStaff: assignedStaffId ? { id: assignedStaffId, name: assignedStaffName } : null,
+    dangerAlert: dangerAlert(incident.reasonCode), triage: triageView(db, incident.id),
+  };
 }
 
 function findIncident(db: Db, id: string, scope: 'event' | 'owner', value: string): Incident {
@@ -77,10 +98,32 @@ export function ownIncidents(db: Db, eventId: string, personId: string) {
   return rows.map(ownView);
 }
 
-export function eventIncidents(db: Db, eventId: string) {
+export function eventIncidents(db: Db, eventId: string, dispatch?: DispatchPolicy) {
   const rows = db.prepare(`${selection} WHERE i.event_id = ? ORDER BY i.created_at DESC, i.id DESC`)
     .all(eventId) as Incident[];
-  return rows.map(eventView);
+  if (!dispatch) return rows.map(row => eventView(db, row));
+  const now = Date.now();
+  return rows.map(row => {
+    const item = eventView(db, row);
+    return { ...item, dispatch: dispatchView(db, row, item.triage, dispatch, now) };
+  }).sort(compareDispatch);
+}
+
+function guardAssignment(db: Db, personId: string) {
+  return db.prepare(`SELECT id, event_id AS eventId FROM incidents
+    WHERE assigned_staff_id = ? AND status IN ('ASSIGNED', 'IN_PROGRESS')`).get(personId) as
+    { id: string; eventId: string } | undefined;
+}
+
+export function guardAttention(db: Db, session: Session, policy: DispatchPolicy) {
+  const assignment = guardAssignment(db, session.personId);
+  if (!assignment) return { guardBusy: false, activeIncident: null };
+  const allowed = db.prepare("SELECT 1 FROM event_memberships WHERE person_id = ? AND event_id = ? AND role = 'STAFF'")
+    .get(session.personId, assignment.eventId);
+  if (!allowed) return { guardBusy: true, activeIncident: null };
+  const row = findIncident(db, assignment.id, 'event', assignment.eventId);
+  const incident = eventView(db, row);
+  return { guardBusy: true, activeIncident: { ...incident, dispatch: dispatchView(db, row, incident.triage, policy, Date.now()) } };
 }
 
 export function ownIncident(db: Db, session: Session, id: string) {
@@ -90,19 +133,35 @@ export function ownIncident(db: Db, session: Session, id: string) {
 }
 
 export function eventIncident(db: Db, eventId: string, id: string) {
-  return eventView(findIncident(db, id, 'event', eventId));
+  return eventView(db, findIncident(db, id, 'event', eventId));
 }
 
-export function createIncident(db: Db, session: Session, eventId: string, input: z.output<typeof createInput>) {
+export function incidentDispatch(db: Db, eventId: string, id: string, policy: DispatchPolicy) {
+  const row = findIncident(db, id, 'event', eventId);
+  return dispatchView(db, row, triageView(db, id), policy, Date.now());
+}
+
+export function createIncident(db: Db, session: Session, eventId: string, input: z.output<typeof createInput>,
+  triageEnabled: boolean) {
   return atomic(db, () => {
     requireMembership(db, session, eventId);
+    if (db.prepare('SELECT 1 FROM incident_tombstones WHERE requester_person_id = ? AND client_request_id = ?')
+      .get(session.personId, input.clientRequestId)) {
+      throw new ApiError(409, 'REQUEST_PURGED', 'La solicitud anterior fue eliminada');
+    }
+    const mode = 'mode' in input ? input.mode : undefined;
+    const first = 'firstMessage' in input ? input.firstMessage : undefined;
+    const description = 'description' in input ? input.description : null;
     const previous = db.prepare(`${selection} WHERE i.requester_person_id = ? AND i.client_request_id = ?`)
       .get(session.personId, input.clientRequestId) as Incident | undefined;
     if (previous) {
-      if (previous.eventId !== eventId || previous.zoneId !== input.zoneId || previous.locationText !== input.locationText) {
+      if (previous.eventId !== eventId || previous.zoneId !== input.zoneId || previous.locationText !== input.locationText ||
+          previous.reasonCode !== input.reasonCode || previous.description !== description) {
         throw new ApiError(409, 'REQUEST_CONFLICT', 'La clave de solicitud ya se usó con otros datos');
       }
-      return { created: false, incident: ownView(previous) };
+      const incident = ownView(previous);
+      const receipt = creationReceipt(db, previous.id, session.personId, mode, first);
+      return { created: false, body: receipt ? { incident, ...receipt } : incident };
     }
     if (input.zoneId !== null && !db.prepare('SELECT 1 FROM zones WHERE event_id = ? AND id = ?').get(eventId, input.zoneId)) {
       throw new ApiError(400, 'INVALID_INPUT', 'La zona no pertenece al evento');
@@ -110,9 +169,13 @@ export function createIncident(db: Db, session: Session, eventId: string, input:
     const id = randomUUID();
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO incidents (id, event_id, requester_person_id, zone_id, location_text,
-      status, client_request_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)`)
-      .run(id, eventId, session.personId, input.zoneId, input.locationText, input.clientRequestId, now, now);
-    return { created: true, incident: ownView(findIncident(db, id, 'owner', session.personId)) };
+      status, client_request_id, created_at, updated_at, reason_code, description) VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)`)
+      .run(id, eventId, session.personId, input.zoneId, input.locationText, input.clientRequestId, now, now,
+        input.reasonCode, description);
+    initializeTriage(db, id, Date.parse(now), !mode && triageEnabled, input.reasonCode, description);
+    const receipt = mode ? createConversation(db, id, mode, session.personId, first, now) : undefined;
+    const incident = ownView(findIncident(db, id, 'owner', session.personId));
+    return { created: true, body: receipt ? { incident, ...receipt } : incident };
   });
 }
 
@@ -120,7 +183,8 @@ export function cancelIncident(db: Db, session: Session, id: string) {
   return atomic(db, () => {
     const previous = findIncident(db, id, 'owner', session.personId);
     requireMembership(db, session, previous.eventId);
-    if (previous.status !== 'OPEN') {
+    if (previous.status === 'CANCELLED') return ownView(previous);
+    if (!active(previous.status)) {
       throw conflict(previous, 'INCIDENT_NOT_OPEN', 'La solicitud ya no está abierta');
     }
     return ownView(applyTransition(db, previous, session, 'CANCELLED', null, null, null));
@@ -132,10 +196,12 @@ function conflict(incident: Incident, code: string, message: string) {
 }
 
 const transitions = {
-  claim: { from: 'OPEN', to: 'ASSIGNED' },
-  start: { from: 'ASSIGNED', to: 'IN_PROGRESS' },
-  resolve: { from: 'IN_PROGRESS', to: 'RESOLVED' },
-} as const;
+  claim: { from: ['OPEN'], to: 'ASSIGNED' },
+  start: { from: ['ASSIGNED'], to: 'IN_PROGRESS' },
+  resolve: { from: ['IN_PROGRESS'], to: 'RESOLVED' },
+  close: { from: ['ASSIGNED', 'IN_PROGRESS'], to: 'CLOSED' },
+  withdraw: { from: ['OPEN', 'ASSIGNED', 'IN_PROGRESS'], to: 'WITHDRAWN' },
+} satisfies Record<string, { from: Status[]; to: Status }>;
 
 export type Action = keyof typeof transitions;
 type OperationInput = z.output<typeof operationInput> & { resolutionNote?: string | null };
@@ -143,10 +209,16 @@ type RecordedOperation = {
   actorId: string; requestHash: string; fromStatus: Status; toStatus: Status; appliedVersion: number; appliedAt: string;
 };
 
-export function operate(db: Db, session: Session, eventId: string, id: string, action: Action, input: OperationInput) {
+export function operate(db: Db, session: Session, eventId: string, id: string, action: Action, input: OperationInput,
+  policy?: DispatchPolicy) {
   return atomic(db, () => {
     requireMembership(db, session, eventId);
     const previous = findIncident(db, id, 'event', eventId);
+    const operational = (row: Incident) => {
+      const incident = eventView(db, row);
+      return policy && row.hasConversation
+        ? { ...incident, dispatch: dispatchView(db, row, incident.triage, policy, Date.now()) } : incident;
+    };
     const { operationId, version, resolutionNote = null } = input;
     const requestHash = createHash('sha256').update(JSON.stringify([action, version, resolutionNote])).digest('hex');
     const recorded = db.prepare(`SELECT actor_person_id AS actorId, request_hash AS requestHash,
@@ -157,18 +229,23 @@ export function operate(db: Db, session: Session, eventId: string, id: string, a
       if (actorId !== session.personId || recordedHash !== requestHash) {
         throw new ApiError(409, 'REQUEST_CONFLICT', 'La clave de operación ya se usó con otros datos');
       }
-      return { operation: { ...operation, operationId, replayed: true }, incident: eventView(previous) };
+      return { operation: { ...operation, operationId, replayed: true }, incident: operational(previous),
+        ...(action === 'claim' && previous.hasConversation ? conversationView(db, id) : {}) };
     }
-    const { from, to } = transitions[action];
-    if (action !== 'claim' && previous.assignedStaffId && previous.assignedStaffId !== session.personId) {
+    const { from, to }: { from: Status[]; to: Status } = transitions[action];
+    if (action !== 'claim' && action !== 'withdraw' && previous.assignedStaffId !== session.personId) {
       throw new ApiError(403, 'FORBIDDEN', 'La operación requiere ser el guardia asignado');
     }
     if (previous.version !== version) throw conflict(previous, 'VERSION_CONFLICT', 'El incidente cambió');
-    if (previous.status !== from) throw conflict(previous, 'INVALID_TRANSITION', 'El estado no permite esta operación');
+    if (!from.includes(previous.status)) throw conflict(previous, 'INVALID_TRANSITION', 'El estado no permite esta operación');
+    if (action === 'claim' && guardAssignment(db, session.personId)) {
+      throw conflict(previous, 'GUARD_ALREADY_BUSY', 'Ya tienes una atención activa');
+    }
     const current = applyTransition(db, previous, session, to, resolutionNote, operationId, requestHash);
     return {
-      operation: { operationId, fromStatus: from, toStatus: to, appliedVersion: current.version, appliedAt: current.updatedAt, replayed: false },
-      incident: eventView(current),
+      operation: { operationId, fromStatus: previous.status, toStatus: to, appliedVersion: current.version, appliedAt: current.updatedAt, replayed: false },
+      incident: operational(current),
+      ...(action === 'claim' && current.hasConversation ? conversationView(db, id) : {}),
     };
   });
 }
@@ -188,5 +265,9 @@ function applyTransition(db: Db, previous: Incident, session: Session, to: Statu
   db.prepare(`INSERT INTO incident_transitions (incident_id, applied_version, actor_person_id,
     from_status, to_status, applied_at, operation_id, request_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(previous.id, version, session.personId, previous.status, to, updatedAt, operationId, requestHash);
+  if (!active(to)) finishManually(db, previous.id, 'CLOSED', Date.parse(updatedAt));
+  if (previous.hasConversation && (to === 'ASSIGNED' || !active(to))) {
+    discardChatWork(db, previous.id, Date.parse(updatedAt));
+  }
   return findIncident(db, previous.id, 'event', previous.eventId);
 }

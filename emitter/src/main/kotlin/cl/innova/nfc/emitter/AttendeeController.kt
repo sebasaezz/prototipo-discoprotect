@@ -1,6 +1,8 @@
 package cl.innova.nfc.emitter
 
 import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.ChatDraft
+import cl.discoprotect.ui.ChatOutbox
 import cl.discoprotect.ui.IncidentStatus
 import cl.discoprotect.ui.currentIncidentSnapshot
 import cl.discoprotect.ui.incidentPollDelay
@@ -95,6 +97,7 @@ internal class AttendeeController(
     private var generation = 0L
     // Scoped to the current server. Only the original person can recover an attempt.
     private val pendingSos = mutableMapOf<String, SosAttempt>()
+    val chatOutbox = ChatOutbox()
     private var foreground = true
     private var sosRead: Job? = null
     private var sosTimer: Job? = null
@@ -227,7 +230,7 @@ internal class AttendeeController(
 
     fun refreshSos() {
         if (!foreground || ui.section != Section.Sos || ui.task != null || sosRead?.isActive == true) return
-        if (ui.sos.event != null && ui.sos.zones != null) {
+        if (ui.sos.event != null) {
             refreshSosHistory()
         } else {
             loadSosContext()
@@ -255,27 +258,40 @@ internal class AttendeeController(
         sosWork(Task.SosReading) { remote, active -> loadSosEvent(remote, active, event) }
     }
 
-    fun selectSosZone(id: String?) {
-        val zones = ui.sos.zones ?: return
-        if (!canEditSos() || id != null && zones.none { it.id == id }) return
-        updateSos(ui.sos.copy(locationChosen = true, zoneId = id, outcome = SosOutcome.Ready, error = null))
-    }
-
-    fun updateSosReference(value: String) {
-        if (!canEditSos() || value.length > 160) return
-        updateSos(ui.sos.copy(reference = value, outcome = SosOutcome.Ready, error = null))
-    }
-
-    fun sendSos() {
+    fun sendHelp(text: String? = null) {
         val form = ui.sos
-        if (!canEditSos() || !form.canSend) return
-        val body = SosRequest(UUID.randomUUID().toString(), form.zoneId, form.reference.trim().ifEmpty { null })
-        submitSos(SosAttempt.Create(requireNotNull(form.event).id, body))
+        val event = form.event ?: return
+        if (!canEditSos() || text != null && (text.isBlank() || text.length > 500)) return
+        val body = SosRequest(UUID.randomUUID().toString(), zoneId = null, locationText = null)
+        val first = text?.let { ChatDraft.create(it) }
+        submitSos(SosAttempt.Create(event.id, body, if (first == null) "SOS" else "CHAT", first))
+    }
+
+    suspend fun conversation(id: String, after: Long) = chatRequest(id) { remote, active ->
+        remote.conversation(active, id, after)
+    }
+
+    suspend fun message(id: String, draft: ChatDraft) = chatRequest(id) { remote, active ->
+        remote.message(active, id, draft)
+    }
+
+    private suspend fun <T> chatRequest(id: String, request: suspend (AttendeeApi, AttendeeSession) -> T): T {
+        val remote = api ?: throw AttendeeFailure(FailureKind.Offline)
+        val active = validSession() ?: throw AttendeeFailure(FailureKind.Expired)
+        val eventId = ui.sos.event?.id
+        if (ui.section != Section.Sos || ui.sos.incidents?.none { it.id == id && it.eventId == eventId } != false) {
+            throw CancellationException()
+        }
+        return request(remote, active).also {
+            if (session !== active || api !== remote || ui.section != Section.Sos || ui.sos.event?.id != eventId) {
+                throw CancellationException()
+            }
+        }
     }
 
     fun cancelSos(id: String) {
         if (!canEditSos() || !ui.sos.historyFresh) return
-        val incident = ui.sos.incidents?.firstOrNull { it.id == id && it.status == IncidentStatus.OPEN } ?: return
+        val incident = ui.sos.incidents?.firstOrNull { it.id == id && it.status.active } ?: return
         submitSos(SosAttempt.Cancel(incident.eventId, id))
     }
 
@@ -292,15 +308,9 @@ internal class AttendeeController(
     }
 
     private suspend fun Operation.loadSosEvent(remote: AttendeeApi, active: AttendeeSession, event: SosEvent) {
-        // Recover writes before loading the form, even if zones are temporarily unavailable.
         val incidents = remote.incidents(active, event.id)
         current()
         applySosHistory(active, incidents)
-        val zones = remote.zones(active, event.id)
-        current()
-        val state = ui.sos
-        val chosen = state.locationChosen && (state.zoneId == null || zones.any { it.id == state.zoneId })
-        updateSos(state.copy(zones = zones, locationChosen = chosen, zoneId = state.zoneId.takeIf { chosen }))
     }
 
     private fun applySosHistory(active: AttendeeSession, incoming: List<Incident>) {
@@ -313,10 +323,10 @@ internal class AttendeeController(
         if (recovered != null) {
             confirmSos(active, recovered)
         } else if (pending is SosAttempt.Cancel &&
-            incidents.any { it.id == pending.id && it.status != IncidentStatus.OPEN }) {
+            incidents.any { it.id == pending.id && !it.status.active }) {
             pendingSos.remove(active.person.id)
             updateSos(ui.sos.copy(pending = null, outcome = SosOutcome.Rejected,
-                error = "El personal ya asumió la solicitud. La cancelación no se aplicó."))
+                error = "La solicitud ya terminó. La cancelación no se aplicó."))
         }
     }
 
@@ -383,7 +393,7 @@ internal class AttendeeController(
             val retrying = pendingSos[owner] != null
             var sending = false
             try {
-                if (!retrying) remote.health()
+                if (!retrying && attempt is SosAttempt.Cancel) remote.health()
                 current()
                 pendingSos[owner] = attempt
                 updateSos(ui.sos.copy(pending = attempt, receipt = null))
@@ -589,6 +599,7 @@ internal class AttendeeController(
 
     private fun clearSession(): IdentitySlot? {
         stopSosPolling()
+        chatOutbox.clearSession()
         sosFailures = 0
         val pending = sharing.invalidate(identityOwner)
         expiry?.cancel()
