@@ -1,6 +1,6 @@
 # Modelo de datos
 
-Los identificadores se tratan como cadenas opacas, los tiempos se guardan en UTC y SQLite valida claves foráneas en cada conexión. Las migraciones se aplican en orden y se registran en `schema_migrations`. Se usa WAL con un tiempo de espera de 5 segundos para escritores. Las escrituras de ficha y contacto pasan por transacciones inmediatas.
+Los identificadores se tratan como cadenas opacas y los tiempos se guardan en UTC. Las conexiones de uso normal validan claves foráneas. Las migraciones se aplican en orden y se registran en `schema_migrations`. Se usa WAL con un tiempo de espera de 5 segundos para escritores. Las escrituras de ficha y contacto pasan por transacciones inmediatas.
 
 | Entidad | Datos y restricciones |
 | --- | --- |
@@ -12,39 +12,36 @@ Los identificadores se tratan como cadenas opacas, los tiempos se guardan en UTC
 | EventMembership | Una membresía por persona y evento. Roles `ATTENDEE`, `STAFF` y `ORGANIZER`. |
 | DemoSession | Hash SHA-256 de un token aleatorio, cuenta, rol y vencimiento. La base guarda el hash; el valor Bearer se entrega al crear la sesión. |
 | Zone | ID estable dentro del evento y nombre visible. El seed agrega cinco zonas para `demo-festival` y conserva las filas existentes. |
-| Incident | UUID, evento, solicitante, zona y referencia opcionales, UUID del cliente, estado, versión, guardia asignado y tiempos UTC. La nota de cierre es opcional y de uso operativo. |
-| IncidentTransition | Incidente, actor, estados anterior y nuevo, versión resultante y hora UTC. Las acciones del guardia agregan UUID de operación y huella del comando normalizado. |
+| Incident | UUID, evento, solicitante, zona y referencia opcionales, UUID del cliente, estado, versión, guardia asignado y tiempos UTC. El motivo es obligatorio para cierre o retiro y opcional para resolución. |
+| IncidentTransition | Incidente, actor, estados anterior y nuevo, versión resultante y hora UTC. Las acciones versionadas del guardia y organizador agregan UUID de operación y huella del comando normalizado. |
 
-La ficha y sus contactos comparten una versión. Toda mutación exitosa aumenta esa versión y actualiza la fecha. La resolución NFC devuelve ambos en una sola lectura consistente. El seed provisiona seis cuentas y tres fichas ficticias. Las ejecuciones posteriores preservan las ediciones y eliminaciones de contactos de las fichas existentes. La restauración explícita reinicia las cuentas, el evento demo y sus registros relacionados.
+La ficha y sus contactos comparten una versión. Toda mutación exitosa aumenta esa versión y actualiza la fecha. La resolución NFC devuelve ambos en una sola lectura consistente. El seed provisiona seis cuentas y tres fichas ficticias. Las ejecuciones posteriores preservan las ediciones y eliminaciones de contactos de las fichas existentes. La restauración explícita recrea las cuentas, el evento demo y sus registros relacionados con cascada. La cuota diaria y las tablas separadas de purga se conservan.
 
-## Incidentes H5
+## Migraciones 001–008
 
-`002_incidents.sql` se agrega sobre la base de H4. La clave foránea compuesta exige que la zona conocida pertenezca al mismo evento. Una zona nula representa ubicación desconocida. Los índices soportan el orden por fecha e ID para listados propios y del evento. La restricción única sobre persona y UUID de cliente aplica a todos sus eventos.
-
-Una transacción inmediata compara o inserta el registro antes de responder. La cancelación conserva el ID del incidente.
-
-## Incidentes H6
-
-`003_incident_lifecycle.sql` reconstruye la tabla y conserva sus claves, índices y campos H5. Las filas heredadas conservan estado y fechas con versión inicial 1. El migrador rechaza referencias entrantes inesperadas y comprueba las filas de `PRAGMA foreign_key_check` dentro de `BEGIN IMMEDIATE`, antes de registrar la migración.
-
-La creación lleva al estado `OPEN`. Una solicitud abierta puede cancelarse o ser asumida de forma exclusiva. El guardia asignado puede iniciar la atención y resolverla. La asignación, el inicio y la resolución registran sus propias horas. Una transición incrementa la versión y agrega una fila al historial en el mismo commit. El historial empieza con las transiciones efectuadas tras la migración. La versión resultante y el UUID de operación son únicos por incidente.
-
-La asignación apunta a la persona y la autorización consulta su membresía vigente. Si el guardia se retira, el incidente conserva su responsable histórico. H8 puede agregar una transición autorizada de reasignación y conservar los responsables anterior y nuevo.
-
-## Triaje H7
-
-La migración `005` añade `incident_conversations` con clave del incidente y contadores de secuencia, e `incident_messages` con mensajes ordenados, autor e idempotencia. Los incidentes previos conservan los registros H5–H7. El historial se conserva al cancelar o resolver.
-
-La migración `006` registra trabajos de IA en `incident_chat_ai_runs`, por incidente y secuencia del asistente. Conserva el análisis válido y la cuenta de intentos reservados, incluidos los interrumpidos o descartados. `zone_aliases` permite asociar hasta cinco alias por zona en el contexto enviado al modelo.
-
-La migración `007` registra decisiones humanas versionadas en `incident_dispatch_reviews` y configuraciones de umbrales en `dispatch_priority_policies`. El nivel efectivo usa la hora de consulta y el estado H6. Los traspasos se reconstruyen desde `incident_transitions`.
-
-`004_incident_triage.sql` agrega motivo y descripción opcionales a `incidents` y crea las tablas de triaje sin reconstruir la tabla operativa. Los incidentes H6 existentes quedan en `MANUAL` con causa `LEGACY`. Las filas nuevas se crean con su triaje en el mismo commit. La versión de triaje se incrementa cuando se publica una sugerencia, se entra en fallback desde pendiente o se registra una revisión. La reserva interna del intento conserva la versión visible.
-
-| Tabla | Datos y restricciones |
+| Migración | Datos que agrega o cambia |
 | --- | --- |
-| `incident_triage` | Una fila por incidente. Estado, versión, causa de fallback o sugerencia validada, entrada en cola, intento reservado, finalización y metadatos del proveedor. Índice parcial para pendientes. |
-| `incident_triage_reviews` | Historial de sólo inserción con actor, decisión, categoría y prioridad resultantes, fecha, versión aplicada, UUID de operación y huella del comando. Versión y UUID únicos dentro del incidente. |
-| `triage_daily_usage` | Reservas de llamada por día UTC. La reserva se confirma antes de salir a la red y el contador se conserva al resetear la demo. |
+| `001` | Personas, fichas, contactos, credenciales NFC, eventos, membresías y sesiones. |
+| `002` | Incidentes y zonas. La FK compuesta exige que la zona conocida pertenezca al evento. |
+| `003` | Versiones, asignación, horas operativas e historial de transiciones. Las filas H5 mantienen estado y fechas, con versión inicial 1. |
+| `004` | Motivo y relato para clientes de triaje histórico, `incident_triage`, revisiones del guardia y cuota compartida `triage_daily_usage`. Los incidentes H6 migran a triaje manual con causa `LEGACY`. |
+| `005` | `incident_conversations` y `incident_messages`. Una conversación por incidente aplicable. Mensajes con UUID, autor, secuencia, fecha y cuerpo. |
+| `006` | `incident_chat_ai_runs`, por incidente y secuencia del asistente, y alias de zonas. Persiste reservas, estados, resultados, vínculo al mensaje publicado y métricas. |
+| `007` | `incident_dispatch_reviews` con evaluación humana y motivo, y `dispatch_priority_policies` con versión y umbrales. |
+| `008` | Reconstruye `incidents` e `incident_transitions` para admitir los nuevos estados y transiciones. Agrega un índice único parcial para guardias activos y las tablas de auditoría de purga. |
 
-Las filas de triaje y sus revisiones se eliminan en cascada al restaurar los incidentes de la demo. Cancelar un SOS conserva el relato, el triaje y el historial. La marca de intento se persiste antes de enviar para evitar llamadas duplicadas tras reiniciar.
+La 008 comprueba si un guardia tiene más de un incidente en `ASSIGNED` o `IN_PROGRESS`. Si detecta duplicados, aborta con un error antes de reconstruir las tablas. Requiere regularizar esas asignaciones de forma explícita. Durante la reconstrucción, el migrador desactiva temporalmente el enforcement de claves foráneas para preservar filas dependientes, ejecuta `PRAGMA foreign_key_check` antes de confirmar y vuelve a activar la validación. [Preparación de una base anterior](current-workflow.md#7-despliegue-local)
+
+## Incidentes, chat y auditoría
+
+`incidents` conserva el UUID, estado y versión operativa. La clave `(requester_person_id, client_request_id)` es única entre eventos. El índice `incidents_one_active_per_guard` se aplica solo a `ASSIGNED` e `IN_PROGRESS`. Los estados terminales `RESOLVED`, `CANCELLED`, `CLOSED` y `WITHDRAWN` conservan asignación, inicio y motivo donde corresponda. Dejan de ocupar ese índice. Cada transición actualiza la versión y registra actor, estados y fecha en `incident_transitions` dentro del mismo commit.
+
+Cada chat conserva `last_seq` y `last_attendee_seq`. La secuencia y la clave de mensaje del cliente son únicas por conversación. Los mensajes de IA se enlazan con la fila del trabajo que los originó. Los turnos pueden quedar en cola, en ejecución, completados, en atención manual o descartados. Un análisis válido con respuesta descartada por seguridad puede conservarse sin un mensaje asociado. `triage_daily_usage` cuenta reservas por día UTC compartidas por ambas modalidades de IA. Los intentos se reservan antes de llamar al proveedor.
+
+Las revisiones de triaje H7 y de despacho tienen versiones propias, actor y UUID de operación. Despacho conserva prioridad humana, ubicación confirmada, evaluación de peligro y motivo. La prioridad efectiva se calcula en lectura con el estado y el tiempo de espera vigentes. La evidencia crítica se recupera de un análisis corroborado anterior y puede seguir aplicando tras nuevas interpretaciones. [Reglas y transiciones](current-workflow.md)
+
+## Purga de demostración
+
+La 008 agrega `incident_purges` para recibo, actor, evento, alcance, huella de selección, cantidad, fecha, archivo de respaldo y SHA-256. En la misma transacción, `incident_tombstones` conserva el ID y par de cuenta/UUID de creación del caso eliminado, ligados al recibo. Estos datos sobreviven al borrado del incidente y bloquean crear el mismo caso desde un reintento antiguo.
+
+El borrado en cascada elimina mensajes, conversaciones, trabajos de IA, triaje, revisiones y transiciones solo de los incidentes elegidos. Conserva cuentas, eventos, zonas y credenciales. El respaldo SQLite se guarda fuera de Git. [Administración y purga](current-workflow.md#5-administración-de-incidentes)

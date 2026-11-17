@@ -1,6 +1,6 @@
 # Guion de aceptación H7
 
-La revisión independiente y la aceptación física están pendientes. Usa únicamente datos ficticios y una LAN de desarrollo controlada. Los escenarios se ejecutan en el Galaxy S22 (AppAsistente), el Galaxy S25 (AppPersonal) y GestiónWeb.
+La preparación, los escenarios H7-A/H7-B y los comandos de regresión de esta página corresponden al **diseño histórico H7** con formulario de zona, motivo y relato. Para validar el producto actual con botón SOS único y chat posterior, usa el [guion físico vigente](h7-2-integration.md). La evidencia de aquella etapa queda en el [checkpoint H7](checkpoints/h7-2026-11-16.md).
 
 ## Preparación
 

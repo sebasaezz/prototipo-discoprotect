@@ -1,5 +1,7 @@
 # API REST v1
 
+Contrato vigente hasta H7.3. Para el recorrido por pantallas, consulta el [flujo actual](current-workflow.md).
+
 Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token>`. Envía `Content-Type: application/json` para cuerpos JSON. Los nombres de campos son estables y los tiempos son ISO 8601 UTC.
 
 | Operación | Cuerpo | Respuesta y acceso |
@@ -16,17 +18,19 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 | `GET /me/nfc-credential` | — | 200 `{id,token,active,createdAt}`. Asistente. |
 | `GET /events` | — | 200 `{events}`. Devuelve las membresías de la cuenta. |
 | `GET /events/:eventId/zones` | — | 200 `{zones:[{id,name}]}`. Membresía en el evento. |
-| `POST /events/:eventId/incidents` | `{clientRequestId,zoneId?,locationText?,reasonCode?,description?}` | 201 incidente creado o 200 repetición equivalente. Asistente miembro. |
+| `POST /events/:eventId/incidents` | UUID de cliente y modalidad según [creación y conversación](#creación-y-conversación). | 201 creado o 200 en reenvío equivalente. Asistente miembro. |
 | `GET /me/incidents?eventId=…` | — | 200 `{incidents}`. Solicitudes propias del asistente miembro. |
 | `GET /me/incidents/:id` | — | 200 incidente propio. Asistente titular y miembro. |
-| `GET /events/:eventId/incidents` | — | 200 `{incidents}`. Guardia u organizador miembro. |
+| `GET /events/:eventId/incidents` | Query opcional `order=dispatch`. | 200 `{incidents}`. Guardia u organizador miembro. Para guardias añade `guardBusy` y `activeIncident`. |
 | `GET /events/:eventId/incidents/:id` | — | 200 incidente operativo. Guardia u organizador miembro. |
 | `GET /events/:eventId/incidents/:id/triage` | — | 200 `{triage,reviews,description?}`. Guardia u organizador miembro. Solo el guardia recibe el relato original. |
 | `POST /events/:eventId/incidents/:id/triage/reviews` | `{triageVersion,operationId,decision,category?,urgency?}` | 200 `{review,triage,replayed}`. Guardia asignado con membresía vigente. |
-| `POST /me/incidents/:id/cancel` | — | 200 incidente cancelado. Asistente creador y miembro del evento. |
+| `POST /me/incidents/:id/cancel` | — | 200 incidente `CANCELLED`. Asistente titular y miembro. Acepta `OPEN`, `ASSIGNED` e `IN_PROGRESS`. Repetir una cancelación confirmada devuelve el mismo registro. |
 | `POST /events/:eventId/incidents/:id/claim` | `{version,operationId}` | 200 `{operation,incident}`. Guardia miembro. `OPEN → ASSIGNED`, autoasignación. |
 | `POST /events/:eventId/incidents/:id/start` | `{version,operationId}` | 200 `{operation,incident}`. Guardia asignado con membresía. `ASSIGNED → IN_PROGRESS`. |
 | `POST /events/:eventId/incidents/:id/resolve` | `{version,operationId,resolutionNote?}` | 200 `{operation,incident}`. Guardia asignado con membresía. `IN_PROGRESS → RESOLVED`. |
+| `POST /events/:eventId/incidents/:id/close` | `{version,operationId,resolutionNote}` | 200 `{operation,incident}`. Guardia asignado con membresía. `ASSIGNED` o `IN_PROGRESS → CLOSED`. |
+| `POST /events/:eventId/incidents/:id/withdraw` | `{version,operationId,resolutionNote}` | 200 `{operation,incident}`. Organizador miembro. Cualquier activo pasa a `WITHDRAWN`. |
 | `PATCH /events/:eventId` | `{name,venue}` | 200 evento modificado. Organizador miembro del evento. |
 | `POST /nfc/resolve` | `{token,eventId}` | 200 `{person,card,contacts}`. Rol `STAFF` con membresía de guardia en el evento solicitado. La credencial corresponde a un `ATTENDEE` de ese evento. |
 
@@ -34,14 +38,14 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 - Ficha `{id,bloodType,allergies,conditions,medications,updatedAt,version}`. Las listas tienen hasta 30 textos de 160 caracteres. Grupo sanguíneo `A+`, `A−`, `B+`, `B−`, `AB+`, `AB−`, `O+`, `O−` o `null`.
 - Contacto `{id,name,relationship,phone}`. `phone` usa de 3 a 32 caracteres, con dígitos y separadores de teléfono.
 - Evento `{id,name,venue,startsAt,endsAt,status,role}`. Rol de la cuenta en ese evento.
-- Incidente `{id,eventId,requesterName,zoneId,zoneName,locationText,status,createdAt,updatedAt,version,assignedAt,startedAt,resolvedAt}`. Los tiempos operativos pendientes son nulos. La vista propia incluye `requesterPersonId` y `clientRequestId`. La vista operativa agrega `assignedStaff: {id,name} | null` y `resolutionNote: string | null`. Los listados se ordenan por creación e ID descendentes.
+- Incidente `{id,eventId,requesterName,zoneId,zoneName,locationText,status,createdAt,updatedAt,version,assignedAt,startedAt,resolvedAt}`. Los tiempos operativos pendientes son nulos. La vista propia incluye `requesterPersonId` y `clientRequestId`. La vista operativa agrega `assignedStaff: {id,name} | null` y `resolutionNote: string | null`. Los listados por defecto ordenan por creación e ID descendentes. Las vistas propia y operativa incluyen `hasConversation: true` cuando existe chat. Los tiempos de asignación e inicio se conservan si una solicitud ya asignada termina. `resolvedAt` corresponde a `RESOLVED`. El actor y la fecha de cada transición están en la auditoría operativa.
 - `token` NFC son exactamente 32 dígitos hexadecimales sin separadores. Acepta minúsculas y mayúsculas. Con un guardia autorizado para el evento, un token inactivo, ajeno al evento o desconocido produce el mismo 404. El token NFC identifica al asistente y la sesión Bearer autoriza al guardia.
 
 Los cuerpos de sesión, ficha y contactos se validan como JSON. Las escrituras de ficha y contactos requieren `version` entera positiva y se ejecutan en transacción. Una escritura exitosa incrementa la versión compartida exactamente en uno. El 409 incluye `details.currentVersion`. Para teléfonos, los separadores permitidos son espacio, `+`, paréntesis y guion, y debe haber al menos un dígito.
 
-El SOS requiere un UUID generado por el cliente. El servidor normaliza la clave a minúsculas y recorta la referencia manual a efectos de comparación, con un límite de 160 caracteres tras recortar. Zona omitida o nula representa ubicación desconocida y puede acompañarse de una referencia. Una referencia vacía equivale a nula. La zona debe pertenecer al evento. Un reenvío con la misma clave por la misma persona devuelve el registro y su estado vigente si coinciden evento, zona, referencia, motivo y descripción. La cancelación cambia `OPEN` a `CANCELLED` y conserva el ID.
+Los estados activos son `OPEN`, `ASSIGNED` e `IN_PROGRESS`. `RESOLVED`, `CANCELLED`, `CLOSED` y `WITHDRAWN` son terminales. Se conservan en el historial y cierran el chat. Un guardia tiene como máximo una asignación activa global, incluso entre eventos. En su listado, `guardBusy` indica ocupación y `activeIncident` contiene la atención activa con despacho, o `null` si no hay asignación o el guardia perdió acceso al evento de esa asignación.
 
-Cada transición exitosa aumenta `version` en uno. `CANCELLED` y `RESOLVED` son terminales. La nota opcional se recorta a efectos de comparación, admite hasta 240 caracteres tras recortar y se guarda como nula si está vacía. El guardia envía la versión observada y un UUID `operationId`; ante un resultado incierto conserva versión, UUID y cuerpo. El servidor verifica rol y membresía y reconoce el reintento por incidente, actor y comando normalizado antes de comparar la versión vigente.
+Cada transición exitosa aumenta `version` en uno y registra actor y fecha. `resolve` admite motivo opcional, mientras que `close` y `withdraw` exigen una `resolutionNote` de 1 a 240 caracteres tras recortar. Ante un resultado incierto en una operación versionada, el cliente conserva versión, UUID y cuerpo. Fastify comprueba rol y membresía y reconoce la repetición por incidente, actor y comando normalizado antes de comparar la versión vigente.
 
 `operation` contiene `{operationId,fromStatus,toStatus,appliedVersion,appliedAt,replayed}`. En un reintento exitoso, `replayed` es verdadero y los demás campos describen la operación original. `incident` contiene la vista operativa vigente, que puede haber avanzado. Por ejemplo, una repetición de `claim` puede confirmar `OPEN → ASSIGNED` mientras `incident.status` es `IN_PROGRESS`. La repetición exacta mantiene la versión y el historial. Las respuestas usan `Cache-Control: no-store`.
 
@@ -53,10 +57,16 @@ Los errores usan `{error:{code,message,details?}}`.
 | 401 | `INVALID_CREDENTIALS` al iniciar sesión o `UNAUTHENTICATED` si el Bearer no es válido o está vencido. |
 | 403 | `FORBIDDEN` por rol incompatible o `EVENT_FORBIDDEN` por falta de membresía autorizada. |
 | 404 | `CARD_NOT_FOUND`, `CONTACT_NOT_FOUND`, `NFC_NOT_FOUND` o `INCIDENT_NOT_FOUND` cuando el recurso autorizado no está disponible. `NOT_FOUND` si la ruta no existe. |
-| 409 | `VERSION_CONFLICT` para versión distinta de la vigente. `REQUEST_CONFLICT` para una clave reutilizada con otro actor o comando en un incidente, o un UUID SOS reutilizado con otros datos. `INCIDENT_NOT_OPEN` al cancelar desde otro estado. `INVALID_TRANSITION` si el estado impide la acción operativa. Los conflictos de estado o versión de incidentes incluyen `details.currentVersion` y `details.currentStatus`. |
-| 500 | `INTERNAL_ERROR` ante fallos internos. |
+| 409 | `VERSION_CONFLICT` para versión distinta de la vigente. `REQUEST_CONFLICT` para una clave reutilizada con otro actor o comando en un incidente, o un UUID SOS reutilizado con otros datos. `INCIDENT_NOT_OPEN` al cancelar un terminal distinto de `CANCELLED`. `INVALID_TRANSITION` si el estado impide la acción operativa. Los conflictos de estado o versión de incidentes incluyen `details.currentVersion` y `details.currentStatus`. |
+| 403 | `PURGE_DISABLED` al solicitar purga fuera de su alcance demo. |
+| 404 | `CONVERSATION_NOT_FOUND` cuando el chat solicitado no existe en el ámbito autorizado. |
+| 409 | `GUARD_ALREADY_BUSY` en un segundo `claim`, `REQUEST_PURGED` al reutilizar una clave de creación purgada, `CHAT_CLOSED`, `CHAT_LIMIT`, `PURGE_SELECTION_CHANGED` o los conflictos de revisión descritos abajo. |
+| 429 | `CHAT_RATE_LIMIT` con `Retry-After`. |
+| 500 | `INTERNAL_ERROR` ante fallos internos y `PURGE_BACKUP_FAILED` si no se pudo verificar el respaldo. |
 
-## Triaje H7
+## Triaje histórico H7
+
+Esta proyección conserva registros y clientes anteriores. El análisis conversacional y la prioridad efectiva se consultan en despacho.
 
 - Motivo `reasonCode` admite `UNRESPONSIVE`, `IMMEDIATE_DANGER`, `ILLNESS_OR_INJURY`, `AGGRESSION_OR_HARASSMENT`, `CROWDING` y `OTHER`. El relato admite hasta 280 unidades UTF-16. Se conserva tal como se envió, incluida la puntuación y los saltos de línea. Un relato en blanco, un campo omitido y un campo nulo se tratan como ausencia.
 - La vista operativa agrega `{reasonCode,dangerAlert,triage}` a los listados, detalles y respuestas de las acciones H6. `dangerAlert` es `UNRESPONSIVE`, `IMMEDIATE_DANGER` o `null`. Se deriva del motivo y es independiente de la clasificación. La vista propia del asistente conserva los campos H6.
@@ -65,27 +75,34 @@ Los errores usan `{error:{code,message,details?}}`.
 - Una revisión contiene `{reviewVersion,reviewedTriageVersion,operationId,decision,category,urgency,reviewedAt,actor:{id,name}}`. `CONFIRM` requiere una sugerencia vigente y omite categoría y prioridad en el comando. `CORRECT` exige ambos valores. Un comando nuevo requiere `ASSIGNED` o `IN_PROGRESS`. Se reconoce una repetición exacta del mismo autor antes de verificar estado y versión, previa autorización vigente. Las revisiones actualizan la clasificación visible e incrementan solo `triageVersion`. La sugerencia original queda disponible.
 - `TRIAGE_VERSION_CONFLICT` e `INVALID_TRIAGE_REVIEW` devuelven 409 con `details.currentTriageVersion` y `details.currentStatus`. Reusar un UUID con un comando distinto devuelve `REQUEST_CONFLICT`.
 
-## Conversación H7.2
+## Creación y conversación
 
-La creación de incidentes admite `mode: "CHAT"` con `firstMessage: {clientMessageId,text}` o `mode: "SOS"` sin texto. Ambas modalidades devuelven `{incident,conversation,message}` con 201 o 200 en un reenvío equivalente. El SOS devuelve `message: null`. El servidor escribe todo en una transacción. La modalidad histórica conserva su respuesta y el cliente descubre las conversaciones en los incidentes con `hasConversation: true`.
+AppAsistente usa `{clientRequestId,mode:"SOS"}`. Para integración, la API también admite `mode: "CHAT"` con `firstMessage: {clientMessageId,text}`. Las dos modalidades aceptan además `zoneId`, `locationText` y `reasonCode` opcionales y devuelven `{incident,conversation,message}`. El SOS devuelve `message: null` y una conversación vacía. Crear incidente y conversación se confirma antes de consultar OpenAI. El cuerpo histórico sin `mode` admite `description` y devuelve directamente el incidente propio.
+
+Fastify normaliza los UUID a minúsculas y recorta `locationText` a un máximo de 160 caracteres. Una zona conocida debe pertenecer al evento. La clave de creación es única por asistente entre eventos. Para repetirla deben coincidir el evento, la modalidad, los campos aplicables y, para `CHAT`, el UUID y el texto del primer mensaje. Una modalidad distinta devuelve `REQUEST_CONFLICT`.
 
 - Los prefijos son `/me/incidents/:id` para el asistente titular y `/events/:eventId/incidents/:id` para guardias miembros. `GET /conversation?afterSeq=0&limit=50` devuelve `{conversation,messages,nextAfterSeq,hasMore}`. El límite máximo es 100. Cada mensaje incluye `{id,seq,author:{type,displayName},text,createdAt}` y el UUID de cliente es visible solo para el autor.
 - `POST /conversation/messages` del asistente acepta `{clientMessageId,text}` y devuelve `{message,conversation}` con 201 o 200 para una repetición exacta. El texto recortado admite 1–500 unidades UTF-16. UUID con otro contenido devuelve 409. Una escritura nueva en estado terminal devuelve `CHAT_CLOSED`. El límite de 20 mensajes nuevos por minuto por autor devuelve 429 y `Retry-After`. El límite total de 200 mensajes humanos devuelve `CHAT_LIMIT`.
-- `conversation` contiene `{incidentId,control,controlVersion,guard,aiStatus,lastSeq}`. El control se deriva del estado H6 y usa su misma versión. Los valores son `AUTO` en incidente abierto, `STAFF` en asignado o en progreso y `CLOSED` en terminal.
-- `aiStatus` es `PENDING` durante el procesamiento, `READY` tras interpretación y `MANUAL` ante fallback, cupo agotado, toma de control o SOS sin texto. Los clientes muestran que se espera al personal hasta tener una asignación confirmada. La IA publica con autor `AI`.
-- El mismo `POST /conversation/messages` bajo el prefijo del evento permite responder al guardia asignado. `claim` agrega `conversation` si existe. La autoasignación H6, el registro de la transición y la invalidación de trabajos de chat pendientes se confirman juntos. El inicio de atención requiere la operación H6 `start`.
+- `conversation` contiene `{incidentId,control,controlVersion,guard,aiStatus,lastSeq}`. El control se deriva del estado operativo y usa su misma versión. Los valores son `AUTO` en incidente abierto, `STAFF` en asignado o en progreso y `CLOSED` en terminal.
+- `aiStatus` es `PENDING` si el último turno está en cola o en ejecución, `READY` si publicó respuesta, `UNAVAILABLE` si el turno en `AUTO` terminó sin una respuesta publicable y `MANUAL` si no hay turno o el control ya pasó a personal o a terminal. Cada mensaje nuevo del asistente en `AUTO` se encola de forma individual. Las respuestas visibles tienen autor `AI`. Consulta [límites y fallback](current-workflow.md#3-turnos-de-ia-prioridad-y-ubicación).
+- El mismo `POST /conversation/messages` bajo el prefijo del evento permite responder al guardia asignado. El `claim` agrega `conversation` si existe, registra la asignación e invalida los trabajos de chat pendientes en la misma transacción. Los resultados en vuelo se verifican antes de publicar. Un reenvío exacto de un mensaje confirmado puede recuperar su recibo después del cierre.
 
-### Despacho
+
+## Despacho
 
 - `GET /events/:eventId/incidents?order=dispatch` entrega la cola ordenada por Fastify. La consulta histórica sin el parámetro conserva su orden por creación. Cada elemento de la cola incluye `dispatch` con prioridad efectiva, fuentes de IA y humana, razones, política, revisión, ubicaciones, análisis y tiempo transcurrido.
-- Para incidentes con conversación, las respuestas de `claim`, `start` y `resolve` incluyen el despacho recalculado. AppPersonal refresca el orden de la cola tras la operación. Las apps conservan en memoria la clave y el cuerpo de cada mensaje incierto al cerrar y reabrir una conversación de la misma sesión.
-- La cola activa ordena por `P0, P1, PENDING, P2, P3`, luego por estado `OPEN, ASSIGNED, IN_PROGRESS`, fecha de creación e ID ascendente. Los terminales se agregan por última transición descendente. Los casos abiertos de evaluación pendiente o P2 pasan a P1 al umbral inicial. P3 pasa a P2 al umbral inicial y P1 al segundo. Los valores de entorno iniciales son 120 y 300 segundos. El aumento por espera cesa al asignar.
-- P0 tiene fuente `AI_PROVISIONAL` con cita de peligro explícito validada por Fastify, `DECLARED_DANGER` por motivo de peligro inmediato, o `HUMAN` por prioridad crítica o peligro confirmado por el guardia. Una sugerencia crítica sin respaldo corroborado aporta P1. El motivo explícito fija el piso P0 hasta que el guardia registre `CLEARED`. Una revisión humana de prioridad reemplaza la base sugerida.
-- Un P0 provisional corroborado conserva el piso crítico si los análisis siguientes omiten el peligro o cambian la gravedad. `criticalEvidence` identifica el tipo y las secuencias del mensaje y del análisis que lo respaldan. El guardia retira el piso mediante `CLEARED` y su motivo, o lo confirma mediante `CONFIRMED`. La revisión conserva el rastro de la evidencia original.
+- Para incidentes con conversación, las respuestas de `claim`, `start`, `resolve`, `close` y `withdraw` incluyen el despacho recalculado. AppPersonal refresca el orden de la cola tras la operación. Las apps conservan en memoria la clave y el cuerpo de cada mensaje incierto al cerrar y reabrir una conversación de la misma sesión.
+- El despacho expone prioridad efectiva, fuente, razones, sugerencias inicial y reciente, prioridad humana, tiempo transcurrido, revisión y versión de política. Incluye `declaredLocation`, `inferredLocation`, `confirmedLocation`, resumen y `criticalEvidence` con las secuencias del mensaje y del análisis corroborado. El historial se entrega después de la cola activa, ordenado por última transición descendente. Las [reglas de prioridad y escalada](current-workflow.md#3-turnos-de-ia-prioridad-y-ubicación) describen el orden activo y el piso crítico.
 - `GET /events/:eventId/incidents/:id/dispatch` devuelve `{dispatch,reviews,transitions}` a guardias y organizadores miembros. Para guardias añade `zones`. El organizador puede consultar el resumen interno y la auditoría. El hilo de mensajes se sirve en las rutas del asistente y el guardia.
 - `POST /events/:eventId/incidents/:id/dispatch/reviews` acepta `{expectedRevision,operationId,humanPriority,confirmedLocation,dangerAssessment,reason}`. La revisión parte en 0. Prioridad y ubicación aceptan nulo. La ubicación no nula exige `{zoneId,text}` con al menos un dato y referencia de hasta 160 caracteres. El peligro acepta `UNCHANGED`, `CONFIRMED` o `CLEARED`. El motivo requiere 1–240 caracteres. El guardia asignado en estado activo recibe `{review,dispatch,replayed}`. La revisión obsoleta devuelve `409 DISPATCH_CONFLICT` con la revisión vigente.
-## H7.3 · Atención y administración
 
-- Un guardia tiene como máximo una asignación activa global. Otro `claim` devuelve `409 GUARD_ALREADY_BUSY`. Si la migración detecta duplicados previos, se detiene y mantiene los registros originales. La lista de personal incluye `guardBusy` y la atención activa cuando el guardia conserva acceso al evento.
-- El asistente puede cancelar desde `OPEN`, `ASSIGNED` e `IN_PROGRESS`. El guardia asignado puede usar `POST /close` desde los dos estados de asignación. El organizador puede usar `POST /withdraw` desde cualquier estado activo. Ambas rutas de evento reciben `{version,operationId,resolutionNote}`, con motivo obligatorio. Cada transición registra actor y fecha. Los casos terminales siguen disponibles en el historial.
-- `GET /events/:eventId/incidents/demo-purge` anticipa cantidad y huella, con `incidentId` opcional. El `POST` requiere la misma selección, UUID de operación y confirmación literal `ELIMINAR`. Solo está disponible para el organizador del evento sembrado `demo-festival` con `DEMO_PURGE_ENABLED=true`. Crea y verifica un respaldo SQLite completo en el directorio local `demo-purge-backups` junto a la base. Las claves de creación eliminadas quedan registradas y su reenvío devuelve `409 REQUEST_PURGED`.
+## Administración y purga
+
+El retiro administrativo usa `/withdraw` y conserva incidente, chat y auditoría. Los endpoints de purga se reservan al organizador del evento sembrado `demo-festival`, con una SQLite en disco y `DEMO_PURGE_ENABLED=true`.
+
+| Operación | Solicitud | Respuesta |
+| --- | --- | --- |
+| `GET /events/:eventId/incidents/demo-purge` | Query opcional `incidentId`. Omitirlo selecciona el evento completo. | 200 `{enabled,count,selectionHash}`. Una purga desactivada devuelve `false`, 0 y `null`. |
+| `POST /events/:eventId/incidents/demo-purge` | `{incidentId?,operationId,selectionHash,confirmation:"ELIMINAR"}`. | 200 `{count,backupName,backupSha256,replayed}`. Una selección vacía u obsoleta devuelve `PURGE_SELECTION_CHANGED`. |
+
+Fastify verifica el respaldo antes de borrar y conserva la auditoría de purga. El UUID de operación permite recuperar el recibo. El reenvío de la creación original devuelve `REQUEST_PURGED` por su tombstone. [Flujo de administración](current-workflow.md#5-administración-de-incidentes)

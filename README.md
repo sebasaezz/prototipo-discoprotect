@@ -1,80 +1,42 @@
 # Discoprotect
 
-Prototipo universitario de seguridad para eventos masivos. AppPersonal lee el identificador NFC, cierra la conexión con AppAsistente y consulta la ficha actualizada en el servidor. La demo local sigue disponible desde la configuración del lector. AppAsistente verifica una de las tres cuentas demo, emite su credencial NFC vigente y permite editar la ficha y los contactos de esa cuenta mediante el mismo servidor.
+Prototipo universitario de seguridad para eventos masivos. AppAsistente crea un SOS con un botón y abre un chat. AppPersonal lee NFC, consulta fichas autorizadas y gestiona la atención. GestiónWeb permite al organizador supervisar la cola y el historial del evento.
 
-H5 agregó el SOS persistente y fue validado físicamente el 15 de noviembre de 2026. H6 agrega la asignación, atención y resolución por guardias y el seguimiento automático en ambas apps y GestiónWeb. H6 superó la revisión independiente y completó la aceptación física con 26/26 comprobaciones aprobadas por el usuario, incluida la regresión NFC con Antonia y Sofía. [Checkpoint H6](docs/checkpoints/h6-2026-11-15.md) · [Guion H6](docs/h6-integration.md)
+**Estado.** H7–H7.3 están implementados en el [PR #7 hacia `main`](https://github.com/sebasaezz/prototipo-discoprotect/pull/7), con aceptación física pendiente. H6 ya se integró y aprobó 26/26 comprobaciones físicas. [Flujo actual](docs/current-workflow.md) · [Checkpoint H7.3](docs/checkpoints/h7-3-2026-11-17.md) · [Evidencia H6](docs/checkpoints/h6-2026-11-15.md)
 
-## Backend
+## Instalación rápida
 
-El backend usa Node.js 22.13.0 o posterior y npm, según `backend/package.json`. La instalación reproducible usa el lockfile. Desde el repositorio:
+Usa Node.js **22.16.0 o posterior**, npm, JDK 21 y SDK Android 36. Configura `ANDROID_HOME` o `sdk.dir` en un `local.properties` local. Android usa Gradle Wrapper 8.13 y requiere API 26 o posterior en los teléfonos.
+
+### Backend
+
+En `backend/`, copia `.env.example` a `.env` si todavía no existe. Define PIN locales distintos para `DEMO_STAFF_PIN`, `DEMO_STAFF_2_PIN` y `DEMO_ORGANIZER_PIN`. Para la primera demo usa una ruta SQLite nueva, por ejemplo `DATABASE_PATH=data/aceptacion-h73.sqlite`. Desde esa carpeta ejecuta:
 
 ```sh
-cd backend
 npm ci
-npm test
-npm run db:migrate
 npm run db:seed
 npm start
 ```
 
-Para habilitar roles privilegiados, copia `.env.example` a `.env` desde `backend/` si el archivo aún no existe (`Copy-Item .env.example .env` en PowerShell o `cp .env.example .env` en Linux). Define valores privados y distintos en `DEMO_STAFF_PIN`, `DEMO_STAFF_2_PIN` y `DEMO_ORGANIZER_PIN`. Cada cuenta privilegiada queda deshabilitada si su PIN está vacío. Las cuentas ficticias `antonia`, `martin` y `sofia` se pueden seleccionar sin PIN.
+`db:seed` compila, aplica las migraciones y crea las cuentas y el evento ficticios. Comprueba `http://127.0.0.1:3000/api/v1/health`. Antes de actualizar una base previa, consulta la [migración 008 y la preparación local](docs/current-workflow.md#7-despliegue-local).
 
-`npm start` ejecuta el resultado compilado. Recompila con `npm run build`. Durante el desarrollo `npm run dev` compila al inicio y reinicia Node ante cambios en el JavaScript generado. El arranque aplica migraciones pendientes. Ejecuta el seed para provisionar los datos demo. El seed es idempotente con las filas existentes y la persistencia de uso normal ocurre en SQLite. La restauración se ejecuta explícitamente. La configuración por defecto usa `127.0.0.1:3000` y `backend/data/demo.sqlite`. Consulta `GET /api/v1/health`. El flujo local funciona sin Internet tras instalar dependencias.
+### GestiónWeb
 
-Para restaurar una base descartable, detén el servidor, comprueba que `DATABASE_PATH` apunte a esa base de prueba, establece temporalmente `ALLOW_DEMO_RESET=true` en `.env` y ejecuta `npm run db:reset`. Devuelve la opción a `false` tras restaurar. La operación recrea el evento, las seis cuentas ficticias y sus registros relacionados, incluidas sus sesiones. Para actualizar una base H5 usa las instrucciones de migración incremental del [guion H6](docs/h6-integration.md).
+En otra terminal, desde `web/`, ejecuta `npm ci` y `npm run dev`. Abre `http://127.0.0.1:5173` e ingresa el PIN del organizador. Si cambiaste el puerto u origen de Fastify, define `DISCOPROTECT_API_ORIGIN` para Vite.
 
-Para escuchar en LAN, configura `HOST=0.0.0.0` y `PORT` en `.env`. Permite el puerto en el firewall de red privada y usa la IP LAN del computador para las consultas. HTTP de desarrollo está destinado a datos ficticios en una LAN aislada. Fuera de ese entorno se requiere HTTPS y controles adicionales.
+### Android
 
-[Contrato API](docs/api-contract.md) · [Guion de demostración con reinicio](docs/demo-runbook.md)
+Para una LAN de desarrollo controlada, configura `HOST=0.0.0.0` en el backend y permite el puerto en el firewall de red privada. Desde la raíz compila ambos APK con `./gradlew.bat :emitter:assembleDebug :reader:assembleDebug` en Windows o `./gradlew :emitter:assembleDebug :reader:assembleDebug` en Linux o macOS. Usa `adb devices -l` y `adb -s <SERIAL> install -r <APK>` para instalarlos. En ambas apps configura `http://<IP-LAN-PC>:3000` y selecciona el mismo evento.
 
-## Web de organizadores
-
-Con Fastify iniciado y `DEMO_ORGANIZER_PIN` configurado en el backend, ejecuta desde la raíz en Windows:
-
-```powershell
-Set-Location web
-npm.cmd ci
-npm.cmd test
-npm.cmd run build
-npm.cmd run dev
-```
-
-Abre `http://127.0.0.1:5173` en el PC. Vite reenvía `/api/v1` a `http://127.0.0.1:3000`. Si Fastify escucha en otro puerto u origen, define `DISCOPROTECT_API_ORIGIN` en la terminal antes de arrancar Vite. Usa el PIN del entorno del servidor. [Preparación de la demo](docs/h5-integration.md)
-
-## Android
-
-JDK 21, SDK Android 36 y Gradle Wrapper 8.13. Configura `ANDROID_HOME` o `sdk.dir` en un `local.properties` de uso local. Las apps mantienen AGP 8.13.0, Kotlin 2.2.20, Compose BOM 2025.10.00, bytecode Java/Kotlin 17, SDK de compilación y objetivo 36 y Android mínimo API 26.
-
-```sh
-./gradlew :protocol:test :emitter:testDebugUnitTest :emitter:assembleDebug :reader:assembleDebug :reader:testDebugUnitTest :emitter:lintDebug :reader:lintDebug
-```
-
-En Windows usa `./gradlew.bat`. Si la ruta incluye tildes y falla el proceso JVM de pruebas, ejecuta desde una ruta ASCII o crea un alias con una letra libre:
-
-```powershell
-subst T: "$PWD"
-Push-Location T:\
-try {
-    ./gradlew.bat :protocol:test :emitter:testDebugUnitTest :emitter:assembleDebug :reader:assembleDebug :reader:testDebugUnitTest :emitter:lintDebug :reader:lintDebug
-} finally {
-    Pop-Location
-    subst T: /D
-}
-```
-
-| Aplicación | Equipo previsto | APK |
+| Aplicación | Equipo previsto | APK debug |
 | --- | --- | --- |
-| Discoprotect Asistente | Galaxy S22 | `emitter/build/outputs/apk/debug/emitter-debug.apk` |
-| Discoprotect Personal | Galaxy S25 | `reader/build/outputs/apk/debug/reader-debug.apk` |
+| AppAsistente | Galaxy S22 | `emitter/build/outputs/apk/debug/emitter-debug.apk` |
+| AppPersonal | Galaxy S25 | `reader/build/outputs/apk/debug/reader-debug.apk` |
 
-Consulta los seriales con `adb devices -l`. Instala cada APK con `adb -s <SERIAL> install -r <RUTA_APK>`. Los APK están firmados con la clave local de depuración.
-
-[Contrato NFC y checklist Samsung](docs/nfc-contract.md) · [Design System](docs/design-system.md)
-
-[Guion H4 para las tres cuentas y los Samsung](docs/h4-integration.md) · [Guion histórico H3](docs/h3-integration.md) · [Guion H2 para Windows y los Samsung](docs/h2-lan.md)
+La demo arranca con IA y purga desactivadas. El [flujo actual](docs/current-workflow.md) explica las cuentas, la activación segura de IA y purga, los estados de atención y el recorrido completo del SOS.
 
 ## Continuidad
 
-[Checkpoint H4 del 15 de noviembre de 2026](docs/checkpoints/h4-2026-11-15.md) · [Checkpoint H3 del 15 de noviembre de 2026](docs/checkpoints/h3-2026-11-15.md) · [Análisis previo a H4](docs/h4-handoff.md) · [Instrucciones para agentes](AGENTS.md)
-
-[Arquitectura de las apps](docs/architecture.md) · [Modelo de datos](docs/data-model.md) · [Roadmap H0–H10](docs/roadmap.md)
+- [Guion físico vigente](docs/h7-2-integration.md) y [checkpoint H7.3](docs/checkpoints/h7-3-2026-11-17.md).
+- [Instrucciones para agentes](AGENTS.md) y [alcance de H8](docs/roadmap.md#h8--administración-de-eventos-y-personal).
+- [Arquitectura](docs/architecture.md), [contrato API](docs/api-contract.md), [modelo de datos](docs/data-model.md), [contrato NFC](docs/nfc-contract.md) y [Design System](docs/design-system.md).
