@@ -302,7 +302,7 @@ test('SOS deduplicates concurrent retries, rejects conflicts and enforces cancel
   assert.equal(cancelled.statusCode, 200);
   assert.equal(cancelled.json().status, 'CANCELLED');
   assert.equal((await send()).json().status, 'CANCELLED');
-  assert.equal((await app.inject({ method: 'POST', url, headers })).json().error.code, 'INCIDENT_NOT_OPEN');
+  assert.deepEqual((await app.inject({ method: 'POST', url, headers })).json(), cancelled.json());
   assert.equal(db.prepare('SELECT count(*) AS n FROM incidents').get()?.n, 1);
 });
 
@@ -421,7 +421,7 @@ test('two distinct guards compete and the winner can progress with durable exact
   assert.equal((await request(url + '/claim', winner, claims[index])).statusCode, 403);
 });
 
-test('assignment and cancellation serialize and only the first can update an open SOS', async t => {
+test('assignment and cancellation serialize and finish cancelled', async t => {
   const { app, db, login } = await fixture(t);
   const attendee = await login();
   const staff = await login('guardia', pins.STAFF);
@@ -433,10 +433,11 @@ test('assignment and cancellation serialize and only the first can update an ope
     const cancel = () => app.inject({ method: 'POST', url: `${prefix}/me/incidents/${id}/cancel`, headers: attendee });
     const actions = cancelFirst ? [cancel, claim] : [claim, cancel];
     const responses = await Promise.all(actions.map(action => action()));
-    assert.deepEqual(responses.map(response => response.statusCode).sort(), [200, 409]);
-    const cancellationWon = responses[cancelFirst ? 0 : 1].statusCode === 200;
-    assert.equal(db.prepare('SELECT status FROM incidents WHERE id = ?').get(id)?.status, cancellationWon ? 'CANCELLED' : 'ASSIGNED');
-    assert.equal(db.prepare('SELECT count(*) AS n FROM incident_transitions WHERE incident_id = ?').get(id)?.n, 1);
+    assert.equal(responses[cancelFirst ? 0 : 1].statusCode, 200);
+    const claimed = responses[cancelFirst ? 1 : 0].statusCode === 200;
+    assert.equal(responses[cancelFirst ? 1 : 0].statusCode, claimed ? 200 : 409);
+    assert.equal(db.prepare('SELECT status FROM incidents WHERE id = ?').get(id)?.status, 'CANCELLED');
+    assert.equal(db.prepare('SELECT count(*) AS n FROM incident_transitions WHERE incident_id = ?').get(id)?.n, claimed ? 2 : 1);
   };
   await transition(true);
   await transition(false);

@@ -10,9 +10,10 @@ import * as incidents from './incidents.js';
 import * as records from './records.js';
 import { triageDetail, reviewTriage } from './triage.js';
 import { reviewInput } from './triage-contract.js';
+import { previewPurge, purgeIncidents, purgeInput, purgeTarget } from './incident-purge.js';
 
 export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = false,
-  thresholds: Thresholds = { earlySeconds: 120, lateSeconds: 300 }) {
+  thresholds: Thresholds = { earlySeconds: 120, lateSeconds: 300 }, demoPurgeEnabled = false) {
   const app = Fastify({ logger: logging, logController: new LogController({ disableRequestLogging: true }), bodyLimit: 32 * 1024 });
   const dispatch = activatePolicy(db, thresholds);
   const queueQuery = z.strictObject({ order: z.literal('dispatch').optional() });
@@ -96,7 +97,8 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       const { eventId } = parse(records.eventId, request.params);
       requireMembership(db, current, eventId);
       const { order } = parse(queueQuery, request.query);
-      return { incidents: incidents.eventIncidents(db, eventId, order === 'dispatch' ? dispatch : undefined) };
+      return { incidents: incidents.eventIncidents(db, eventId, order === 'dispatch' ? dispatch : undefined),
+        ...(current.role === 'STAFF' ? incidents.guardAttention(db, current, dispatch) : {}) };
     });
     api.post('/me/incidents/:id/cancel', async request => {
       const current = session(request);
@@ -112,6 +114,21 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
     });
     const incidentParams = records.eventId.extend(incidents.incidentId.shape);
     const incidentPath = '/events/:eventId/incidents/:id';
+    const purgePath = '/events/:eventId/incidents/demo-purge';
+    api.get(purgePath, async request => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId } = parse(records.eventId, request.params);
+      requireMembership(db, current, eventId);
+      return previewPurge(db, eventId, demoPurgeEnabled, parse(purgeTarget, request.query).incidentId);
+    });
+    api.post(purgePath, async request => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId } = parse(records.eventId, request.params);
+      requireMembership(db, current, eventId);
+      return purgeIncidents(db, eventId, current, demoPurgeEnabled, parse(purgeInput, request.body));
+    });
     api.get('/me/incidents/:id/conversation', async request => {
       const current = session(request);
       requireRole(current, 'ATTENDEE');
@@ -172,13 +189,14 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       const { eventId, id } = parse(incidentParams, request.params);
       return reviewTriage(db, current, eventId, id, parse(reviewInput, request.body));
     });
-    for (const action of ['claim', 'start', 'resolve'] as const) {
+    for (const action of ['claim', 'start', 'resolve', 'close', 'withdraw'] as const) {
       api.post(`${incidentPath}/${action}`, async request => {
         const current = session(request);
-        requireRole(current, 'STAFF');
+        requireRole(current, action === 'withdraw' ? 'ORGANIZER' : 'STAFF');
         const { eventId, id } = parse(incidentParams, request.params);
-        const input = action === 'resolve' ? parse(incidents.resolutionInput, request.body)
-          : parse(incidents.operationInput, request.body);
+        const schema = action === 'close' || action === 'withdraw' ? incidents.terminationInput
+          : action === 'resolve' ? incidents.resolutionInput : incidents.operationInput;
+        const input = parse(schema, request.body);
         return incidents.operate(db, current, eventId, id, action, input, dispatch);
       });
     }

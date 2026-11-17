@@ -31,20 +31,40 @@ export function atomic<T>(db: Db, work: () => T): T {
 const migrations = new URL('../../migrations/', import.meta.url);
 
 export function migrate(db: Db) {
-  atomic(db, () => {
-    db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (filename TEXT PRIMARY KEY, applied_at TEXT NOT NULL) STRICT');
-    for (const filename of readdirSync(migrations).filter(name => /^\d{3}_[a-z_]+\.sql$/.test(name)).sort()) {
-      if (db.prepare('SELECT 1 FROM schema_migrations WHERE filename = ?').get(filename)) continue;
-      if (filename === '003_incident_lifecycle.sql') {
-        const reference = db.prepare(`SELECT 1 FROM sqlite_schema AS s, pragma_foreign_key_list(s.name) AS fk
-          WHERE s.type = 'table' AND lower(fk."table") = 'incidents' LIMIT 1`).get();
-        if (reference) throw new Error('La tabla incidents tiene referencias entrantes inesperadas');
+  const files = readdirSync(migrations).filter(name => /^\d{3}_[a-z_]+\.sql$/.test(name)).sort();
+  const rebuild = '008_incident_administration.sql';
+  function apply(names: string[]) {
+    if (!names.length) return;
+    atomic(db, () => {
+      db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (filename TEXT PRIMARY KEY, applied_at TEXT NOT NULL) STRICT');
+      for (const filename of names) {
+        if (db.prepare('SELECT 1 FROM schema_migrations WHERE filename = ?').get(filename)) continue;
+        if (filename === '003_incident_lifecycle.sql') {
+          const reference = db.prepare(`SELECT 1 FROM sqlite_schema AS s, pragma_foreign_key_list(s.name) AS fk
+            WHERE s.type = 'table' AND lower(fk."table") = 'incidents' LIMIT 1`).get();
+          if (reference) throw new Error('La tabla incidents tiene referencias entrantes inesperadas');
+        }
+        if (filename === rebuild && db.prepare(`SELECT 1 FROM incidents WHERE status IN ('ASSIGNED', 'IN_PROGRESS')
+          GROUP BY assigned_staff_id HAVING count(*) > 1 LIMIT 1`).get()) {
+          throw new Error('008: hay guardias con varias asignaciones activas. Revisa las asignaciones antes de migrar.');
+        }
+        db.exec(readFileSync(new URL(filename, migrations), 'utf8'));
+        if (db.prepare('PRAGMA foreign_key_check').all().length) {
+          throw new Error(`La migración ${filename} dejó claves foráneas inconsistentes`);
+        }
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?)').run(filename, new Date().toISOString());
       }
-      db.exec(readFileSync(new URL(filename, migrations), 'utf8'));
-      if (db.prepare('PRAGMA foreign_key_check').all().length) {
-        throw new Error(`La migración ${filename} dejó claves foráneas inconsistentes`);
-      }
-      db.prepare('INSERT INTO schema_migrations VALUES (?, ?)').run(filename, new Date().toISOString());
+    });
+  }
+  apply(files.filter(name => name < rebuild));
+  if (files.includes(rebuild) && !db.prepare('SELECT 1 FROM schema_migrations WHERE filename = ?').get(rebuild)) {
+    // Preserve child rows while replacing the parent table and verify every foreign key before commit.
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      apply([rebuild]);
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON');
     }
-  });
+  }
+  apply(files.filter(name => name > rebuild));
 }

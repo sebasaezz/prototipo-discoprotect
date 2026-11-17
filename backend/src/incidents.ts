@@ -30,7 +30,9 @@ export const resolutionInput = z.strictObject({
   resolutionNote: z.string().trim().max(240).nullish().transform(value => value || null),
 });
 
-type Status = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS' | 'RESOLVED' | 'CANCELLED';
+export const terminationInput = z.strictObject({ ...operationFields, resolutionNote: z.string().trim().min(1).max(240) });
+type Status = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS' | 'RESOLVED' | 'CANCELLED' | 'CLOSED' | 'WITHDRAWN';
+const active = (status: Status) => status === 'OPEN' || status === 'ASSIGNED' || status === 'IN_PROGRESS';
 
 type Incident = {
   id: string;
@@ -107,6 +109,23 @@ export function eventIncidents(db: Db, eventId: string, dispatch?: DispatchPolic
   }).sort(compareDispatch);
 }
 
+function guardAssignment(db: Db, personId: string) {
+  return db.prepare(`SELECT id, event_id AS eventId FROM incidents
+    WHERE assigned_staff_id = ? AND status IN ('ASSIGNED', 'IN_PROGRESS')`).get(personId) as
+    { id: string; eventId: string } | undefined;
+}
+
+export function guardAttention(db: Db, session: Session, policy: DispatchPolicy) {
+  const assignment = guardAssignment(db, session.personId);
+  if (!assignment) return { guardBusy: false, activeIncident: null };
+  const allowed = db.prepare("SELECT 1 FROM event_memberships WHERE person_id = ? AND event_id = ? AND role = 'STAFF'")
+    .get(session.personId, assignment.eventId);
+  if (!allowed) return { guardBusy: true, activeIncident: null };
+  const row = findIncident(db, assignment.id, 'event', assignment.eventId);
+  const incident = eventView(db, row);
+  return { guardBusy: true, activeIncident: { ...incident, dispatch: dispatchView(db, row, incident.triage, policy, Date.now()) } };
+}
+
 export function ownIncident(db: Db, session: Session, id: string) {
   const incident = findIncident(db, id, 'owner', session.personId);
   requireMembership(db, session, incident.eventId);
@@ -126,6 +145,10 @@ export function createIncident(db: Db, session: Session, eventId: string, input:
   triageEnabled: boolean) {
   return atomic(db, () => {
     requireMembership(db, session, eventId);
+    if (db.prepare('SELECT 1 FROM incident_tombstones WHERE requester_person_id = ? AND client_request_id = ?')
+      .get(session.personId, input.clientRequestId)) {
+      throw new ApiError(409, 'REQUEST_PURGED', 'La solicitud anterior fue eliminada');
+    }
     const mode = 'mode' in input ? input.mode : undefined;
     const first = 'firstMessage' in input ? input.firstMessage : undefined;
     const description = 'description' in input ? input.description : null;
@@ -160,7 +183,8 @@ export function cancelIncident(db: Db, session: Session, id: string) {
   return atomic(db, () => {
     const previous = findIncident(db, id, 'owner', session.personId);
     requireMembership(db, session, previous.eventId);
-    if (previous.status !== 'OPEN') {
+    if (previous.status === 'CANCELLED') return ownView(previous);
+    if (!active(previous.status)) {
       throw conflict(previous, 'INCIDENT_NOT_OPEN', 'La solicitud ya no está abierta');
     }
     return ownView(applyTransition(db, previous, session, 'CANCELLED', null, null, null));
@@ -172,10 +196,12 @@ function conflict(incident: Incident, code: string, message: string) {
 }
 
 const transitions = {
-  claim: { from: 'OPEN', to: 'ASSIGNED' },
-  start: { from: 'ASSIGNED', to: 'IN_PROGRESS' },
-  resolve: { from: 'IN_PROGRESS', to: 'RESOLVED' },
-} as const;
+  claim: { from: ['OPEN'], to: 'ASSIGNED' },
+  start: { from: ['ASSIGNED'], to: 'IN_PROGRESS' },
+  resolve: { from: ['IN_PROGRESS'], to: 'RESOLVED' },
+  close: { from: ['ASSIGNED', 'IN_PROGRESS'], to: 'CLOSED' },
+  withdraw: { from: ['OPEN', 'ASSIGNED', 'IN_PROGRESS'], to: 'WITHDRAWN' },
+} satisfies Record<string, { from: Status[]; to: Status }>;
 
 export type Action = keyof typeof transitions;
 type OperationInput = z.output<typeof operationInput> & { resolutionNote?: string | null };
@@ -206,15 +232,18 @@ export function operate(db: Db, session: Session, eventId: string, id: string, a
       return { operation: { ...operation, operationId, replayed: true }, incident: operational(previous),
         ...(action === 'claim' && previous.hasConversation ? conversationView(db, id) : {}) };
     }
-    const { from, to } = transitions[action];
-    if (action !== 'claim' && previous.assignedStaffId && previous.assignedStaffId !== session.personId) {
+    const { from, to }: { from: Status[]; to: Status } = transitions[action];
+    if (action !== 'claim' && action !== 'withdraw' && previous.assignedStaffId !== session.personId) {
       throw new ApiError(403, 'FORBIDDEN', 'La operación requiere ser el guardia asignado');
     }
     if (previous.version !== version) throw conflict(previous, 'VERSION_CONFLICT', 'El incidente cambió');
-    if (previous.status !== from) throw conflict(previous, 'INVALID_TRANSITION', 'El estado no permite esta operación');
+    if (!from.includes(previous.status)) throw conflict(previous, 'INVALID_TRANSITION', 'El estado no permite esta operación');
+    if (action === 'claim' && guardAssignment(db, session.personId)) {
+      throw conflict(previous, 'GUARD_ALREADY_BUSY', 'Ya tienes una atención activa');
+    }
     const current = applyTransition(db, previous, session, to, resolutionNote, operationId, requestHash);
     return {
-      operation: { operationId, fromStatus: from, toStatus: to, appliedVersion: current.version, appliedAt: current.updatedAt, replayed: false },
+      operation: { operationId, fromStatus: previous.status, toStatus: to, appliedVersion: current.version, appliedAt: current.updatedAt, replayed: false },
       incident: operational(current),
       ...(action === 'claim' && current.hasConversation ? conversationView(db, id) : {}),
     };
@@ -236,8 +265,8 @@ function applyTransition(db: Db, previous: Incident, session: Session, to: Statu
   db.prepare(`INSERT INTO incident_transitions (incident_id, applied_version, actor_person_id,
     from_status, to_status, applied_at, operation_id, request_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(previous.id, version, session.personId, previous.status, to, updatedAt, operationId, requestHash);
-  if (to === 'CANCELLED' || to === 'RESOLVED') finishManually(db, previous.id, 'CLOSED', Date.parse(updatedAt));
-  if (previous.hasConversation && (to === 'ASSIGNED' || to === 'CANCELLED' || to === 'RESOLVED')) {
+  if (!active(to)) finishManually(db, previous.id, 'CLOSED', Date.parse(updatedAt));
+  if (previous.hasConversation && (to === 'ASSIGNED' || !active(to))) {
     discardChatWork(db, previous.id, Date.parse(updatedAt));
   }
   return findIncident(db, previous.id, 'event', previous.eventId);
