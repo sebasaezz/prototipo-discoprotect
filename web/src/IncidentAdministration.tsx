@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { activeIncident, ApiError, previewDemoPurge, purgeDemo, withdrawIncident, type Incident, type PurgeCommand,
   type Session, type Withdrawal } from './api.js';
-import { IncidentTable } from './IncidentTable.js';
+import { IncidentsPage } from './IncidentsPage.js';
 
 type Pending =
   | { kind: 'purge'; count: number; command: PurgeCommand }
@@ -15,8 +15,9 @@ function operationId() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export function IncidentAdministration({ items, session, event, onExpiry, refresh }: {
-  items: Incident[]; session: Session; event: string; onExpiry: () => void; refresh: () => void;
+export function IncidentAdministration({ visible, items, session, event, onExpiry, onAccessLost, refresh }: {
+  visible: boolean; items: Incident[]; session: Session; event: string;
+  onExpiry: () => void; onAccessLost: () => void; refresh: () => void;
 }) {
   const [purgeEnabled, setPurgeEnabled] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -24,13 +25,24 @@ export function IncidentAdministration({ items, session, event, onExpiry, refres
   const [busy, setBusy] = useState(false);
   const [retry, setRetry] = useState(false);
   const [notice, setNotice] = useState('');
+  const confirmationField = useRef<HTMLInputElement>(null);
+  const pendingId = pending?.command.operationId;
+
+  useEffect(() => {
+    if (visible && pendingId) confirmationField.current?.focus();
+  }, [visible, pendingId]);
+
   useEffect(() => {
     const abort = new AbortController();
     previewDemoPurge(session, event, AbortSignal.any([abort.signal, AbortSignal.timeout(8000)]))
       .then(result => { if (!abort.signal.aborted) setPurgeEnabled(result.enabled); })
-      .catch(() => {});
+      .catch(error => {
+        if (abort.signal.aborted || !(error instanceof ApiError)) return;
+        if (error.status === 401) onExpiry();
+        if (error.status === 403) onAccessLost();
+      });
     return () => abort.abort();
-  }, [session, event]);
+  }, [session, event, onExpiry, onAccessLost]);
 
   function failure(error: unknown) {
     if (error instanceof ApiError && error.status === 401) onExpiry();
@@ -49,7 +61,10 @@ export function IncidentAdministration({ items, session, event, onExpiry, refres
         setPending({ kind: 'purge', count: next.count, command: { incidentId: id, confirmation: 'ELIMINAR',
           operationId: operationId(), selectionHash: next.selectionHash } });
       } else setNotice(next.enabled ? 'No hay solicitudes para eliminar.' : 'La eliminación de demo está desactivada.');
-    } catch (error) { failure(error); }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403) onAccessLost();
+      else failure(error);
+    }
     finally { setBusy(false); }
   }
 
@@ -70,6 +85,10 @@ export function IncidentAdministration({ items, session, event, onExpiry, refres
       setPending(null);
       refresh();
     } catch (error) {
+      if (operation.kind === 'withdraw' && error instanceof ApiError && error.status === 403) {
+        onAccessLost();
+        return;
+      }
       failure(error);
       if (error instanceof ApiError && error.status < 500) {
         setPending(null);
@@ -77,6 +96,9 @@ export function IncidentAdministration({ items, session, event, onExpiry, refres
       } else setRetry(true);
     } finally { setBusy(false); }
   }
+
+  // Keep the command and any uncertain receipt while the organizer visits another section.
+  if (!visible) return null;
 
   const rowActions = (item: Incident) => <>
     {activeIncident(item) && <button className="secondary" disabled={busy || !!pending} onClick={() => {
@@ -90,26 +112,25 @@ export function IncidentAdministration({ items, session, event, onExpiry, refres
     {purgeEnabled && <button className="secondary" disabled={busy || !!pending}
       onClick={() => void openPurge(item.id)}>Eliminar definitivamente</button>}
   </>;
-  const active = items.filter(activeIncident);
-  const history = items.filter(item => !activeIncident(item));
-  return <>
-    {purgeEnabled && <button className="secondary" disabled={busy || !!pending || !items.length}
-      onClick={() => void openPurge()}>Limpiar solicitudes demo</button>}
+  return <IncidentsPage items={items} session={session} onExpiry={onExpiry} onAccessLost={onAccessLost}
+    rowActions={rowActions} purgeEnabled={purgeEnabled}>
+    {purgeEnabled && <div className="incident-tools">
+      <button className="secondary" disabled={busy || !!pending || !items.length}
+        onClick={() => void openPurge()}>Limpiar solicitudes demo</button>
+    </div>}
     {notice && <p role="status">{notice}</p>}
-    {pending && <form className="notice" onSubmit={event => { event.preventDefault(); void submit(); }}>
-      <h3>{pending.kind === 'purge' ? 'Confirmar eliminación definitiva' : 'Confirmar retiro de la cola'}</h3>
+    {pending && <form className="notice incident-confirmation" onSubmit={event => { event.preventDefault(); void submit(); }}>
+      <h2>{pending.kind === 'purge' ? 'Confirmar eliminación definitiva' : 'Confirmar retiro de la cola'}</h2>
       {pending.kind === 'purge' && <p>Se eliminarán {pending.count} solicitudes tras verificar un respaldo.</p>}
       <label htmlFor="incident-confirmation">{pending.kind === 'purge' ? 'Escribe ELIMINAR' : 'Motivo del retiro'}</label>
-      <input id="incident-confirmation" value={input} onChange={event => setInput(event.target.value)}
+      <input id="incident-confirmation" ref={confirmationField} value={input} onChange={event => setInput(event.target.value)}
         readOnly={busy || retry} maxLength={240} />
-      <button disabled={busy || (pending.kind === 'purge' ? input !== 'ELIMINAR' : !input.trim())}>
-        {retry ? 'Reintentar la misma operación' : 'Confirmar'}
-      </button>
-      <button type="button" className="secondary" disabled={busy} onClick={() => setPending(null)}>Volver</button>
+      <div className="confirmation-actions">
+        <button disabled={busy || (pending.kind === 'purge' ? input !== 'ELIMINAR' : !input.trim())}>
+          {retry ? 'Reintentar la misma operación' : 'Confirmar'}
+        </button>
+        <button type="button" className="secondary" disabled={busy} onClick={() => setPending(null)}>Volver</button>
+      </div>
     </form>}
-    <h3>Cola activa</h3>
-    <IncidentTable items={active} session={session} onExpiry={onExpiry} actions={rowActions} />
-    {history.length > 0 && <><h3>Historial</h3>
-      <IncidentTable items={history} session={session} onExpiry={onExpiry} actions={purgeEnabled ? rowActions : undefined} /></>}
-  </>;
+  </IncidentsPage>;
 }

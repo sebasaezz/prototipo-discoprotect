@@ -1,8 +1,8 @@
 # Discoprotect
 
-Prototipo universitario de seguridad para eventos masivos. AppAsistente crea un SOS con un botón y abre un chat. AppPersonal lee NFC, consulta fichas autorizadas y gestiona la atención. GestiónWeb permite al organizador supervisar la cola y el historial del evento.
+Prototipo universitario de seguridad para eventos masivos. AppAsistente crea un SOS con un botón y abre un chat. AppPersonal lee NFC, consulta fichas autorizadas y gestiona la atención. GestiónWeb ofrece al organizador un resumen operativo, la cola y el historial de su evento autorizado.
 
-**Estado.** H7–H7.3 están implementados en el [PR #7 hacia `main`](https://github.com/sebasaezz/prototipo-discoprotect/pull/7), con aceptación física pendiente. H6 ya se integró y aprobó 26/26 comprobaciones físicas. [Flujo actual](docs/current-workflow.md) · [Checkpoint H7.3](docs/checkpoints/h7-3-2026-11-17.md) · [Evidencia H6](docs/checkpoints/h6-2026-11-15.md)
+**Estado.** H7–H7.3 se integraron a `main` por el PR #7 (merge `8f5439e`) con 6/6 comprobaciones físicas del flujo principal aprobadas. H8.1 incorpora el dashboard en `codex/discoprotect-h8`. [Flujo actual](docs/current-workflow.md) · [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7) · [Checkpoint H7.3](docs/checkpoints/h7-3-2026-11-17.md)
 
 ## Instalación rápida
 
@@ -23,6 +23,8 @@ npm start
 ### GestiónWeb
 
 En otra terminal, desde `web/`, ejecuta `npm ci` y `npm run dev`. Abre `http://127.0.0.1:5173` e ingresa el PIN del organizador. Si cambiaste el puerto u origen de Fastify, define `DISCOPROTECT_API_ORIGIN` para Vite.
+
+El Dashboard usa las solicitudes del evento devueltas por Fastify y muestra cero cuando la cola activa está vacía. En **Incidentes** están la cola, el historial y las acciones de H7.3. [GestiónWeb H8.1](docs/current-workflow.md#gestiónweb-h81)
 
 ### Android
 

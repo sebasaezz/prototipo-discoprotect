@@ -1,12 +1,15 @@
 import { alertLabels, reasonLabels, type Review, type Triage, validReview, validTriage } from './triage.js';
 
 export type Session = { token: string; expiresAt: string };
-export type Event = { id: string; name: string; venue: string; role: string };
+export const eventStatusLabels = { PLANNED: 'Planificado', ACTIVE: 'Activo', ENDED: 'Finalizado' } as const;
+export type Event = { id: string; name: string; venue: string; role: string; status: keyof typeof eventStatusLabels };
 export const incidentLabels = {
   OPEN: 'Abierta', ASSIGNED: 'Asignada', IN_PROGRESS: 'En atención', RESOLVED: 'Resuelta', CANCELLED: 'Cancelada',
   CLOSED: 'Cerrada', WITHDRAWN: 'Retirada',
 } as const;
-export const activeIncident = (item: Incident) => ['OPEN', 'ASSIGNED', 'IN_PROGRESS'].includes(item.status);
+type ActiveStatus = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS';
+export const activeIncident = (item: Incident): item is Incident & { status: ActiveStatus } =>
+  item.status === 'OPEN' || item.status === 'ASSIGNED' || item.status === 'IN_PROGRESS';
 export const priorityLabels = {
   P0: 'P0 · Crítica', P1: 'P1 · Alta', P2: 'P2 · Media', P3: 'P3 · Baja', PENDING: 'Pendiente de evaluación',
 } as const;

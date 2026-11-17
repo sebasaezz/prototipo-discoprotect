@@ -16,12 +16,19 @@ function displayLocation(dispatch: Dispatch) {
   return 'Ubicación desconocida';
 }
 
-export function IncidentTable({ items, session, onExpiry, actions }: {
+export function incidentLocation(item: Incident) {
+  if (item.dispatch) return displayLocation(item.dispatch);
+  return [item.zoneName, item.locationText].filter(Boolean).join(' · ') || 'Ubicación desconocida';
+}
+
+export function IncidentTable({ items, session, onExpiry, onAccessLost, actions, label = 'Solicitudes SOS del evento' }: {
   items: Incident[]; session: Session; onExpiry: () => void; actions?: (item: Incident) => React.ReactNode;
+  onAccessLost?: () => void;
+  label?: string;
 }) {
   if (!items.length) return <p className="empty">Este evento aún no tiene solicitudes registradas.</p>;
   return (
-    <div className="table-scroll" tabIndex={0} role="region" aria-label="Solicitudes SOS del evento">
+    <div className="table-scroll" tabIndex={0} role="region" aria-label={label}>
       <table>
         <thead><tr><th scope="col">Solicitante e ID</th><th scope="col">Ubicación</th>
           <th scope="col">Estado</th><th scope="col">Prioridad y triaje</th><th scope="col">Guardia asignado</th><th scope="col">Tiempos</th>
@@ -35,8 +42,10 @@ export function IncidentTable({ items, session, onExpiry, actions }: {
               <td><span className={`status ${item.status.toLowerCase()}`}>{incidentLabels[item.status]}</span>
                 {item.resolutionNote && <small>{item.resolutionNote}</small>}</td>
               <td>
-                {item.dispatch && <DispatchCell item={item} dispatch={item.dispatch} session={session} onExpiry={onExpiry} />}
-                {!item.hasConversation && <IncidentTriage item={item} session={session} onExpiry={onExpiry} />}
+                {item.dispatch && <DispatchCell item={item} dispatch={item.dispatch}
+                  session={session} onExpiry={onExpiry} onAccessLost={onAccessLost} />}
+                {!item.hasConversation && <IncidentTriage item={item}
+                  session={session} onExpiry={onExpiry} onAccessLost={onAccessLost} />}
               </td>
               <td>{item.assignedStaff?.name ?? 'Sin asignar'}</td>
               <td>{([
@@ -54,8 +63,8 @@ export function IncidentTable({ items, session, onExpiry, actions }: {
   );
 }
 
-function DispatchCell({ item, dispatch, session, onExpiry }: {
-  item: Incident; dispatch: Dispatch; session: Session; onExpiry: () => void;
+function DispatchCell({ item, dispatch, session, onExpiry, onAccessLost }: {
+  item: Incident; dispatch: Dispatch; session: Session; onExpiry: () => void; onAccessLost?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [audit, setAudit] = useState<Awaited<ReturnType<typeof incidentDispatch>> | null>(null);
@@ -71,10 +80,11 @@ function DispatchCell({ item, dispatch, session, onExpiry }: {
     }).catch(failure => {
       if (controller.signal.aborted) return;
       if (failure instanceof ApiError && failure.status === 401) onExpiry();
+      else if (failure instanceof ApiError && failure.status === 403 && onAccessLost) onAccessLost();
       else setError(messageFor(failure));
     });
     return () => controller.abort();
-  }, [open, session, eventId, id, version, dispatch.revision, retry, onExpiry]);
+  }, [open, session, eventId, id, version, dispatch.revision, retry, onExpiry, onAccessLost]);
   const priority = dispatch.effectivePriority;
   const source = sourceLabels[dispatch.prioritySource];
   return <>
@@ -102,7 +112,9 @@ function DispatchCell({ item, dispatch, session, onExpiry }: {
   </>;
 }
 
-function IncidentTriage({ item, session, onExpiry }: { item: Incident; session: Session; onExpiry: () => void }) {
+function IncidentTriage({ item, session, onExpiry, onAccessLost }: {
+  item: Incident; session: Session; onExpiry: () => void; onAccessLost?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof incidentTriage>> | null>(null);
   const [error, setError] = useState('');
@@ -119,10 +131,11 @@ function IncidentTriage({ item, session, onExpiry }: { item: Incident; session: 
     }).catch(failure => {
       if (controller.signal.aborted) return;
       if (failure instanceof ApiError && failure.status === 401) onExpiry();
+      else if (failure instanceof ApiError && failure.status === 403 && onAccessLost) onAccessLost();
       else setError(messageFor(failure));
     });
     return () => controller.abort();
-  }, [open, session, eventId, id, version, retry, onExpiry]);
+  }, [open, session, eventId, id, version, retry, onExpiry, onAccessLost]);
   const triage = detail && detail.triage.triageVersion >= version ? detail.triage : item.triage;
   const review = triage?.latestReview;
   const classification = review ?? triage?.suggestion ?? triage?.fallback;

@@ -1,6 +1,6 @@
 # Flujo actual de Discoprotect
 
-Discoprotect es un prototipo universitario de gestión de incidentes en eventos masivos. La implementación llega hasta H7.3. Este documento describe el sistema del [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7). La aceptación en los equipos físicos sigue pendiente.
+Discoprotect es un prototipo universitario de gestión de incidentes en eventos masivos. H7–H7.3 se integraron a `main` en el merge `8f5439e` con 6/6 comprobaciones físicas del flujo principal aprobadas. H8.1 amplía GestiónWeb en `codex/discoprotect-h8`. [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7)
 
 ## 1. Componentes y acceso a datos
 
@@ -8,7 +8,7 @@ Discoprotect es un prototipo universitario de gestión de incidentes en eventos 
 | --- | --- |
 | AppAsistente, Galaxy S22 | Verifica una cuenta ficticia, mantiene su credencial NFC y permite editar su ficha y contactos. Crea solicitudes SOS, conversa, cancela solicitudes activas y consulta el historial propio. |
 | AppPersonal, Galaxy S25 | Lee NFC y resuelve fichas con autorización. Consulta la cola, muestra **Mi atención activa**, abre el chat en una pantalla dedicada y permite asumir, iniciar y cerrar la atención. |
-| GestiónWeb | Muestra la cola y el historial del evento para su organizador. Presenta prioridades, resumen y auditoría operativa. Permite retirar solicitudes y, en modo demo habilitado, purgarlas. |
+| GestiónWeb | Resume la operación del evento autorizado y muestra cola, historial, prioridades y auditoría para su organizador. Permite retirar solicitudes y, en modo demo habilitado, purgarlas. |
 | Fastify y SQLite | Fastify valida contratos, sesiones y membresías. SQLite conserva cuentas, fichas, contactos, credenciales NFC, eventos, zonas, hashes de sesiones, incidentes, mensajes, clasificaciones, operaciones y auditoría. |
 | OpenAI | Recibe contexto ficticio filtrado desde un trabajador de Fastify para interpretar mensajes y generar respuestas. Fastify conserva la autoridad sobre estados, permisos y prioridad efectiva. |
 
@@ -86,7 +86,17 @@ En el lector del S25, Reader Mode usa IsoDep para hacer SELECT y GET. AppPersona
 
 ## 5. Administración de incidentes
 
-GestiónWeb separa **Cola activa** e **Historial**. **Retirar de la cola** exige un motivo y conserva el incidente con estado `WITHDRAWN`. Cancelar corresponde al asistente titular. Cerrar corresponde al guardia asignado.
+### GestiónWeb H8.1
+
+Al iniciar sesión con el PIN de organizador, GestiónWeb abre el **Dashboard** del evento autorizado. Con varias membresías de organizador, la cuenta selecciona uno de sus eventos. La barra lateral se convierte en un menú en pantallas pequeñas. El encabezado muestra nombre, recinto y estado del evento.
+
+El Dashboard cuenta solicitudes **Activas**, **Sin asignar**, **Asignadas** y **En atención**. Hasta cinco solicitudes activas siguen el orden de despacho que entrega Fastify. El resumen comparte la consulta con **Incidentes** e indica la hora de la última respuesta correcta. Si falla la conexión, los datos disponibles se marcan como la última consulta. Si el servidor rechaza el acceso al evento, la vista descarta sus solicitudes.
+
+**Recinto y zonas**, **Personal**, **Estadísticas** y **Anuncios y promociones** se muestran en desarrollo. Las seis secciones usan el mismo contexto de sesión y evento. Al cambiar de contexto se cancelan las lecturas y se limpia el estado local de los comandos. Cambiar de sección dentro del mismo evento permite volver a una confirmación o reintentar una operación incierta con el mismo comando.
+
+### Cola, historial y acciones
+
+En **Incidentes**, GestiónWeb separa **Cola activa** e **Historial**. **Retirar de la cola** exige un motivo y conserva el incidente con estado `WITHDRAWN`. Cancelar corresponde al asistente titular. Cerrar corresponde al guardia asignado.
 
 En el evento ficticio `demo-festival`, **Eliminar definitivamente** selecciona un incidente y **Limpiar solicitudes demo** selecciona todos los incidentes del evento, incluidos los activos. La vista previa muestra la cantidad y devuelve una huella de la selección. El organizador confirma con `ELIMINAR`. Fastify crea un respaldo completo junto a la base en `demo-purge-backups/`, verifica integridad, claves foráneas y huella de la selección, y calcula su SHA-256, y aborta si la base cambió o falla el respaldo. La purga borra el incidente y sus dependencias en una transacción. Conserva cuentas, eventos, zonas, credenciales NFC y una auditoría separada de purga. Los tombstones ligan la cuenta y el UUID de cliente con la operación de purga. Un reenvío antiguo recibe `409 REQUEST_PURGED`. [Contrato de administración](api-contract.md#administración-y-purga)
 
@@ -123,4 +133,4 @@ Desde la raíz, ejecuta `./gradlew.bat :emitter:assembleDebug :reader:assembleDe
 | `DISPATCH_EARLY_SECONDS`, `DISPATCH_LATE_SECONDS` | Umbrales de despacho iniciales de 120 y 300 segundos. |
 | `DEMO_PURGE_ENABLED`, `ALLOW_DEMO_RESET` | Ambas opciones empiezan en `false`. Habilita la purga solo para una base descartable y vuelve a desactivarla tras verificarla. El reset es una operación independiente de CLI que restaura las entidades de la demo. |
 
-Para validar el entorno, consulta `GET /api/v1/health`. Continúa con el [guion físico vigente](h7-2-integration.md), el [checkpoint H7.3](checkpoints/h7-3-2026-11-17.md) y el [alcance pendiente de H8](roadmap.md#h8--administración-de-eventos-y-personal).
+Para validar el entorno, consulta `GET /api/v1/health`. Continúa con el [guion físico vigente](h7-2-integration.md), el [checkpoint H7.3](checkpoints/h7-3-2026-11-17.md) y el [alcance de H8](roadmap.md#h8--administración-de-eventos-y-personal).

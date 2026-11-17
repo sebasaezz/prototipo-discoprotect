@@ -11,8 +11,9 @@ El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre
 | H4 · Completado y validado físicamente el 15 de noviembre de 2026 | Sesión seleccionable y credenciales dinámicas. Depende de H3. | Cambiar de cuenta y obtener su ficha por NFC. | Alternar identidades y verificar consistencia HCE al reanudar. Riesgo de credencial anterior. |
 | H5 · Implementado y validado físicamente el 15/11/2026 | SOS persistente, zona manual, guardia y vista web básica. Depende de H4, API y LAN. | Una pulsación prolongada crea un incidente que conserva el mismo ID en AppPersonal y en la web tras reiniciar Fastify. | [Aceptación H5, 27/27](checkpoints/h5-2026-11-15.md) · [Guion de regresión](h5-integration.md). |
 | H6 · Implementado, validado e integrado en `main` por PR #6 | Atención, transiciones y sincronización. Depende de H5. | Un guardia asume, atiende y resuelve. Asistente y GestiónWeb reciben los estados. | [Checkpoint H6](checkpoints/h6-2026-11-15.md). 95 pruebas automatizadas reportadas y 26/26 comprobaciones físicas aprobadas, incluida la regresión NFC. |
-| H7–H7.3 · Implementados en el PR #7, aceptación física pendiente | Triaje, chat SOS, prioridad efectiva, traspaso, atención, retiro y purga demo. | Recorrido completo sobre SQLite con asignación activa única y auditoría. | [Checkpoint H7.3](checkpoints/h7-3-2026-11-17.md) · [Guion físico vigente](h7-2-integration.md). |
-| H8 · Pendiente | Administración de eventos y personal autorizado, y métricas en GestiónWeb. | Ampliar la edición de eventos y membresías con permisos explícitos. | Aislamiento entre eventos, consistencia de métricas y auditoría de cambios. |
+| H7–H7.3 · Integrados en `main` por el PR #7 | Triaje, chat SOS, prioridad efectiva, traspaso, atención, retiro y purga demo. | Recorrido completo sobre SQLite con asignación activa única y auditoría. | 6/6 comprobaciones físicas del flujo principal aprobadas. [Checkpoint previo al merge](checkpoints/h7-3-2026-11-17.md) · [Guion físico](h7-2-integration.md). |
+| H8.1 · Implementado en `codex/discoprotect-h8` | Dashboard y reorganización de GestiónWeb. | Resumen real del evento autorizado y navegación responsive con las acciones de H7.3. | Conteos, aislamiento por evento, sincronización y reintentos administrativos. |
+| H8.2–H8.4 · Pendientes | Recinto y zonas, estadísticas privadas y personal autorizado. | Ampliar la configuración y las métricas para el organizador del evento. | Aislamiento entre eventos, consistencia de métricas y auditoría de cambios. |
 | H9 · Pendiente | Entradas QR ficticias, promociones, acompañantes y búsqueda autorizada. Depende de apps y GestiónWeb. | Publicar una promoción y verla durante la vigencia. Completar flujos complementarios. | Vigencias, zonas horarias, accesos y entradas inválidas. Riesgo de campañas fuera de plazo. |
 | H10 · Pendiente | Estabilizar apps y demo integrada. Depende de H0–H9. | Ejecutar el guion completo con los dos Samsung y el computador, con datos restaurables. | E2E, reinicio, caída de LAN y fallback IA. Riesgos de hardware, firmware y red del recinto. |
 
@@ -20,14 +21,16 @@ El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre
 
 ### H6–H7.3 · Gestión operativa integrada
 
-H6 está en `main` y cuenta con aceptación física. H7–H7.3 están implementados y propuestos en el [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7). El [flujo actual](current-workflow.md) cubre el chat, despacho, atención y gestión de solicitudes. La [aceptación física](h7-2-integration.md) sigue pendiente.
+H6 y H7–H7.3 están integrados a `main`. El flujo principal de H7.3 aprobó 6/6 comprobaciones físicas. [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7) · [Flujo actual](current-workflow.md)
 
 ### H8 · Administración de eventos y personal
 
-- Ampliar la administración web de eventos a partir de la edición existente de nombre y recinto. Definir las operaciones de eventos, zonas y membresías que necesita un organizador y su autorización por ámbito.
-- Incorporar gestión de guardias y definir cómo retirar acceso o reasignar una atención cuando sea necesario. Mantener la unicidad de asignaciones activas y el historial.
-- Agregar métricas del evento con definiciones y filtros verificables. Reutilizar las vistas ya disponibles de cola, historial y auditoría, así como el retiro y la purga demo.
-- Validar que los cambios y métricas persistan y se limiten al evento autorizado. Entradas, acompañantes y promociones siguen en H9.
+- **H8.1 · Dashboard.** Mostrar el resumen operativo del evento autorizado y reorganizar cola, detalle, historial, retiro y purga demo en **Incidentes**. Las secciones futuras se muestran en desarrollo. [Flujo de GestiónWeb](current-workflow.md#gestiónweb-h81)
+- **H8.2 · Recinto y zonas.** Ampliar la edición existente de nombre y recinto con zonas, accesos, puntos médicos y referencias para la atención y la IA.
+- **H8.3 · Estadísticas.** Incorporar métricas históricas privadas del evento con definiciones, filtros y gráficos verificables.
+- **H8.4 · Personal.** Gestionar las membresías de guardias del evento y definir el retiro de acceso y la reasignación, preservando el historial y la unicidad de las asignaciones activas.
+
+El acceso se limita a las membresías del evento. Los roles son `ATTENDEE`, `STAFF` y `ORGANIZER`. Las entradas, acompañantes y promociones se implementarán en H9.
 
 ### H9 · Flujos complementarios de eventos
 

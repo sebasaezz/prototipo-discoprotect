@@ -4,7 +4,7 @@ Prototipo universitario para mejorar la seguridad y la respuesta ante incidentes
 
 ## Retomar el proyecto
 
-- H0 y H2–H6 cuentan con validaciones físicas previas según sus checkpoints. H1 está implementado. H6 se integró a `main` por el PR #6 tras 26/26 comprobaciones. H7–H7.3 están implementados en `codex/discoprotect-h7-2` y propuestos a `main` en el [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7). Su aceptación física está pendiente.
+- H0 y H2–H6 cuentan con validaciones físicas previas según sus checkpoints. H1 está implementado. H6 se integró a `main` por el PR #6 tras 26/26 comprobaciones. H7–H7.3 se integraron a `main` por el [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7) (merge `8f5439e`) con 6/6 comprobaciones físicas del flujo principal aprobadas. H8.1 está en `codex/discoprotect-h8`.
 - Retoma desde el [flujo actual](docs/current-workflow.md), el [checkpoint H7.3](docs/checkpoints/h7-3-2026-11-17.md) y el [guion físico vigente](docs/h7-2-integration.md). Para instalar, usa el [README](README.md). Para continuar el desarrollo, verifica el SHA de la base remota y consulta el [alcance de H8](docs/roadmap.md#h8--administración-de-eventos-y-personal). Conserva los checkpoints previos como evidencia histórica.
 - Antes de cambiar una interfaz o regla, consulta la [arquitectura](docs/architecture.md), el [contrato API](docs/api-contract.md), el [modelo de datos](docs/data-model.md) y el [contrato NFC](docs/nfc-contract.md). Registra por separado las verificaciones automatizadas, visuales y físicas.
 - Usa una rama que incluya los hitos integrados, preserva cambios ajenos y revisa `git diff` y `git status`. La fusión queda como paso de revisión.
