@@ -7,6 +7,7 @@ type Options = {
   model: string; provider: ChatProvider | null; timeoutMs: number; maxQueueAgeMs: number; dailyLimit: number; maxZones: number;
 };
 type Job = { id: string; eventId: string; seq: number; version: number };
+const maxIncidentCalls = 20;
 
 export function createChatWorker(db: Db, options: Options, report: (event: object) => void = () => {}) {
   let active: Promise<void> | undefined;
@@ -18,8 +19,7 @@ export function createChatWorker(db: Db, options: Options, report: (event: objec
       const now = Date.now();
       db.prepare(`UPDATE incident_chat_ai_runs AS r SET status = 'DISCARDED', reason = 'STALE', finished_at = ?
         WHERE status = 'QUEUED' AND NOT EXISTS (
-          SELECT 1 FROM incident_conversations c JOIN incidents i ON i.id = c.incident_id
-          WHERE i.id = r.incident_id AND i.status = 'OPEN' AND c.last_attendee_seq = r.input_seq
+          SELECT 1 FROM incidents i WHERE i.id = r.incident_id AND i.status = 'OPEN'
         )`).run(now);
       db.prepare(`UPDATE incident_chat_ai_runs SET status = 'MANUAL', reason = 'EXPIRED', finished_at = ?
         WHERE status = 'QUEUED' AND queued_at <= ?`).run(now, now - options.maxQueueAgeMs);
@@ -27,10 +27,10 @@ export function createChatWorker(db: Db, options: Options, report: (event: objec
         FROM incident_chat_ai_runs r JOIN incidents i ON i.id = r.incident_id
         WHERE r.status = 'QUEUED' ORDER BY r.queued_at, i.id, r.input_seq LIMIT 1`).get() as Job | undefined;
       if (!job) return undefined;
-      const input = options.provider ? chatInput(db, job.id, job.eventId, options.maxZones) : null;
+      const input = options.provider ? chatInput(db, job.id, job.eventId, job.seq, options.maxZones) : null;
       const used = db.prepare(`SELECT count(*) AS n FROM incident_chat_ai_runs
         WHERE incident_id = ? AND reserved_at IS NOT NULL`).get(job.id);
-      const reason = !options.provider ? 'NOT_CONFIGURED' : !input ? 'INPUT_FILTERED' : Number(used?.n) >= 3
+      const reason = !options.provider ? 'NOT_CONFIGURED' : !input ? 'INPUT_FILTERED' : Number(used?.n) >= maxIncidentCalls
         ? 'INCIDENT_LIMIT' : !reserveDailyCall(db, now, options.dailyLimit) ? 'DAILY_LIMIT' : null;
       if (reason || !input) {
         db.prepare(`UPDATE incident_chat_ai_runs SET status = 'MANUAL', reason = ?, finished_at = ?
@@ -62,19 +62,20 @@ export function createChatWorker(db: Db, options: Options, report: (event: objec
     }
     const now = Date.now();
     const outcome = atomic(db, () => {
-      const current = db.prepare(`SELECT 1 FROM incidents i JOIN incident_conversations c ON c.incident_id = i.id
-        WHERE i.id = ? AND i.version = ? AND i.status = 'OPEN' AND c.last_attendee_seq = ?`)
-        .get(job.id, job.version, job.seq);
+      const current = db.prepare("SELECT 1 FROM incidents WHERE id = ? AND version = ? AND status = 'OPEN'")
+        .get(job.id, job.version);
       const reason = stopped ? 'INTERRUPTED' : !current ? 'STALE' : failure;
       const accepted = reason === null ? analysis : undefined;
       const message = accepted?.result.reply ? append(db, job.id, 'AI', null,
         { text: accepted.result.reply }, new Date(now).toISOString()) : null;
+      const outcome = accepted && !message ? 'UNSAFE_REPLY' : reason;
       db.prepare(`UPDATE incident_chat_ai_runs SET status = ?, reason = ?, result_json = ?, message_seq = ?,
         finished_at = ?, input_tokens = ?, output_tokens = ? WHERE incident_id = ? AND input_seq = ?`).run(
-        accepted ? 'COMPLETE' : reason === 'STALE' ? 'DISCARDED' : 'MANUAL', reason,
+        accepted ? 'COMPLETE' : reason === 'STALE' ? 'DISCARDED' : 'MANUAL',
+        outcome,
         accepted ? JSON.stringify(accepted.result) : null, message?.seq ?? null, now,
         analysis?.usage?.input_tokens ?? null, analysis?.usage?.output_tokens ?? null, job.id, job.seq);
-      return reason;
+      return outcome;
     });
     report({ reason: outcome, model: options.model, inputTokens: analysis?.usage?.input_tokens,
       outputTokens: analysis?.usage?.output_tokens });

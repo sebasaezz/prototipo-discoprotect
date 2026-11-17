@@ -52,13 +52,11 @@ function control(row: ConversationRow) {
 
 function view(db: Db, row: ConversationRow) {
   const state = control(row);
-  const job = db.prepare(`SELECT status FROM incident_chat_ai_runs
+  const job = db.prepare(`SELECT status, message_seq AS messageSeq FROM incident_chat_ai_runs
     WHERE incident_id = ? AND input_seq = ?`).get(row.incidentId, row.lastAttendeeSeq);
-  const replies = Number(db.prepare(`SELECT count(*) AS n FROM incident_messages
-    WHERE incident_id = ? AND author_type = 'AI'`).get(row.incidentId)?.n);
-  const aiStatus = state !== 'AUTO' || replies >= 2 ? 'MANUAL'
+  const aiStatus = state !== 'AUTO' || !job ? 'MANUAL'
     : job?.status === 'QUEUED' || job?.status === 'RUNNING' ? 'PENDING'
-    : job?.status === 'COMPLETE' ? 'READY' : 'MANUAL';
+    : job.status === 'COMPLETE' && job.messageSeq !== null ? 'READY' : 'UNAVAILABLE';
   return {
     incidentId: row.incidentId, control: state, controlVersion: row.version, lastSeq: row.lastSeq,
     guard: row.staffId ? { id: row.staffId, displayName: row.staffName } : null,

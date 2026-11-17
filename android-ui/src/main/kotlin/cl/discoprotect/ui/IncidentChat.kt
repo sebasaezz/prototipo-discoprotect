@@ -141,8 +141,14 @@ internal fun IncidentChat(
     }
     emptyMessage?.let { Text(it) }
     when (state?.control) {
-        ChatControl.AUTO -> if (emptyMessage == null) Text(if (state.aiStatus == "PENDING")
-            "La IA está revisando el relato. A la espera del personal." else "A la espera del personal.")
+        ChatControl.AUTO -> if (emptyMessage == null) {
+            if (attendee && state.aiStatus == "UNAVAILABLE") {
+                Status("IA temporalmente no disponible. Tu solicitud sigue visible para el personal", Tone.Warning)
+            } else {
+                Text(if (state.aiStatus == "PENDING") "La IA está revisando el relato. A la espera del personal."
+                    else "A la espera del personal.")
+            }
+        }
         ChatControl.STAFF -> Text("Guardia a cargo · ${state.guard?.displayName.orEmpty()}")
         ChatControl.CLOSED -> Text("Conversación cerrada")
         null -> Unit

@@ -3,7 +3,7 @@ import type { Db } from './db.js';
 import { category } from './triage-contract.js';
 import { hasPersonalData, safeDescription } from './triage-provider.js';
 
-export const chatPromptVersion = 'h7.2-v1';
+export const chatPromptVersion = 'h7.2-v2';
 export const priority = z.enum(['P0', 'P1', 'P2', 'P3', 'PENDING']);
 export type Priority = z.infer<typeof priority>;
 
@@ -18,14 +18,13 @@ const responseSchema = z.strictObject({
   zoneId: z.string().nullable(),
   uncertainty: z.array(z.string().trim().min(1).max(100)).max(3),
   summary: z.string().trim().min(1).max(400),
-  reply: z.string().trim().min(1).max(220).nullable(),
+  reply: z.string().trim().min(1).max(220),
 });
 
 export type Analysis = z.infer<typeof responseSchema>;
 export type ChatInput = {
   messages: { seq: number; type: 'ATTENDEE' | 'AI'; text: string }[];
   zones: { id: string; name: string; aliases: string[] }[];
-  allowReply: boolean;
 };
 
 const instructions = [
@@ -33,9 +32,10 @@ const instructions = [
   'Cita fragmentos exactos de mensajes ATTENDEE con su secuencia. Hechos e incertidumbres deben basarse en el relato.',
   'Usa PENDING si falta evidencia. P0 exige peligro explícito vigente con cita literal y tipo de peligro.',
   'Devuelve la referencia literal de ubicación y un ID de zona del catálogo solo si hay correspondencia; en duda usa null.',
-  'Si allowReply es true puedes escribir una intervención breve y contextual que pida un dato operativo útil.',
-  'Si el diálogo ya cubrió lo necesario o allowReply es false usa reply null. Evita repetir preguntas.',
-  'No diagnostiques, indiques tratamientos, afirmes ubicaciones confirmadas, prometas ayuda, ni anuncies asignación o llegada.',
+  'Responde siempre al último mensaje ATTENDEE, aunque sea un saludo, una aclaración, una expresión ambigua o ya tengas suficiente información.',
+  'Escribe reply como texto visible, breve, natural y empático. Puedes saludar, agradecer o reconocer lo que la persona compartió.',
+  'Pregunta solo si ayuda a aclarar algo. Por ejemplo: «Hola, estoy aquí para ayudarte. ¿Puedes contarme qué está ocurriendo?».',
+  'No inventes hechos, diagnósticos ni ubicaciones. No indiques tratamientos ni anuncies o prometas asignación, llegada o acciones del personal.',
   'Puedes decir que el reporte fue recibido. Distingue los hechos reportados de las inferencias internas.',
 ].join(' ');
 
@@ -67,15 +67,16 @@ const envelope = z.object({
 });
 const outputText = z.object({ type: z.literal('output_text'), text: z.string() });
 const normalize = (value: string) => value.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').trim();
-const unsafeReply = /\b(?:ya (?:va|viene|llego|esta en camino|te asignamos)|(?:guardia|personal|ambulancia|ayuda).{0,25}(?:asignad[oa]|en camino|lleg(?:a|ara|o))|ubicacion confirmada|diagnostico|toma(?:te)? (?:un|una|\d)|te garantizo)\b/u;
-const clarification = /^(?:(?:entiendo|gracias(?: por avisar| por aclararlo)?|recibimos tu reporte)[.!]\s*)?¿[^?]+\?$/u;
-const acknowledgement = /^(?:entiendo|gracias(?: por avisar| por aclararlo)?|recibimos tu reporte)[.!]?$/u;
+const unsafeReply = /\b(?:ya (?:va|viene|llego|esta en camino|te asignamos)|(?:guardia|personal|ambulancia|ayuda).{0,40}(?:asignad[oa]|en camino|lleg(?:a|ara|aran|o)|ira|iran|te atendera)|(?:envie|enviamos|mande|mandamos|llame|llamamos) (?:a |al |un |una )?(?:guardia|personal|ambulancia|ayuda)|ubicacion confirmada|diagnostico|fractura|esguince|infarto|conmocion|toma(?:te)? (?:un|una|\d)|te garantizo|estas a salvo)\b/u;
+const locationClaim = /\b(?:estas|te encuentras) (?:en|junto a|al lado de|cerca de)\b/u;
+const incidentClaim = /\b(?:hay (?:una? )?(?:fuego|incendio|pelea|estampida)|esta en llamas|nadie esta herido|se cayo|no respira|esta inconsciente)\b/gu;
 
 function canPublishReply(reply: string, input: ChatInput) {
   const normalized = normalize(reply);
-  return input.allowReply && Boolean(safeDescription(reply)) && !unsafeReply.test(normalized) &&
-    (clarification.test(normalized) || acknowledgement.test(normalized)) &&
-    !input.messages.some(message => message.type === 'AI' && normalize(message.text) === normalized);
+  const assertions = normalized.replace(/¿[^?]*\?/gu, '');
+  const reports = input.messages.filter(message => message.type === 'ATTENDEE').map(message => normalize(message.text));
+  return Boolean(safeDescription(reply)) && !unsafeReply.test(normalized) && !locationClaim.test(assertions) &&
+    [...assertions.matchAll(incidentClaim)].every(([claim]) => reports.some(report => report.includes(claim)));
 }
 const dangerSignal: Record<typeof dangerKinds[number], RegExp> = {
   UNRESPONSIVE: /\b(?:no (?:me |nos )?responde|no reacciona|inconsciente|no despierta|no pesca ni reacciona)\b/u,
@@ -139,21 +140,21 @@ export function validateAnalysis(value: unknown, input: ChatInput) {
   if ([result.summary, ...result.uncertainty].some(text => hasPersonalData(text.normalize('NFKC')))) {
     throw new Error('Unsafe summary');
   }
-  if (result.reply && !canPublishReply(result.reply, input)) {
-    result.reply = null;
-  }
-  return { result, usage };
+  return { result: { ...result, reply: canPublishReply(result.reply, input) ? result.reply : null }, usage };
 }
 
-export function chatInput(db: Db, id: string, eventId: string, maxZones: number): ChatInput | null {
-  const messages = db.prepare(`SELECT seq, author_type AS type, body AS text FROM incident_messages
-    WHERE incident_id = ? AND author_type <> 'STAFF' ORDER BY seq`).all(id) as ChatInput['messages'];
-  const recent = messages.slice(-6);
-  for (const message of recent) {
-    const safe = safeDescription(message.text, 500);
-    if (!safe) return null;
-    message.text = safe;
-  }
+export function chatInput(db: Db, id: string, eventId: string, targetSeq: number, maxZones: number): ChatInput | null {
+  // Replies to previous turns can have a higher message sequence than this turn in a burst.
+  const messages = db.prepare(`SELECT m.seq, m.author_type AS type, m.body AS text
+    FROM incident_messages m LEFT JOIN incident_chat_ai_runs r ON r.incident_id = m.incident_id AND r.message_seq = m.seq
+    WHERE m.incident_id = ? AND ((m.author_type = 'ATTENDEE' AND m.seq <= ?)
+      OR (m.author_type = 'AI' AND r.input_seq < ?))
+    ORDER BY coalesce(r.input_seq, m.seq) DESC, m.seq DESC LIMIT 6`).all(id, targetSeq, targetSeq) as ChatInput['messages'];
+  const recent = messages.reverse().flatMap(message => {
+    const text = safeDescription(message.text, 500, false);
+    return text ? [{ ...message, text }] : [];
+  });
+  if (recent.at(-1)?.seq !== targetSeq) return null;
   const zones = db.prepare('SELECT id, name FROM zones WHERE event_id = ? ORDER BY id').all(eventId) as { id: string; name: string }[];
   const aliases = db.prepare('SELECT zone_id AS id, alias FROM zone_aliases WHERE event_id = ? ORDER BY alias').all(eventId);
   const catalog = zones.map(zone => ({
@@ -162,7 +163,7 @@ export function chatInput(db: Db, id: string, eventId: string, maxZones: number)
   const context = normalize(recent.map(message => message.text).join(' '));
   const selected = catalog.length <= maxZones ? catalog : catalog.filter(zone =>
     [zone.name, ...zone.aliases].some(label => context.includes(normalize(label)))).slice(0, maxZones);
-  const input = { messages: recent, zones: selected, allowReply: messages.filter(message => message.type === 'AI').length < 2 };
+  const input = { messages: recent, zones: selected };
   // Leave room for instructions and structured outputs in the request budget.
   while (input.messages.length > 1 && Buffer.byteLength(JSON.stringify(input)) > 4_500) input.messages = input.messages.slice(1);
   if (Buffer.byteLength(JSON.stringify(input)) > 4_500) {

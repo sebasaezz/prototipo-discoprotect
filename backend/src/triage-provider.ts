@@ -30,11 +30,12 @@ export function hasPersonalData(text: string) {
 
 const injectedInstruction = /(?:\b(?:ignora|olvida|omite|desobedece)\b.{0,80}\b(?:instrucciones|reglas|prompt|mensajes)\b|\b(?:system|developer|assistant|sistema|desarrollador|asistente)\s*:|\b(?:responde|devuelve|genera|clasifica)\b.{0,50}\b(?:json|categor[ií]a|prompt|prioridad)\b|<\/?(?:system|developer|assistant)\b|\[\/?inst\])/iu;
 
-export function safeDescription(original: string, maxLength = 280) {
+export function safeDescription(original: string, maxLength = 280, requireWords = true) {
   const normalized = original.normalize('NFKC');
   if (/[\p{Cf}\p{Cc}]/u.test(normalized.replace(/[\r\n\t]/g, ''))) return null;
   const compact = normalized.replace(/\s+/gu, ' ').trim();
-  if (compact.length > maxLength || !/\p{L}{2}/u.test(compact) || hasPersonalData(compact) || injectedInstruction.test(compact)) {
+  if (compact.length > maxLength || requireWords && !/\p{L}{2}/u.test(compact) ||
+      hasPersonalData(compact) || injectedInstruction.test(compact)) {
     return null;
   }
   return compact;
