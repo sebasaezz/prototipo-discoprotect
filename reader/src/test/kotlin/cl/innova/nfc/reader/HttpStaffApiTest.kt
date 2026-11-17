@@ -59,6 +59,22 @@ class HttpStaffApiTest {
         fails(ApiProblem.InvalidResponse) { api.venue(session, event) }
     }
 
+    @Test fun `dispatch decodes visual evidence and displays the verified location first`() = runBlocking {
+        val id = "5c44bc28-7b70-4d42-a297-1bcd242ac1df"
+        reply("""{"zones":[],"dispatch":{"effectivePriority":"P2","prioritySource":"HUMAN","priorityReasons":[],
+            "humanPriority":"P2","elapsedSeconds":15,"revision":1,"evaluatedAt":"2026-11-17T22:00:00Z",
+            "declaredLocation":{"zoneId":null,"zoneName":null,"text":"Junto al estand de mote"},
+            "inferredLocation":{"zoneId":"entrada","zoneName":"Entrada principal","text":null},
+            "confirmedLocation":{"zoneId":"escenario","zoneName":"Escenario","text":"Junto a la valla"},
+            "analysis":{"category":"OTHER","summary":"Junto al estand de mote","uncertainty":[],
+              "observedAt":"2026-11-17T22:00:00Z","inputSeq":1,"locationEvidence":
+              {"messageSeq":1,"quote":"Junto al estand de mote","feature":"stand de mote con huesillo"}}}}""")
+        val dispatch = api.dispatch(session, event, id).dispatch
+        assertEquals("Entrada principal", dispatch.inferredLocation?.zoneName)
+        assertEquals("stand de mote con huesillo", dispatch.analysis?.locationEvidence?.feature)
+        assertEquals("Confirmada · Escenario · Junto a la valla", dispatch.displayedLocation())
+    }
+
     @Test fun `closed server and response timeout are distinct`() = runBlocking {
         val closed = MockWebServer()
         closed.start(InetAddress.getLoopbackAddress(), 0)

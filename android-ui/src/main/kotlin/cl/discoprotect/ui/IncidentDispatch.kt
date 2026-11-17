@@ -29,7 +29,10 @@ internal enum class DispatchPriority(val label: String, val icon: String, val ba
     val uncertainty: List<String>,
     val observedAt: String,
     val inputSeq: Long,
+    val locationEvidence: DispatchLocationEvidence? = null,
 )
+
+@Serializable internal data class DispatchLocationEvidence(val messageSeq: Long, val quote: String, val feature: String?)
 
 @Serializable internal enum class DangerAssessment(val label: String) {
     UNCHANGED("Mantener evaluación de peligro"), CONFIRMED("Confirmar peligro actual"), CLEARED("Peligro descartado o superado"),

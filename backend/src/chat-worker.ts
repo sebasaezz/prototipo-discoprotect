@@ -1,4 +1,4 @@
-import { chatInput, chatPromptVersion, validateAnalysis, venuePromptVersion, type ChatProvider } from './chat-analysis.js';
+import { chatInput, chatPromptVersion, recheckLocation, validateAnalysis, venuePromptVersion, type ChatProvider } from './chat-analysis.js';
 import { append } from './conversations.js';
 import { atomic, type Db } from './db.js';
 import { reserveDailyCall } from './triage-worker.js';
@@ -66,16 +66,16 @@ export function createChatWorker(db: Db, options: Options, report: (event: objec
       const current = db.prepare("SELECT 1 FROM incidents WHERE id = ? AND version = ? AND status = 'OPEN'")
         .get(job.id, job.version);
       const reason = stopped ? 'INTERRUPTED' : !current ? 'STALE' : failure;
-      const accepted = reason === null ? analysis : undefined;
-      const message = accepted?.result.reply ? append(db, job.id, 'AI', null,
-        { text: accepted.result.reply }, new Date(now).toISOString()) : null;
+      const accepted = reason === null && analysis ? recheckLocation(db, job.eventId, analysis.result, input) : undefined;
+      const message = accepted?.reply ? append(db, job.id, 'AI', null,
+        { text: accepted.reply }, new Date(now).toISOString()) : null;
       const outcome = accepted && !message ? 'UNSAFE_REPLY' : reason;
-      const inferredZoneName = input.zones.find(zone => zone.id === accepted?.result.zoneId)?.name ?? null;
+      const inferredZoneName = input.zones.find(zone => zone.id === accepted?.zoneId)?.name ?? null;
       db.prepare(`UPDATE incident_chat_ai_runs SET status = ?, reason = ?, result_json = ?, message_seq = ?, inferred_zone_name = ?,
         finished_at = ?, input_tokens = ?, output_tokens = ? WHERE incident_id = ? AND input_seq = ?`).run(
         accepted ? 'COMPLETE' : reason === 'STALE' ? 'DISCARDED' : 'MANUAL',
         outcome,
-        accepted ? JSON.stringify(accepted.result) : null, message?.seq ?? null, inferredZoneName, now,
+        accepted ? JSON.stringify(accepted) : null, message?.seq ?? null, inferredZoneName, now,
         analysis?.usage?.input_tokens ?? null, analysis?.usage?.output_tokens ?? null, job.id, job.seq);
       return outcome;
     });

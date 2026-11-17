@@ -1,5 +1,5 @@
 import type { FormEvent, ReactNode } from 'react';
-import { pointKinds, zoneKinds, type OperationalPoint, type VenueChange, type VenueConfiguration, type VenueZone } from './venueApi.js';
+import { pointKinds, type OperationalPoint, type VenueChange, type VenueConfiguration, type VenueZone } from './venueApi.js';
 
 export type VenueEditor = { entity: 'venue' } | { entity: 'zone'; item?: VenueZone } | { entity: 'point'; item?: OperationalPoint };
 
@@ -43,8 +43,7 @@ export function VenueForm({ editor, config, disabled, onSave, onCancel }: {
       onSave({ entity: 'venue', fields: { name, venue: text('venue'), description: notes('description'),
         accessNotes: notes('accessNotes'), responseNotes: notes('responseNotes') } });
     } else if (editor.entity === 'zone') {
-      onSave({ entity: 'zone', id: editor.item?.id, fields: { name, kind: text('kind') as VenueZone['kind'],
-        description: notes('description'), reference: notes('reference'), active: data.has('active') } });
+      onSave({ entity: 'zone', id: editor.item?.id, fields: { name, description: notes('description'), active: data.has('active') } });
     } else {
       onSave({ entity: 'point', id: editor.item?.id, fields: { name, kind: text('kind') as OperationalPoint['kind'],
         zoneId: text('zoneId'), reference: text('reference'), active: data.has('active') } });
@@ -61,18 +60,20 @@ export function VenueForm({ editor, config, disabled, onSave, onCancel }: {
         <Field name="accessNotes" label="Referencias de acceso" value={venue.accessNotes} maxLength={300} multiline />
         <Field name="responseNotes" label="Referencias para responder a emergencias" value={venue.responseNotes} maxLength={300} multiline />
       </> : <>
-        <Field name="name" label="Nombre" value={editor.item?.name} required />
-        <SelectField name="kind" title="Tipo" selected={editor.item?.kind ?? (editor.entity === 'zone' ? 'OTHER' : 'MEDICAL')}>
-          {Object.entries(editor.entity === 'zone' ? zoneKinds : pointKinds)
-            .map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-        </SelectField>
-        {editor.entity === 'zone'
-          ? <Field name="description" label="Descripción breve" value={editor.item?.description} maxLength={240} multiline />
-          : <SelectField name="zoneId" title="Zona" selected={editor.item?.zoneId ?? ''}>
+        <Field name="name" label={editor.entity === 'zone' ? 'Lugar' : 'Nombre'} value={editor.item?.name} required />
+        {editor.entity === 'zone' ? <>
+          <Field name="description" label="Descripción" value={editor.item?.description} maxLength={240} multiline />
+          <p className="venue-help">Incluye objetos y señas visibles, como un puesto de mote, un letrero amarillo o una reja negra.</p>
+        </> : <>
+          <SelectField name="kind" title="Tipo" selected={editor.item?.kind ?? 'MEDICAL'}>
+            {Object.entries(pointKinds).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+          </SelectField>
+          <SelectField name="zoneId" title="Zona" selected={editor.item?.zoneId ?? ''}>
             <option value="" disabled>Selecciona una zona</option>
             {zones.map(zone => <option key={zone.id} value={zone.id}>{zone.name}{zone.active ? '' : ' · Inactiva'}</option>)}
-          </SelectField>}
-        <Field name="reference" label="Referencia operativa" value={editor.item?.reference} required={editor.entity === 'point'} />
+          </SelectField>
+          <Field name="reference" label="Referencia operativa" value={editor.item?.reference} required />
+        </>}
         <label className="venue-check"><input type="checkbox" name="active" defaultChecked={editor.item?.active ?? true} /> Activo</label>
       </>}
     </fieldset>

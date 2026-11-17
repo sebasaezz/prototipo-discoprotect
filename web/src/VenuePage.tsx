@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, messageFor, type Session } from './api.js';
-import { pointKinds, readVenue, writeVenue, zoneKinds, type VenueChange, type VenueConfiguration } from './venueApi.js';
+import { pointKinds, readVenue, writeVenue, type VenueChange, type VenueConfiguration } from './venueApi.js';
 import { VenueForm, type VenueEditor } from './VenueForms.js';
 
 export function VenuePage({ session, eventId, onExpiry, onVenueRead }: {
@@ -136,9 +136,8 @@ export function VenuePage({ session, eventId, onExpiry, onVenueRead }: {
         {config.zones.length ? <ul className="venue-list">{config.zones.map(zone => <li key={zone.id}>
           <div>
             <h3>{zone.name}</h3>
-            <p>{zoneKinds[zone.kind]} · {zone.active ? 'Activa' : 'Inactiva'}</p>
+            <p>{zone.active ? 'Activa' : 'Inactiva'}</p>
             {zone.description && <p>{zone.description}</p>}
-            {zone.reference && <p>Referencia · {zone.reference}</p>}
           </div>
           <button type="button" className="secondary" disabled={!canEdit} aria-label={`Editar zona ${zone.name}`}
             onClick={() => setEditor({ entity: 'zone', item: zone })}>Editar</button>

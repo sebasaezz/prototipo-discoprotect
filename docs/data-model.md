@@ -11,7 +11,7 @@ Los identificadores se tratan como cadenas opacas y los tiempos se guardan en UT
 | Event | ID, nombre, recinto, inicio, término y estado. H8.2 agrega descripción, referencias de acceso y respuesta y versión de configuración. |
 | EventMembership | Una membresía por persona y evento. Roles `ATTENDEE`, `STAFF` y `ORGANIZER`. |
 | DemoSession | Hash SHA-256 de un token aleatorio, cuenta, rol y vencimiento. La base guarda el hash; el valor Bearer se entrega al crear la sesión. |
-| Zone | ID estable dentro del evento, nombre, función, descripción, referencia y estado activo. El seed agrega cinco zonas para `demo-festival` y conserva las filas existentes. |
+| Zone | ID estable dentro del evento, nombre del lugar, descripción de objetos y señas visibles y estado activo. Las columnas antiguas de función y referencia se conservan por compatibilidad. El seed agrega cinco zonas para `demo-festival` y conserva las filas existentes. |
 | OperationalPoint | ID estable dentro del evento, zona del mismo evento, nombre, tipo, referencia y estado activo. |
 | VenueConfigurationChange | Evento y revisión únicos, entidad, ID, acción, autor y fecha UTC registrados en la transacción de escritura. |
 | Incident | UUID, evento, solicitante, zona y referencia opcionales, UUID del cliente, estado, versión, guardia asignado y tiempos UTC. El motivo es obligatorio para cierre o retiro y opcional para resolución. |
@@ -41,7 +41,7 @@ La 008 comprueba si un guardia tiene más de un incidente en `ASSIGNED` o `IN_PR
 
 Cada chat conserva `last_seq` y `last_attendee_seq`. La secuencia y la clave de mensaje del cliente son únicas por conversación. Los mensajes de IA se enlazan con la fila del trabajo que los originó. Los turnos pueden quedar en cola, en ejecución, completados, en atención manual o descartados. Un análisis válido con respuesta descartada por seguridad puede conservarse sin un mensaje asociado. `triage_daily_usage` cuenta reservas por día UTC compartidas por ambas modalidades de IA. Los intentos se reservan antes de llamar al proveedor.
 
-Los turnos nuevos guardan el nombre de la zona de su catálogo de entrada si la inferencia se acepta. También guardan la revisión cuando reciben contexto ampliado. Una edición posterior del recinto o sus zonas se aplica a nuevas reservas. Conserva las citas y resultados JSON de análisis existentes.
+Los turnos nuevos guardan el nombre de la zona de su catálogo de entrada si la inferencia se acepta. También guardan la revisión cuando reciben contexto ampliado. El análisis `h8.2-venue-v2` congela en `result_json.locationEvidence` la secuencia, cita del asistente y fragmento de descripción corroborado. Un cambio de configuración mientras el proveedor responde puede invalidar la propuesta antes de publicarla. Una vez guardado el análisis, sus citas y nombre se preservan aunque cambie la configuración. El esquema 009 admite esta evidencia en JSON y los turnos históricos conservan su formato.
 
 Las revisiones de triaje H7 y de despacho tienen versiones propias, actor y UUID de operación. Despacho conserva prioridad humana, ubicación confirmada, evaluación de peligro y motivo. La prioridad efectiva se calcula en lectura con el estado y el tiempo de espera vigentes. La evidencia crítica se recupera de un análisis corroborado anterior y puede seguir aplicando tras nuevas interpretaciones. [Reglas y transiciones](current-workflow.md)
 

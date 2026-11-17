@@ -15,12 +15,15 @@ export const venueEdit = z.union([
   eventEdit,
 ]);
 export const zoneEdit = version.extend({
-  name, kind: zoneKind, description: notes(240), reference: notes(160), active: z.boolean(),
+  name, description: notes(240), active: z.boolean(),
+  kind: zoneKind.optional(), reference: notes(160).optional(),
 });
 export const pointEdit = version.extend({ name, kind: pointKind, zoneId: name.max(128), reference: name, active: z.boolean() });
 
 type Venue = { name: string; venue: string; description: string | null; accessNotes: string | null; responseNotes: string | null };
-export type Zone = Omit<z.infer<typeof zoneEdit>, 'version'> & { id: string };
+export type Zone = Omit<z.infer<typeof zoneEdit>, 'version' | 'kind' | 'reference'> & {
+  id: string; kind: z.infer<typeof zoneKind>; reference: string | null;
+};
 export type Point = Omit<z.infer<typeof pointEdit>, 'version'> & { id: string; zoneName: string };
 
 export function venueInfo(db: Db, eventId: string) {
@@ -93,17 +96,21 @@ export function saveZone(db: Db, session: Session, eventId: string, value: z.inf
   const id = zoneId ?? randomUUID();
   const { version, ...fields } = value;
   const saved = change(db, session, eventId, version, 'ZONE', id, () => {
-    const params = [fields.name, fields.description, fields.kind, fields.reference, Number(fields.active)] as const;
+    const previous = zoneId === undefined ? undefined : db.prepare(
+      'SELECT kind, reference, active FROM zones WHERE event_id = ? AND id = ?').get(eventId, id) as
+      Pick<Zone, 'kind' | 'reference'> & { active: number } | undefined;
+    if (zoneId !== undefined && !previous) throw new ApiError(404, 'ZONE_NOT_FOUND', 'No se encontró la zona');
+    const zone: Zone = { id, ...fields, kind: fields.kind ?? previous?.kind ?? 'OTHER',
+      reference: fields.reference === undefined ? previous?.reference ?? null : fields.reference };
+    const params = [zone.name, zone.description, zone.kind, zone.reference, Number(zone.active)] as const;
     if (zoneId === undefined) {
       db.prepare('INSERT INTO zones (event_id, id, name, description, kind, reference, active) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .run(eventId, id, ...params);
-      return { action: 'CREATE', result: { id, ...fields } };
+      return { action: 'CREATE', result: zone };
     }
-    const previous = db.prepare('SELECT active FROM zones WHERE event_id = ? AND id = ?').get(eventId, id);
-    if (!previous) throw new ApiError(404, 'ZONE_NOT_FOUND', 'No se encontró la zona');
     db.prepare('UPDATE zones SET name = ?, description = ?, kind = ?, reference = ?, active = ? WHERE event_id = ? AND id = ?')
       .run(...params, eventId, id);
-    return { action: updateAction(previous.active, fields.active), result: { id, ...fields } };
+    return { action: updateAction(previous?.active, zone.active), result: zone };
   });
   return { zone: saved.result, version: saved.version };
 }

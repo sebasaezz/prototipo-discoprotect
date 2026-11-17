@@ -23,7 +23,7 @@ test('venue API scopes versioned commands and surfaces conflicts without retryin
       : Response.json({ ...config, eventId: 'otro' });
   });
   assert.equal((await readVenue(session, eventId, signal)).version, 4);
-  const fields = { name: 'Escenario', kind: 'STAGE', reference: 'Sector sur', description: null, active: true };
+  const fields = { name: 'Escenario', description: 'Letrero amarillo junto a la valla', active: true };
   await assert.rejects(writeVenue(session, eventId, 4, { entity: 'zone', id: 'escenario', fields }, signal), { status: 409 });
   await assert.rejects(readVenue(session, eventId, signal), { status: 502 });
   assert.deepEqual(calls, [
@@ -31,6 +31,14 @@ test('venue API scopes versioned commands and surfaces conflicts without retryin
     ['/api/v1/events/festival%20de%20prueba/zones/escenario', 'PATCH', { ...fields, version: 4 }],
     ['/api/v1/events/festival%20de%20prueba/venue', 'GET', undefined],
   ]);
+});
+
+test('zone editing uses a place name and a visual description', () => {
+  const html = renderToStaticMarkup(createElement(VenueForm, { editor: { entity: 'zone' }, config }));
+  assert.match(html, /Lugar/);
+  assert.match(html, /Descripción/);
+  assert.match(html, /letrero amarillo/);
+  assert.doesNotMatch(html, /name="(?:kind|reference)"/);
 });
 
 test('point editing exposes controlled types and marks inactive zones', () => {

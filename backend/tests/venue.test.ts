@@ -57,13 +57,15 @@ test('venue edits, stable zones, points and audit survive reopening Fastify and 
     assert.equal(created.statusCode, 201, created.body);
     const zoneUrl = root + '/zones/' + id;
     const editZone = (version: number) => app.inject({ method: 'PATCH', url: zoneUrl, headers: organizer,
-      payload: { ...zone, name: 'Escenario este', active: false, version } });
+      payload: { name: 'Escenario este', description: zone.description, active: false, version } });
     const stale = await editZone(2);
     assert.equal(stale.statusCode, 409);
     assert.equal(stale.json().error.details.currentVersion, 5);
     const updated = await editZone(5);
     assert.equal(updated.statusCode, 200, updated.body);
     assert.equal(updated.json().zone.id, id);
+    assert.equal(updated.json().zone.kind, zone.kind);
+    assert.equal(updated.json().zone.reference, zone.reference);
 
     assert.ok(!(await app.inject({ url: root + '/zones', headers: attendee })).json().zones.some((row: { id: string }) => row.id === id));
     const nowStaff = (await app.inject({ url: root + '/venue', headers: staff })).json();

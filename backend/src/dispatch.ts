@@ -136,6 +136,7 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
     analysis: analysis && latest ? {
       category: analysis.category, summary: analysis.summary, uncertainty: analysis.uncertainty,
       observedAt: new Date(latest.finishedAt).toISOString(), inputSeq: latest.seq,
+      ...(inferred && analysis.locationEvidence ? { locationEvidence: analysis.locationEvidence } : {}),
     } : null,
   };
 }

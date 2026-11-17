@@ -51,7 +51,7 @@ function output(input: ChatInput, reply: string | null) {
     output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({
       category: 'MEDICAL', severity: 'P2', facts: [{ seq: last.seq, quote: last.text }], danger: null,
       location: null, zoneId: null, uncertainty: ['Falta precisar la ubicación'],
-      summary: 'Se reporta una caída.', reply,
+      summary: 'Se reporta una caída.', reply, ...(input.venueContext ? { zoneFeature: null } : {}),
     }) }] }] };
 }
 
@@ -146,6 +146,119 @@ test('enriched analysis rejects fabricated zone IDs and drops unsupported catalo
   assert.throws(() => validateAnalysis(proposed, input), /Invalid zone/);
   content.text = JSON.stringify({ ...result, zoneId: 'escenario' });
   assert.equal(validateAnalysis(proposed, input).result.zoneId, null);
+});
+
+test('visual cues resolve through description, retain evidence and abstain on ambiguity or a changed catalog', async t => {
+  const { app, create, login, db } = await fixture(t);
+  const organizer = await login('organizador', pins.ORGANIZER);
+  const staff = await login('guardia', pins.STAFF);
+  const zones = prefix + '/events/demo-festival/zones';
+  const feature = 'un stand de mote con huesillo y un letrero amarillo';
+  const zone = { name: 'Entrada principal', description: 'Hay ' + feature + '.', active: true };
+  const add = (fields: typeof zone, version: number) => app.inject({ method: 'POST', url: zones, headers: organizer,
+    payload: { ...fields, version } });
+  const edit = (id: string, fields: typeof zone, version: number) => app.inject({ method: 'PATCH', url: zones + '/' + id,
+    headers: organizer, payload: { ...fields, version } });
+  const added = await add(zone, 1);
+  assert.equal(added.statusCode, 201, added.body);
+  const id = added.json().zone.id as string;
+  let proposed = id;
+  let excerpt = feature;
+  let hold: Promise<void> | undefined;
+  const inputs: ChatInput[] = [];
+  const provider = openAiChat('mock-model', 'mock-key', async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    assert.ok(body.text.format.schema.required.includes('zoneFeature'));
+    assert.match(body.instructions, /paráfrasis/);
+    const input = JSON.parse(body.input[0].content) as ChatInput;
+    inputs.push(input);
+    const last = input.messages.at(-1)!;
+    if (hold) await hold;
+    const envelope = output(input, inputs.length === 1 ? 'El guardia llegará pronto.' : 'Gracias por tu mensaje.');
+    const content = envelope.output[0].content[0];
+    content.text = JSON.stringify({ ...JSON.parse(content.text),
+      zoneId: proposed, zoneFeature: excerpt, location: { seq: last.seq, quote: last.text } });
+    return Response.json(envelope);
+  });
+  const worker = createChatWorker(db, { ...options, maxZones: 1, provider });
+  t.after(() => worker.stop());
+  const read = async (incident: string) => (await app.inject({ url: queue + '/' + incident + '/dispatch', headers: staff })).json().dispatch;
+  const reports = ['Al lado del stand de mote con huesillo', 'Estoy al lado del estand de mote con huesillo',
+    'Veo un quiosco de mote y un cartel amarrillo'];
+  const incidents = [];
+  for (const quote of reports) {
+    const incident = await create(quote);
+    incidents.push(incident);
+    await worker.tick();
+    assert.deepEqual(inputs.at(-1)?.zones.map(item => item.id), [id]);
+    const dispatch = await read(incident.id);
+    assert.equal(dispatch.inferredLocation?.zoneName, zone.name);
+    assert.equal(dispatch.declaredLocation.text, quote);
+    assert.equal(dispatch.confirmedLocation, null);
+    assert.deepEqual(dispatch.analysis.locationEvidence, { messageSeq: 1, quote, feature });
+    const reply = (await incident.page()).messages.at(-1).text;
+    assert.match(reply, /podrías estar en «Entrada principal».*¿Me lo confirmas\?/);
+    assert.doesNotMatch(reply, /llegará|confirmada/);
+  }
+
+  const route = queue + '/' + incidents[0].id;
+  assert.equal((await app.inject({ method: 'POST', url: route + '/claim', headers: staff,
+    payload: { version: 1, operationId: randomUUID() } })).statusCode, 200);
+  const human = await app.inject({ method: 'POST', url: route + '/dispatch/reviews', headers: staff,
+    payload: { expectedRevision: 0, operationId: randomUUID(), humanPriority: null, dangerAssessment: 'UNCHANGED',
+      confirmedLocation: { zoneId: 'escenario', text: 'Verificado en terreno' }, reason: 'Acudí a la zona' } });
+  assert.equal(human.statusCode, 200, human.body);
+  assert.equal(human.json().dispatch.confirmedLocation.zoneId, 'escenario');
+  assert.equal(human.json().dispatch.inferredLocation.zoneId, id);
+
+  excerpt = 'inventaron un stand de mote con huesillo';
+  const fabricatedClue = await create(reports[0]);
+  await worker.tick();
+  assert.equal((await read(fabricatedClue.id)).inferredLocation, null);
+  excerpt = feature;
+  const negated = await create('No estoy al lado del stand de mote con huesillo.');
+  await worker.tick();
+  assert.equal((await read(negated.id)).inferredLocation, null);
+
+  const nearby = { ...zone, name: 'Entrada sur' };
+  const other = await add(nearby, 2);
+  assert.equal(other.statusCode, 201, other.body);
+  const otherId = other.json().zone.id;
+  const ambiguous = await create(reports[0]);
+  await worker.tick();
+  assert.equal(inputs.at(-1)?.zones.length, 1);
+  assert.equal((await read(ambiguous.id)).inferredLocation, null);
+  assert.match((await ambiguous.page()).messages.at(-1).text, /otro objeto/);
+  assert.equal((await edit(otherId, { ...nearby, active: false }, 3)).statusCode, 200);
+
+  let release!: () => void;
+  hold = new Promise<void>(resolve => { release = resolve; });
+  const pending = await create(reports[0]);
+  const tick = worker.tick();
+  try {
+    assert.equal((await edit(id, { ...zone, description: 'Cartel azul en el vestíbulo', active: false }, 4)).statusCode, 200);
+  } finally {
+    release();
+    hold = undefined;
+  }
+  await tick;
+  assert.equal((await read(pending.id)).inferredLocation, null);
+  assert.match((await pending.page()).messages.at(-1).text, /otro objeto/);
+  const original = await read(incidents[0].id);
+  assert.equal(original.analysis.locationEvidence.feature, feature);
+  assert.equal(original.inferredLocation.zoneName, zone.name);
+  assert.equal(original.confirmedLocation.zoneId, 'escenario');
+
+  for (const candidate of [id, randomUUID()]) {
+    proposed = candidate;
+    // Supply another valid contextual zone so the worker uses the enriched contract.
+    if (candidate === id) assert.equal((await add({ ...zone, name: 'Entrada de prueba' }, 5)).statusCode, 201);
+    const attempted = await create(reports[0]);
+    await worker.tick();
+    assert.ok(!inputs.at(-1)?.zones.some(item => item.id === candidate));
+    assert.equal((await read(attempted.id)).inferredLocation, null);
+    assert.equal((await attempted.page()).conversation.aiStatus, 'UNAVAILABLE');
+  }
 });
 
 test('conversational SOS replies to every turn, reports failures and stops at handoff', async t => {

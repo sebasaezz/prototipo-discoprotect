@@ -1,8 +1,5 @@
 import { ApiError, request, type Session } from './api.js';
 
-export const zoneKinds = {
-  STAGE: 'Escenario', FLOOR: 'Pista', ACCESS: 'Acceso', STANDS: 'Gradería', SERVICES: 'Servicios', OTHER: 'Otra función',
-} as const;
 export const pointKinds = {
   MEDICAL: 'Puesto médico', SECURITY: 'Puesto de seguridad', ENTRANCE: 'Entrada', EXIT: 'Salida', MEETING: 'Punto de encuentro',
 } as const;
@@ -11,7 +8,7 @@ type VenueFields = {
   name: string; venue: string; description: string | null; accessNotes: string | null; responseNotes: string | null;
 };
 type ZoneFields = {
-  name: string; description: string | null; kind: keyof typeof zoneKinds; reference: string | null; active: boolean;
+  name: string; description: string | null; active: boolean;
 };
 type PointFields = { name: string; kind: keyof typeof pointKinds; zoneId: string; reference: string; active: boolean };
 export type VenueZone = ZoneFields & { id: string };

@@ -187,9 +187,16 @@ private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, action
         Field("Categoría sugerida", analysis.category.label)
         if (analysis.uncertainty.isNotEmpty()) Field("Por verificar", analysis.uncertainty.joinToString(" · "))
     }
-    dispatch.inferredLocation?.let { Field("Ubicación inferida", it.label()) }
     dispatch.declaredLocation?.let { Field("Ubicación declarada", it.label()) }
     dispatch.confirmedLocation?.let { Field("Ubicación confirmada", it.label()) }
+    dispatch.inferredLocation?.let {
+        Field("Ubicación probable", it.label())
+        analysis?.locationEvidence?.let { evidence ->
+            val feature = evidence.feature?.let { clue -> " En esta zona se describe «$clue»." }.orEmpty()
+            Field("Motivo", "El asistente dijo «${evidence.quote}».$feature")
+        }
+        Field("Estado de la inferencia", "Inferida por IA, pendiente de verificación en terreno.")
+    }
 
     if (incident.assignedStaff?.id == null || incident.assignedStaff.id != staffId ||
         incident.status !in setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS)) return
