@@ -4,13 +4,18 @@ import type { Pins } from './config.js';
 import { messageInput, pageInput, readConversation, sendMessage } from './conversations.js';
 import type { Db } from './db.js';
 import { ApiError, parse } from './errors.js';
+import { activatePolicy, dispatchAudit, dispatchReviewInput, reviewDispatch, type Thresholds } from './dispatch.js';
+import { z } from 'zod';
 import * as incidents from './incidents.js';
 import * as records from './records.js';
 import { triageDetail, reviewTriage } from './triage.js';
 import { reviewInput } from './triage-contract.js';
 
-export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = false) {
+export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = false,
+  thresholds: Thresholds = { earlySeconds: 120, lateSeconds: 300 }) {
   const app = Fastify({ logger: logging, logController: new LogController({ disableRequestLogging: true }), bodyLimit: 32 * 1024 });
+  const dispatch = activatePolicy(db, thresholds);
+  const queueQuery = z.strictObject({ order: z.literal('dispatch').optional() });
   const session = (request: FastifyRequest) => authenticate(db, request.headers.authorization);
   const attendee = (request: FastifyRequest) => {
     const current = session(request);
@@ -90,7 +95,8 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
       const { eventId } = parse(records.eventId, request.params);
       requireMembership(db, current, eventId);
-      return { incidents: incidents.eventIncidents(db, eventId) };
+      const { order } = parse(queueQuery, request.query);
+      return { incidents: incidents.eventIncidents(db, eventId, order === 'dispatch' ? dispatch : undefined) };
     });
     api.post('/me/incidents/:id/cancel', async request => {
       const current = session(request);
@@ -144,6 +150,21 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
       const { eventId, id } = parse(incidentParams, request.params);
       return triageDetail(db, current, eventId, id);
+    });
+    api.get(`${incidentPath}/dispatch`, async request => {
+      const current = session(request);
+      if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
+      const { id, eventId } = parse(incidentParams, request.params);
+      requireMembership(db, current, eventId);
+      return { dispatch: incidents.incidentDispatch(db, eventId, id, dispatch),
+        ...dispatchAudit(db, id, eventId, current.role === 'STAFF') };
+    });
+    api.post(`${incidentPath}/dispatch/reviews`, async request => {
+      const current = session(request);
+      requireRole(current, 'STAFF');
+      const { id, eventId } = parse(incidentParams, request.params);
+      return reviewDispatch(db, current, eventId, id, parse(dispatchReviewInput, request.body),
+        () => incidents.incidentDispatch(db, eventId, id, dispatch));
     });
     api.post(`${incidentPath}/triage/reviews`, async request => {
       const current = session(request);

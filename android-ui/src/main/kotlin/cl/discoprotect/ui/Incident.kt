@@ -51,6 +51,7 @@ internal data class Incident(
     val dangerAlert: SosReason? = null,
     val triage: IncidentTriage? = null,
     val hasConversation: Boolean = false,
+    val dispatch: IncidentDispatch? = null,
 ) {
     fun validFor(event: String): Boolean = eventId == event && isIncidentUuid(id) &&
         requesterName.isNotBlank() && (zoneId == null) == (zoneName == null) &&
@@ -98,8 +99,12 @@ internal fun IncidentCard(incident: Incident, actions: @Composable () -> Unit = 
         Column(Modifier.padding(Space.md), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
             Text(incident.requesterName, style = MaterialTheme.typography.titleMedium)
             Status(incident.status.label, incident.status.tone)
-            Field("Zona", incident.zoneName ?: "Ubicación desconocida")
-            incident.locationText?.let { Field("Referencia manual", it) }
+            if (incident.dispatch != null) {
+                Field("Ubicación", incident.dispatch.displayedLocation())
+            } else {
+                Field("Zona", incident.zoneName ?: "Ubicación desconocida")
+                incident.locationText?.let { Field("Referencia manual", it) }
+            }
             incident.assignedStaff?.let { Field("Guardia asignado", it.name) }
             Field("Creación", incidentTime(incident.createdAt))
             incident.assignedAt?.let { Field("Asignación", incidentTime(it)) }

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { requireMembership, type Session } from './auth.js';
 import { atomic, type Db } from './db.js';
+import { compareDispatch, dispatchView, type DispatchPolicy } from './dispatch.js';
 import { conversationView, createConversation, creationReceipt, discardChatWork, messageInput } from './conversations.js';
 import { ApiError } from './errors.js';
 import { dangerAlert, reasonCode, type ReasonCode } from './triage-contract.js';
@@ -95,10 +96,15 @@ export function ownIncidents(db: Db, eventId: string, personId: string) {
   return rows.map(ownView);
 }
 
-export function eventIncidents(db: Db, eventId: string) {
+export function eventIncidents(db: Db, eventId: string, dispatch?: DispatchPolicy) {
   const rows = db.prepare(`${selection} WHERE i.event_id = ? ORDER BY i.created_at DESC, i.id DESC`)
     .all(eventId) as Incident[];
-  return rows.map(row => eventView(db, row));
+  if (!dispatch) return rows.map(row => eventView(db, row));
+  const now = Date.now();
+  return rows.map(row => {
+    const item = eventView(db, row);
+    return { ...item, dispatch: dispatchView(db, row, item.triage, dispatch, now) };
+  }).sort(compareDispatch);
 }
 
 export function ownIncident(db: Db, session: Session, id: string) {
@@ -109,6 +115,11 @@ export function ownIncident(db: Db, session: Session, id: string) {
 
 export function eventIncident(db: Db, eventId: string, id: string) {
   return eventView(db, findIncident(db, id, 'event', eventId));
+}
+
+export function incidentDispatch(db: Db, eventId: string, id: string, policy: DispatchPolicy) {
+  const row = findIncident(db, id, 'event', eventId);
+  return dispatchView(db, row, triageView(db, id), policy, Date.now());
 }
 
 export function createIncident(db: Db, session: Session, eventId: string, input: z.output<typeof createInput>,

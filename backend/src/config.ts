@@ -11,6 +11,10 @@ const schema = z.object({
   DEMO_STAFF_2_PIN: pin,
   DEMO_ORGANIZER_PIN: pin,
   ALLOW_DEMO_RESET: z.enum(['true', 'false']).default('false'),
+  DISPATCH_EARLY_SECONDS: z.coerce.number().int().positive().default(120),
+  DISPATCH_LATE_SECONDS: z.coerce.number().int().positive().default(300),
+}).refine(value => value.DISPATCH_EARLY_SECONDS < value.DISPATCH_LATE_SECONDS, {
+  path: ['DISPATCH_LATE_SECONDS'],
 });
 
 const workerSchema = z.object({
@@ -68,5 +72,6 @@ export function readConfig(env: NodeJS.ProcessEnv) {
     dbPath: config.DATABASE_PATH,
     pins: { STAFF: config.DEMO_STAFF_PIN, STAFF_2: config.DEMO_STAFF_2_PIN, ORGANIZER: config.DEMO_ORGANIZER_PIN },
     allowReset: config.ALLOW_DEMO_RESET === 'true',
+    dispatchThresholds: { earlySeconds: config.DISPATCH_EARLY_SECONDS, lateSeconds: config.DISPATCH_LATE_SECONDS },
   };
 }

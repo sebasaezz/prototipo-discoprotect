@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ApiError, currentIncidentSnapshot, events, incidents, incidentTriage, login } from '../.test-build/api.js';
+import { ApiError, currentIncidentSnapshot, events, incidents, incidentDispatch, incidentTriage, login } from '../.test-build/api.js';
 import { IncidentTable } from '../.test-build/IncidentTable.js';
 import { incidentPolling } from '../.test-build/incidentPolling.js';
 
@@ -74,6 +74,34 @@ test('table renders the ID, location, reference, timestamp and textual status', 
   assert.ok(renderToStaticMarkup(createElement(IncidentTable, { items: [] })).includes('aún no tiene solicitudes'));
 });
 
+test('dispatch view distinguishes provisional P0 and pending and honors server queue order', () => {
+  const provisional = { effectivePriority: 'P0', prioritySource: 'AI_PROVISIONAL',
+    priorityReasons: ['Peligro textual identificado por IA'], elapsedSeconds: 20, revision: 0,
+    inferredLocation: { zoneName: 'Escenario' }, analysis: { summary: 'Caída reportada', uncertainty: [] },
+  };
+  const pending = { ...provisional, effectivePriority: 'PENDING', prioritySource: 'PENDING', inferredLocation: null, analysis: null };
+  const items = [
+    { ...incident, requesterName: 'Primero en cola', hasConversation: true, dispatch: provisional },
+    { ...incident, id: 'other', requesterName: 'Segundo en cola', hasConversation: true, dispatch: pending },
+  ];
+  const html = renderToStaticMarkup(createElement(IncidentTable, { items }));
+  assert.ok(html.indexOf('Primero en cola') < html.indexOf('Segundo en cola'));
+  for (const text of ['Provisional IA', 'Pendiente de evaluación', 'Inferida por IA', 'Despacho y auditoría']) {
+    assert.ok(html.includes(text));
+  }
+});
+
+test('dispatch audit rejects a leaked conversation', async t => {
+  const session = { token: 'a'.repeat(43), expiresAt: new Date(Date.now() + 60000).toISOString() };
+  const result = { dispatch: { effectivePriority: 'PENDING', revision: 0, elapsedSeconds: 0, priorityReasons: [] },
+    reviews: [], transitions: [], messages: [] };
+  t.mock.method(globalThis, 'fetch', async path => {
+    assert.ok(path.endsWith('/dispatch'));
+    return Response.json(result);
+  });
+  await assert.rejects(incidentDispatch(session, incident.eventId, incident.id, new AbortController().signal), { status: 502 });
+});
+
 test('API uses organizer PIN, accepts only its events and sends the Bearer to the same origin', async t => {
   const signal = new AbortController().signal;
   const session = { token: 'a'.repeat(43), expiresAt: new Date(Date.now() + 60000).toISOString() };
@@ -90,7 +118,7 @@ test('API uses organizer PIN, accepts only its events and sends the Bearer to th
       case '/api/v1/events':
         assert.equal(options.headers.Authorization, 'Bearer ' + session.token);
         return json({ events: [{ id: 'demo-festival', role: 'ORGANIZER' }, { id: 'otro', role: 'STAFF' }] });
-      case '/api/v1/events/demo-festival/incidents':
+      case '/api/v1/events/demo-festival/incidents?order=dispatch':
         assert.equal(options.headers.Authorization, 'Bearer ' + session.token);
         return json({ incidents: [incident] });
       default:

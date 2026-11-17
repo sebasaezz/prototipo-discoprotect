@@ -12,6 +12,9 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun ReaderScreen(state: ReaderUiState, nfc: NfcAvailability, actions: ReaderController, onSettings: () -> Unit) {
@@ -65,8 +68,7 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     state.incidents?.let { incidents ->
         if (incidents.isEmpty()) Text("Este evento aún no tiene solicitudes registradas.")
         val groups = listOf(
-            "Pendientes" to setOf(IncidentStatus.OPEN),
-            "Asignadas y en atención" to setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS),
+            "Cola activa" to setOf(IncidentStatus.OPEN, IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS),
             "Cerradas" to setOf(IncidentStatus.RESOLVED, IncidentStatus.CANCELLED),
         )
         groups.forEach { (label, statuses) ->
@@ -74,8 +76,13 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
             if (items.isNotEmpty()) Text(label, style = MaterialTheme.typography.titleMedium)
             items.forEach { incident ->
                 IncidentCard(incident) {
+                    incident.dispatch?.let { dispatch ->
+                        DispatchBadge(dispatch)
+                        Text(dispatch.priorityReasons.joinToString(" · "))
+                        Text("${dispatch.elapsedSeconds / 60} min ${dispatch.elapsedSeconds % 60} s desde la emisión")
+                    }
                     incident.dangerAlert?.alert?.let { Status(it, Tone.Warning) }
-                    incident.triage?.let { triage ->
+                    incident.triage?.takeUnless { incident.hasConversation }?.let { triage ->
                         val review = triage.latestReview
                         Text(if (review != null) "Revisión humana" else triage.status.label)
                         val category = review?.category ?: triage.suggestion?.category ?: triage.fallback?.category
@@ -98,11 +105,23 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
                         TextButton(onClick = { chatId = if (open) null else incident.id },
                             modifier = Modifier.heightIn(min = 48.dp)) { Text(if (open) "Cerrar conversación" else "Ver conversación") }
                         if (open) key(state.staffId, state.event?.id, incident.id) {
+                            incident.dispatch?.let { dispatch ->
+                                DispatchPanel(dispatch, incident, actions, state.staffId)
+                            }
                             IncidentChat(incident.id, attendee = false, staffId = state.staffId,
                                 load = { actions.conversation(incident.id, it) }, send = { actions.message(incident.id, it) })
                         }
                     }
-                    if (incident.triage != null) {
+                    if (!incident.hasConversation && incident.dispatch != null && chatId == incident.id) {
+                        key(state.staffId, state.event?.id, incident.id) {
+                            DispatchPanel(incident.dispatch, incident, actions, state.staffId)
+                        }
+                    } else if (!incident.hasConversation && incident.dispatch != null) {
+                        TextButton(onClick = { chatId = incident.id }, modifier = Modifier.heightIn(min = 48.dp)) {
+                            Text("Ver despacho")
+                        }
+                    }
+                    if (incident.triage != null && !incident.hasConversation) {
                         if (state.triageId == incident.id) {
                             TriagePanel(state, incident, actions)
                         } else {
@@ -138,6 +157,109 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
                 }, enabled = valid, modifier = Modifier.heightIn(min = 48.dp)) { Text(action.label) }
             },
             dismissButton = { TextButton(onClick = { confirmation = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver") } })
+    }
+}
+
+@Composable
+private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, actions: ReaderController, staffId: String?) {
+    val analysis = dispatch.analysis
+    if (analysis != null) {
+        Field("Resumen sugerido por IA", analysis.summary)
+        Field("Categoría sugerida", analysis.category.label)
+        if (analysis.uncertainty.isNotEmpty()) Field("Por verificar", analysis.uncertainty.joinToString(" · "))
+    }
+    dispatch.inferredLocation?.let { Field("Ubicación inferida", it.label()) }
+    dispatch.declaredLocation?.let { Field("Ubicación declarada", it.label()) }
+    dispatch.confirmedLocation?.let { Field("Ubicación confirmada", it.label()) }
+
+    if (incident.assignedStaff?.id == null || incident.assignedStaff.id != staffId ||
+        incident.status !in setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS)) return
+    var editing by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf<DispatchReviewBody?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var detail by remember { mutableStateOf<DispatchDetail?>(null) }
+    val scope = rememberCoroutineScope()
+    notice?.let { Text(it) }
+    TextButton(onClick = {
+        if (editing) editing = false
+        else {
+            editing = true
+            if (detail == null) {
+                scope.launch {
+                    try { detail = actions.dispatch(incident.id) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { notice = "No se pudo consultar el catálogo. Cierra y vuelve a abrir la corrección." }
+                }
+            }
+        }
+    }, enabled = pending == null && !busy, modifier = Modifier.heightIn(min = 48.dp)) {
+        Text(if (editing) "Cerrar corrección" else "Corregir prioridad y ubicación")
+    }
+    if (!editing) return
+    val loaded = detail ?: return
+    val current = if (dispatch.revision >= loaded.dispatch.revision) dispatch else loaded.dispatch
+    key(current.revision) {
+        var priority by remember { mutableStateOf(current.humanPriority) }
+        var zone by remember { mutableStateOf(current.confirmedLocation?.zoneId) }
+        var reference by remember { mutableStateOf(current.confirmedLocation?.text.orEmpty()) }
+        var danger by remember { mutableStateOf(DangerAssessment.UNCHANGED) }
+        var reason by remember { mutableStateOf("") }
+        val editable = pending == null && !busy
+        DispatchChoice(priority?.label ?: "Sin prioridad humana", editable, listOf(null) + DispatchPriority.entries,
+            { it?.label ?: "Sin prioridad humana" }) { priority = it }
+        DispatchChoice(loaded.zones.firstOrNull { it.id == zone }?.name ?: "Zona por confirmar", editable,
+            listOf(null) + loaded.zones, { it?.name ?: "Zona por confirmar" }) { zone = it?.id }
+        OutlinedTextField(reference, { if (it.length <= 160) reference = it }, enabled = editable,
+            label = { Text("Referencia confirmada") }, modifier = Modifier.fillMaxWidth())
+        DispatchChoice(danger.label, editable, DangerAssessment.entries, { it.label }) { danger = it }
+        OutlinedTextField(reason, { if (it.length <= 240) reason = it }, enabled = editable,
+            label = { Text("Motivo de la revisión") }, modifier = Modifier.fillMaxWidth())
+        Button(onClick = {
+            val location = if (zone != null || reference.isNotBlank()) DispatchLocationInput(zone, reference.trim().ifEmpty { null }) else null
+            val command = pending ?: DispatchReviewBody(current.revision, UUID.randomUUID().toString(), priority, location, danger, reason.trim())
+            pending = command
+            busy = true
+            notice = null
+            scope.launch {
+                try {
+                    val reply = actions.reviewDispatch(incident.id, command)
+                    detail = loaded.copy(dispatch = reply.dispatch)
+                    pending = null
+                    editing = false
+                    notice = "Corrección registrada."
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: ApiFailure) {
+                    if (failure.problem in setOf(ApiProblem.Conflict, ApiProblem.Forbidden, ApiProblem.InvalidInput, ApiProblem.NotFound)) {
+                        pending = null
+                        detail = null
+                        editing = false
+                        actions.refreshIncidents()
+                        notice = "La revisión requiere consultar el despacho vigente."
+                    } else notice = "Revisión sin confirmar. Reintenta la misma operación."
+                } finally {
+                    busy = false
+                }
+            }
+        }, enabled = !busy && (pending != null || reason.isNotBlank()), modifier = Modifier.heightIn(min = 48.dp)) {
+            Text(if (pending != null && !busy) "Reintentar revisión" else "Guardar revisión")
+        }
+    }
+}
+
+@Composable
+private fun <T> DispatchChoice(label: String, enabled: Boolean, values: List<T>, title: (T) -> String, change: (T) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { open = true }, enabled = enabled,
+            modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            values.forEach { value ->
+                DropdownMenuItem(text = { Text(title(value)) }, onClick = { open = false; change(value) },
+                    modifier = Modifier.heightIn(min = 48.dp))
+            }
+        }
     }
 }
 

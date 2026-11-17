@@ -68,6 +68,29 @@ const envelope = z.object({
 const outputText = z.object({ type: z.literal('output_text'), text: z.string() });
 const normalize = (value: string) => value.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').trim();
 const unsafeReply = /\b(?:ya (?:va|viene|llego|esta en camino|te asignamos)|(?:guardia|personal|ambulancia|ayuda).{0,25}(?:asignad[oa]|en camino|lleg(?:a|ara|o))|ubicacion confirmada|diagnostico|toma(?:te)? (?:un|una|\d)|te garantizo)\b/u;
+const clarification = /^(?:(?:entiendo|gracias(?: por avisar| por aclararlo)?|recibimos tu reporte)[.!]\s*)?¿[^?]+\?$/u;
+const acknowledgement = /^(?:entiendo|gracias(?: por avisar| por aclararlo)?|recibimos tu reporte)[.!]?$/u;
+
+function canPublishReply(reply: string, input: ChatInput) {
+  const normalized = normalize(reply);
+  return input.allowReply && Boolean(safeDescription(reply)) && !unsafeReply.test(normalized) &&
+    (clarification.test(normalized) || acknowledgement.test(normalized)) &&
+    !input.messages.some(message => message.type === 'AI' && normalize(message.text) === normalized);
+}
+const dangerSignal: Record<typeof dangerKinds[number], RegExp> = {
+  UNRESPONSIVE: /\b(?:no (?:me |nos )?responde|no reacciona|inconsciente|no despierta)\b/u,
+  ONGOING_VIOLENCE: /\b(?:estan (?:pegando|golpeando|disparando)|pelea en curso|agresion en curso|sigue (?:pegando|golpeando)|amenaza con (?:un |una )?(?:arma|cuchillo|pistola))\b/u,
+  FIRE: /\b(?:hay (?:un )?(?:incendio|fuego|llamas)|se esta quemando|esta en llamas)\b/u,
+  CRUSH: /\b(?:nos (?:aplastan|estan aplastando)|estan aplastando|gente aplastada|estampida en curso)\b/u,
+  BREATHING: /\b(?:no respira|no puede respirar|se esta ahogando|se esta asfixiando|no logro respirar)\b/u,
+};
+
+function corroboratesDanger(danger: NonNullable<Analysis['danger']>, input: ChatInput) {
+  const { evidence, kind } = danger;
+  const source = input.messages.find(message => message.seq === evidence.seq)?.text ?? '';
+  const doubtful = /\b(?:ya (?:respira|respondio|responde|termino|paso)|falsa alarma|simulacro|no (?:hay|hubo|esta)|creo que|si (?:hubiera|hay)|pensaba que)\b/u;
+  return dangerSignal[kind].test(normalize(evidence.quote)) && !doubtful.test(normalize(source));
+}
 
 export function validateAnalysis(value: unknown, input: ChatInput) {
   const { output, usage } = envelope.parse(value);
@@ -85,11 +108,12 @@ export function validateAnalysis(value: unknown, input: ChatInput) {
   if (result.zoneId !== null && (!result.location || !input.zones.some(zone => zone.id === result.zoneId))) {
     throw new Error('Invalid zone');
   }
+  if (result.danger && !corroboratesDanger(result.danger, input)) result.danger = null;
+  if (result.facts.length === 0 && result.danger === null) result.severity = 'PENDING';
   if ([result.summary, ...result.uncertainty].some(text => hasPersonalData(text.normalize('NFKC')))) {
     throw new Error('Unsafe summary');
   }
-  if (result.reply && (!input.allowReply || !safeDescription(result.reply) || unsafeReply.test(normalize(result.reply)) ||
-    input.messages.some(message => message.type === 'AI' && normalize(message.text) === normalize(result.reply!)))) {
+  if (result.reply && !canPublishReply(result.reply, input)) {
     result.reply = null;
   }
   return { result, usage };
@@ -115,6 +139,9 @@ export function chatInput(db: Db, id: string, eventId: string, maxZones: number)
   const input = { messages: recent, zones: selected, allowReply: messages.filter(message => message.type === 'AI').length < 2 };
   // Leave room for instructions and structured outputs in the request budget.
   while (input.messages.length > 1 && Buffer.byteLength(JSON.stringify(input)) > 4_500) input.messages = input.messages.slice(1);
+  if (Buffer.byteLength(JSON.stringify(input)) > 4_500) {
+    input.zones = input.zones.map(zone => ({ ...zone, aliases: [] }));
+  }
   if (Buffer.byteLength(JSON.stringify(input)) > 4_500) return null;
   return input;
 }

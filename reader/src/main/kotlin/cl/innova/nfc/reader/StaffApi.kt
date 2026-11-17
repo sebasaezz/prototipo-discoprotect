@@ -62,6 +62,15 @@ internal data class IncidentCommand(val incidentId: String, val action: Incident
     val category: TriageCategory? = null, val urgency: TriageUrgency? = null,
 )
 @Serializable internal data class ReviewReply(val review: TriageReview, val triage: IncidentTriage, val replayed: Boolean)
+@Serializable internal data class DispatchZone(val id: String, val name: String)
+@Serializable internal data class DispatchLocationInput(val zoneId: String?, val text: String?)
+@Serializable internal data class DispatchReviewBody(
+    val expectedRevision: Long, val operationId: String, val humanPriority: DispatchPriority?,
+    val confirmedLocation: DispatchLocationInput?, val dangerAssessment: DangerAssessment, val reason: String,
+)
+@Serializable internal data class DispatchDetail(val dispatch: IncidentDispatch, val zones: List<DispatchZone>)
+@Serializable internal data class DispatchReview(val revision: Long, val operationId: String)
+@Serializable internal data class DispatchReply(val review: DispatchReview, val dispatch: IncidentDispatch, val replayed: Boolean)
 
 internal interface StaffApi {
     suspend fun health()
@@ -75,6 +84,10 @@ internal interface StaffApi {
     suspend fun conversation(session: StaffSession, event: StaffEvent, id: String, after: Long): ChatPage =
         throw ApiFailure(ApiProblem.InvalidResponse)
     suspend fun message(session: StaffSession, event: StaffEvent, id: String, draft: ChatDraft): ChatWrite =
+        throw ApiFailure(ApiProblem.InvalidResponse)
+    suspend fun dispatch(session: StaffSession, event: StaffEvent, id: String): DispatchDetail =
+        throw ApiFailure(ApiProblem.InvalidResponse)
+    suspend fun reviewDispatch(session: StaffSession, event: StaffEvent, id: String, body: DispatchReviewBody): DispatchReply =
         throw ApiFailure(ApiProblem.InvalidResponse)
 }
 
@@ -102,7 +115,7 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
         }
 
     override suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident> {
-        return exchange<IncidentList>(incidentUrl(event).build(), session).incidents.also { incidents ->
+        return exchange<IncidentList>(incidentUrl(event).addQueryParameter("order", "dispatch").build(), session).incidents.also { incidents ->
             requireReply(incidents.all { it.validOperational(event.id) } &&
                 incidents.distinctBy { it.id }.size == incidents.size)
         }
@@ -143,6 +156,20 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
         requireReply(isIncidentUuid(id), ApiProblem.InvalidInput)
         return incidentUrl(event).addPathSegment(id).addPathSegment("conversation")
     }
+
+    private fun dispatchUrl(event: StaffEvent, id: String): HttpUrl.Builder {
+        requireReply(isIncidentUuid(id), ApiProblem.InvalidInput)
+        return incidentUrl(event).addPathSegment(id).addPathSegment("dispatch")
+    }
+
+    override suspend fun dispatch(session: StaffSession, event: StaffEvent, id: String): DispatchDetail =
+        exchange(dispatchUrl(event, id).build(), session)
+
+    override suspend fun reviewDispatch(session: StaffSession, event: StaffEvent, id: String, body: DispatchReviewBody): DispatchReply =
+        exchange<DispatchReply>(dispatchUrl(event, id).addPathSegment("reviews").build(), session, json.encodeToString(body)).also {
+            requireReply(it.review.operationId == body.operationId && it.review.revision == body.expectedRevision + 1 &&
+                it.dispatch.revision >= it.review.revision)
+        }
 
     override suspend fun conversation(session: StaffSession, event: StaffEvent, id: String, after: Long): ChatPage =
         exchange<ChatPage>(conversationUrl(event, id).addQueryParameter("afterSeq", after.toString()).build(), session)

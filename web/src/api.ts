@@ -5,6 +5,22 @@ export type Event = { id: string; name: string; venue: string; role: string };
 export const incidentLabels = {
   OPEN: 'Abierta', ASSIGNED: 'Asignada', IN_PROGRESS: 'En atención', RESOLVED: 'Resuelta', CANCELLED: 'Cancelada',
 } as const;
+export const priorityLabels = {
+  P0: 'P0 · Crítica', P1: 'P1 · Alta', P2: 'P2 · Media', P3: 'P3 · Baja', PENDING: 'Pendiente de evaluación',
+} as const;
+type Priority = keyof typeof priorityLabels;
+type Location = { zoneId: string | null; zoneName: string | null; text: string | null };
+export type Dispatch = {
+  effectivePriority: Priority; prioritySource: string; priorityReasons: string[];
+  elapsedSeconds: number; evaluatedAt: string; revision: number; humanPriority: Priority | null;
+  confirmedLocation: Location | null; declaredLocation: Location | null; inferredLocation: Location | null;
+  analysis: { summary: string; uncertainty: string[]; observedAt: string } | null;
+};
+type DispatchAudit = {
+  dispatch: Dispatch;
+  reviews: { revision: number; actor: { name: string }; reviewedAt: string; humanPriority: Priority | null; reason: string }[];
+  transitions: { version: number; fromStatus: Incident['status']; toStatus: Incident['status']; actorName: string; appliedAt: string }[];
+};
 export type Incident = {
   id: string;
   eventId: string;
@@ -23,6 +39,8 @@ export type Incident = {
   reasonCode?: keyof typeof reasonLabels | null;
   dangerAlert?: keyof typeof alertLabels | null;
   triage?: Triage;
+  hasConversation?: boolean;
+  dispatch?: Dispatch;
 };
 
 export class ApiError extends Error {
@@ -73,13 +91,32 @@ export async function events(session: Session, signal: AbortSignal) {
 export async function incidents(session: Session, eventId: string, signal: AbortSignal) {
   if (!eventId || eventId === '.' || eventId === '..') throw new ApiError(400, 'El evento no es válido.');
   const result = await request<{ incidents: Incident[] }>(
-    `events/${encodeURIComponent(eventId)}/incidents`, signal, session,
+    `events/${encodeURIComponent(eventId)}/incidents?order=dispatch`, signal, session,
   );
   if (!Array.isArray(result.incidents) || result.incidents.some(incident => !validIncident(incident, eventId))
       || new Set(result.incidents.map(item => item.id)).size !== result.incidents.length) {
     throw new ApiError(502, 'La respuesta contiene solicitudes inválidas para el evento.');
   }
   return result.incidents;
+}
+
+export async function incidentDispatch(session: Session, eventId: string, id: string, signal: AbortSignal) {
+  if (!eventId || eventId === '.' || eventId === '..' || !/^[a-f0-9-]{36}$/.test(id)) {
+    throw new ApiError(400, 'La solicitud no es válida.');
+  }
+  const result = await request<DispatchAudit>(
+    `events/${encodeURIComponent(eventId)}/incidents/${encodeURIComponent(id)}/dispatch`, signal, session,
+  );
+  if (!validDispatch(result.dispatch) || !Array.isArray(result.reviews) || !Array.isArray(result.transitions) ||
+      Object.hasOwn(result, 'messages')) throw new ApiError(502, 'La respuesta de despacho no es válida.');
+  return result;
+}
+
+function validDispatch(value: Dispatch) {
+  return value != null && Object.hasOwn(priorityLabels, value.effectivePriority) &&
+    Number.isSafeInteger(value.revision) && value.revision >= 0 &&
+    Number.isSafeInteger(value.elapsedSeconds) && value.elapsedSeconds >= 0 &&
+    Array.isArray(value.priorityReasons) && value.priorityReasons.every(item => typeof item === 'string');
 }
 
 export async function incidentTriage(session: Session, eventId: string, id: string, signal: AbortSignal) {
@@ -103,6 +140,7 @@ function validIncident(item: Incident, eventId: string) {
       typeof item.requesterName !== 'string' || !Object.hasOwn(incidentLabels, item.status) ||
       typeof item.createdAt !== 'string' || typeof item.updatedAt !== 'string' ||
       !Number.isSafeInteger(item.version) || item.version < 1) return false;
+  if (item.dispatch !== undefined && !validDispatch(item.dispatch)) return false;
   if (Object.hasOwn(item, 'description') || item.reasonCode != null && !Object.hasOwn(reasonLabels, item.reasonCode) ||
       (item.dangerAlert ?? null) !== (item.reasonCode === 'UNRESPONSIVE' || item.reasonCode === 'IMMEDIATE_DANGER'
         ? item.reasonCode : null) || item.triage !== undefined && !validTriage(item.triage)) return false;

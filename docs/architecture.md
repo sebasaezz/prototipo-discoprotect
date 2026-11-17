@@ -53,6 +53,8 @@ Los tres clientes consultan el listado al entrar, al volver a primer plano y cad
 
 H7.2 encola la interpretación del chat después de cada mensaje elegible. El trabajador comparte la cuota diaria con H7 y el mismo ciclo de ejecución. Cada llamada ocurre fuera de SQLite. Al responder, una transacción valida estado abierto, versión H6 y última secuencia del asistente antes de publicar. Una salida tardía queda descartada. El chat conserva intervenciones contextualizadas de hasta 220 caracteres, con dos publicaciones y tres reservas por incidente.
 
+Fastify valida citas literales e IDs de zonas antes de conservar la interpretación. Para P0 provisional comprueba también una señal explícita de peligro en la cita y descarta formas de negación o simulación reconocidas. El filtro de texto y estas comprobaciones son heurísticos. El guardia supervisa los resultados con casos ficticios. El estado operativo sigue gobernado por H6.
+
 AppAsistente ofrece motivo y relato opcionales. El backend guarda el incidente, el relato original y el triaje inicial antes de responder al SOS. Un trabajador dentro de Fastify reserva trabajos en SQLite y consulta OpenAI después de cerrar la transacción. La demo usa un proceso Fastify por base SQLite. El trabajador continúa pendientes vigentes al reiniciar y envía a fallback los intentos interrumpidos.
 
 Solo el motivo y una copia minimizada del relato pueden salir hacia OpenAI. El filtro local admite español coloquial, bloquea indicadores de identificación e instrucciones incrustadas y deja los relatos dudosos para atención manual. La separación del mensaje de usuario, el esquema estricto y la validación local limitan el efecto de instrucciones incrustadas. Los controles son heurísticos y H7 usa datos ficticios.

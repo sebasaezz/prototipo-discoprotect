@@ -298,8 +298,7 @@ internal class ReaderController(
                 current()
                 pendingCommands.remove(key)
                 val items = ui.incidents.orEmpty().filterNot { it.id == incident.id } + incident
-                ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, items)
-                    .sortedWith(compareByDescending<Incident> { it.createdAt }.thenByDescending { it.id }),
+                ui = ui.copy(incidents = currentIncidentSnapshot(ui.incidents, items),
                     pendingIncident = false,
                     incidentNotice = if (operation.replayed && operation.appliedVersion != incident.version)
                         "Operación original confirmada: ${operation.toStatus.label}. Estado vigente: ${incident.status.label}."
@@ -335,6 +334,14 @@ internal class ReaderController(
     suspend fun message(id: String, draft: ChatDraft) = chatRequest(id) { remote, active, event ->
         remote.message(active, event, id, draft)
     }
+
+    suspend fun dispatch(id: String) = chatRequest(id) { remote, active, event ->
+        remote.dispatch(active, event, id)
+    }
+
+    suspend fun reviewDispatch(id: String, body: DispatchReviewBody) = chatRequest(id) { remote, active, event ->
+        remote.reviewDispatch(active, event, id, body)
+    }.also { refreshIncidents() }
 
     private suspend fun <T> chatRequest(id: String, request: suspend (StaffApi, StaffSession, StaffEvent) -> T): T {
         if (!checkExpiry()) throw ApiFailure(ApiProblem.Unauthorized)

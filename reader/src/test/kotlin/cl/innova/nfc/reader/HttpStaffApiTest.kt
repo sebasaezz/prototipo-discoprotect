@@ -125,7 +125,7 @@ class HttpStaffApiTest {
         assertNull(incident.zoneName)
         assertEquals("Cerca de la fila", incident.locationText)
         val request = request()
-        assertEquals("GET /api/v1/events/demo-festival/incidents HTTP/1.1", request.requestLine)
+        assertEquals("GET /api/v1/events/demo-festival/incidents?order=dispatch HTTP/1.1", request.requestLine)
         assertEquals("Bearer $token", request.getHeader("Authorization"))
         assertEquals(0, request.bodySize)
         reply(list.replace("demo-festival", "other"))
