@@ -42,6 +42,7 @@ export function changeEventStaff(db: Db, actor: Session, eventId: string, input:
     if (member && member.role !== 'STAFF') {
       throw new ApiError(409, 'STAFF_ROLE_CONFLICT', 'La cuenta tiene un rol distinto en el evento');
     }
+    if (replacementId) requireMembership(db, { personId: replacementId, role: 'STAFF' }, eventId);
     const changed = Boolean(member) !== active;
     const now = new Date().toISOString();
     let reassignedId: string | null = null;
@@ -54,7 +55,6 @@ export function changeEventStaff(db: Db, actor: Session, eventId: string, input:
         AND status IN ('ASSIGNED', 'IN_PROGRESS')`).get(eventId, personId);
       if (assignment) {
         if (!replacementId) throw new ApiError(409, 'REPLACEMENT_REQUIRED', 'Selecciona un reemplazo para la atención activa');
-        requireMembership(db, { personId: replacementId, role: 'STAFF' }, eventId);
         if (db.prepare("SELECT 1 FROM incidents WHERE assigned_staff_id = ? AND status IN ('ASSIGNED', 'IN_PROGRESS')")
           .get(replacementId)) {
           throw new ApiError(409, 'REPLACEMENT_BUSY', 'El guardia de reemplazo tiene una atención activa');

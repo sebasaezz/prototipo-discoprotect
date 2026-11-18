@@ -1,6 +1,12 @@
 # Flujo actual de Discoprotect
 
-Discoprotect es un prototipo universitario de gestión de incidentes en eventos masivos. H7–H7.3 se integraron a `main` en el merge `8f5439e` con 6/6 comprobaciones físicas del flujo principal aprobadas. H8.1 amplía GestiónWeb en `codex/discoprotect-h8`. [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7)
+La [rama final](checkpoints/final-acceptance.md) contiene H8.2–H10. GestiónWeb permite seleccionar o crear el evento, configurar sus horarios, recinto y guardias, gestionar incidentes, consultar estadísticas y publicar promociones ficticias. En **Entradas** emite o revoca una entrada y puede validar un código de forma manual. En **Búsqueda** consulta incidentes, zonas, guardias autorizados y entradas por ID.
+
+En AppAsistente, **Servicios del evento** comparte la selección con SOS. Allí se presenta la entrada QR, se acepta o deshace un vínculo de acompañante y se consultan las promociones vigentes. En AppPersonal, desde **Incidentes → Recinto, control de entradas y búsqueda**, se puede abrir el catálogo operativo, capturar un QR o validar su código manual y buscar por ID, estado o nombre según el recurso. El guardia asignado puede consultar los nombres de acompañantes desde el detalle de su atención activa.
+
+En un turno que contiene una referencia visual inequívoca, Fastify actualiza de inmediato la ubicación probable y la evidencia. El trabajador independiente prepara el diálogo y las propuestas analíticas. Una señal local crítica actualiza el despacho antes del proveedor y el guardia conserva la posibilidad de revisar peligro y ubicación. Consulta [el guion final](demo-final.md) para el recorrido completo.
+
+Discoprotect es un prototipo universitario de gestión de incidentes en eventos masivos. H7–H7.3 se integraron a `main` en el merge `8f5439e` con 6/6 comprobaciones físicas del flujo principal aprobadas. H8.1 se integró en `72774a7`. [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7) · [PR #8](https://github.com/sebasaezz/prototipo-discoprotect/pull/8)
 
 ## 1. Componentes y acceso a datos
 
@@ -102,7 +108,7 @@ Al iniciar sesión con el PIN de organizador, GestiónWeb abre el **Dashboard** 
 
 El Dashboard cuenta solicitudes **Activas**, **Sin asignar**, **Asignadas** y **En atención**. Hasta cinco solicitudes activas siguen el orden de despacho que entrega Fastify. El resumen comparte la consulta con **Incidentes** e indica la hora de la última respuesta correcta. Si falla la conexión, los datos disponibles se marcan como la última consulta. Si el servidor rechaza el acceso al evento, la vista descarta sus solicitudes.
 
-**Personal**, **Estadísticas** y **Anuncios y promociones** se muestran en desarrollo. Las seis secciones usan el mismo contexto de sesión y evento. Al cambiar de contexto se cancelan las lecturas y se limpia el estado local de los comandos. Cambiar de sección dentro del mismo evento permite volver a una confirmación de incidentes o reintentar una operación incierta con el mismo comando.
+**Personal**, **Estadísticas**, **Anuncios y promociones**, **Entradas** y **Búsqueda** usan el mismo contexto de sesión y evento. Al cambiar de contexto se cancelan las lecturas y se limpia el estado local de los comandos. Cambiar de sección dentro del mismo evento permite volver a una confirmación de incidentes o reintentar una operación incierta con el mismo comando.
 
 ### Recinto y zonas H8.2
 

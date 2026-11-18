@@ -1,6 +1,41 @@
 # API REST v1
 
-Contrato vigente hasta H8.2. Para el recorrido por pantallas, consulta el [flujo actual](current-workflow.md).
+Contrato de la rama H10. Para el recorrido por pantallas, consulta el [flujo actual](current-workflow.md).
+
+## Servicios de evento H8.3–H9
+
+Las rutas siguientes se exponen bajo `/api/v1`. Todas requieren una sesión vigente. Las rutas con `:eventId` verifican el rol y la membresía de ese evento.
+
+| Método y ruta | Rol | Datos y comportamiento |
+| --- | --- | --- |
+| `POST /events` | Organizador | `id` UUID, `name`, `venue`, `startsAt`, `endsAt`, `status` y `demoAttendees`. Crea el evento y la membresía de su organizador. La opción de demo incorpora las tres cuentas ficticias. |
+| `GET/PATCH /events/:eventId/schedule` | Organizador | Consulta fechas UTC, estado y versión. PATCH recibe `version` y los tres campos. La versión se comparte con el recinto. |
+| `GET /events/:eventId/statistics` | Organizador | `from`, `through` inclusivos en formato `AAAA-MM-DD`, `status`, `priority` y `zoneId` opcionales. Devuelve agregados y catálogo de zonas, sin filas de ficha ni chat. |
+| `GET/PATCH /events/:eventId/staff` | Organizador | Lista las cuentas de guardia de la demo, su acceso y asignación activa del evento. PATCH recibe `personId`, `active`, `operationId` y `replacementId` opcional. Se exige reemplazo autorizado y libre si hay una atención activa. |
+| `GET/POST /events/:eventId/tickets` | Organizador | GET pagina asistentes del evento y refleja emisión, uso y revocación. POST recibe `attendeeId` y `expiresAt`. Hay una entrada por cuenta y evento. |
+| `POST /events/:eventId/tickets/:id/revoke` | Organizador | Invalida la entrada del evento y conserva el historial. |
+| `GET /events/:eventId/tickets/mine` | Asistente | Devuelve solo la entrada propia o `ticket: null`. El código opaco `DP1_` se presenta como QR y como texto de ingreso manual. |
+| `POST /events/:eventId/tickets/validate` | Guardia u organizador | Recibe `code` y `operationId` UUID. `result` puede ser `VALID`, `USED`, `REVOKED`, `EXPIRED`, `OTHER_EVENT` o `INVALID`. El primer resultado se conserva para reintentos exactos del mismo operador. |
+| `GET /events/:eventId/promotions` | Organizador o asistente | Pagina campañas. El asistente recibe únicamente campañas habilitadas con inicio ocurrido y término futuro. |
+| `POST /events/:eventId/promotions` y `PATCH /events/:eventId/promotions/:id` | Organizador | `title`, `description`, `imageUrl`, `linkUrl`, `startsAt`, `endsAt`, `active`. Las URL son HTTPS o nulas. Edición exige `version`. El título se deduplica normalizado en el evento. |
+| `GET /events/:eventId/companions` | Asistente | Lista paginada de vínculos propios activos con ID del vínculo y nombre de la otra persona. |
+| `POST /events/:eventId/companions/invite` | Asistente | Genera un código aleatorio de un uso, vigente 15 minutos. |
+| `POST /events/:eventId/companions/accept` | Asistente | Recibe `code`. Una sesión distinta del mismo evento acepta el vínculo. La misma cuenta puede recuperar el recibo por reintento. |
+| `POST /events/:eventId/companions/:id/unlink` | Asistente | Cualquier parte retira el consentimiento. |
+| `GET /events/:eventId/incidents/:id/companions` | Guardia asignado | Consulta los nombres consentidos solo durante una atención activa. La consulta queda auditada. |
+| `GET /events/:eventId/search` | Guardia u organizador | `type` admite `incidents` con ID exacto y estado opcionales, `zones` y `staff` con `text` opcional, y `tickets` con ID exacto solo para organizador. El recurso de personas permanece en la resolución NFC autorizada. |
+
+Los listados paginados usan `offset` no negativo y páginas de hasta 25. Las fechas de formularios con hora se envían como ISO 8601 con offset y se guardan en UTC. Los filtros de estadísticas usan la fecha civil de creación en `America/Santiago`, con ajuste por horario de verano.
+
+### Métricas
+
+- Total incluye todas las solicitudes que pasan los filtros. Activas suma `OPEN`, `ASSIGNED` e `IN_PROGRESS`. Resueltas cuenta `RESOLVED`. La serie diaria atribuye cada solicitud a su fecha de creación.
+- La prioridad usa el despacho efectivo al consultar. La dimensión zona toma primero la verificación del guardia, luego la indicación explícita del asistente, la zona manual y finalmente la ubicación probable. Sin zona catalogada se agrupa como «Sin zona». Motivo usa el código de origen. Categoría toma revisión humana, análisis del chat o triaje anterior, en ese orden.
+- Los tiempos suman segundos desde creación hasta asignación, inicio de atención y resolución o cierre administrativo. Cada indicador incluye cantidad, media, mediana y p90 por rango más próximo. Una muestra se incluye solo con la marca correspondiente. Sin muestras el resultado es nulo.
+
+### Despacho inmediato
+
+`dispatch.locationEvidence` puede incluir `messageSeq`, `quote` y `feature` aunque el proveedor esté pendiente o inaccesible. El catálogo local exige coincidencia visual suficiente y se abstiene ante candidatos ambiguos. Los clientes muestran el resultado como probable y dan precedencia a la ubicación confirmada.
 
 Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token>`. Envía `Content-Type: application/json` para cuerpos JSON. Los nombres de campos son estables y los tiempos son ISO 8601 UTC.
 

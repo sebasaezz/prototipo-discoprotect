@@ -1,5 +1,13 @@
 # Arquitectura
 
+## Integración H8.3–H10
+
+Fastify conserva un modelo de autorización por sesión, rol y membresía para cada evento. GestiónWeb usa API REST con el Bearer en memoria. Los servicios de AppAsistente y AppPersonal reutilizan los clientes HTTP de cada app y descartan resultados de sesiones y eventos que dejaron de estar vigentes. Las apps mantienen NFC en su circuito de credenciales existente. El QR concede un único ingreso según el resultado de Fastify y usa una credencial aleatoria sin datos de identidad en su contenido.
+
+Las estadísticas reutilizan la prioridad efectiva y obtienen totales y tiempos de las solicitudes del evento autorizado. Un cambio de guardia con atención activa transfiere la asignación sin cambiar su fase, incrementa la versión y registra el reemplazo. La sesión anterior queda invalidada. Los vínculos se forman por invitación consentida y su acceso de guardia se limita al incidente asignado y activo. Las campañas se filtran por evento y vigencia antes de enviarse al asistente.
+
+El proceso local de chat persiste el relato, las señales de riesgo y la inferencia visual verificable en la transacción del turno. La evaluación remota está acotada y puede ampliar la clasificación, proponer preguntas o corroborar una zona. Fastify prepara las respuestas y aplica orientación fija derivada de protocolos públicos. El número de emergencia se obtiene de SAMU Chile. [Soporte vital básico para adultos, AHA](https://cpr.heart.org/en/resuscitation-science/cpr-and-ecc-guidelines/adult-basic-life-support/) · [Soporte vital pediátrico para primeros respondedores](https://cpr.heart.org/-/media/CPR-Files/CPR-Guidelines-Files/2025-Algorithms/Diagram-Ped-BLS-Lay-Rescuers-250121.pdf) · [SAMU 131](https://saludresponde.minsal.cl/fiestas-patrias-samu/)
+
 El [flujo actual](current-workflow.md) describe la operación, el despliegue local y los permisos hasta H8.2. Esta página ubica las responsabilidades en el código.
 
 | Componente | Responsabilidad |

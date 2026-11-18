@@ -13,10 +13,11 @@ El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre
 | H6 · Implementado, validado e integrado en `main` por PR #6 | Atención, transiciones y sincronización. Depende de H5. | Un guardia asume, atiende y resuelve. Asistente y GestiónWeb reciben los estados. | [Checkpoint H6](checkpoints/h6-2026-11-15.md). 95 pruebas automatizadas reportadas y 26/26 comprobaciones físicas aprobadas, incluida la regresión NFC. |
 | H7–H7.3 · Integrados en `main` por el PR #7 | Triaje, chat SOS, prioridad efectiva, traspaso, atención, retiro y purga demo. | Recorrido completo sobre SQLite con asignación activa única y auditoría. | 6/6 comprobaciones físicas del flujo principal aprobadas. [Checkpoint previo al merge](checkpoints/h7-3-2026-11-17.md) · [Guion físico](h7-2-integration.md). |
 | H8.1 · Integrado a `main` en el PR #8 | Dashboard y reorganización de GestiónWeb. | Resumen real del evento autorizado y navegación responsive con las acciones de H7.3. | Conteos, aislamiento por evento, sincronización y reintentos administrativos. |
-| H8.2 · Implementado en `codex/discoprotect-h8-2` | Recinto, zonas y puntos operativos del evento. | Configuración versionada, catálogo activo para AppPersonal y contexto validado para el chat asistido. | Permisos, trazabilidad, reintentos de SOS y pruebas de IA simulada. |
-| H8.3–H8.4 · Pendientes | Estadísticas privadas y personal autorizado. | Ampliar las métricas y la gestión de guardias del evento. | Aislamiento entre eventos, consistencia de métricas y auditoría de cambios. |
-| H9 · Pendiente | Entradas QR ficticias, promociones, acompañantes y búsqueda autorizada. Depende de apps y GestiónWeb. | Publicar una promoción y verla durante la vigencia. Completar flujos complementarios. | Vigencias, zonas horarias, accesos y entradas inválidas. Riesgo de campañas fuera de plazo. |
-| H10 · Pendiente | Estabilizar apps y demo integrada. Depende de H0–H9. | Ejecutar el guion completo con los dos Samsung y el computador, con datos restaurables. | E2E, reinicio, caída de LAN y fallback IA. Riesgos de hardware, firmware y red del recinto. |
+| H8.2 · Integrado en la rama final | Recinto versionado, zonas probables con evidencia local y triaje progresivo. | El guardia puede verificar la zona y revisar la prioridad. | [Aceptación final](checkpoints/final-acceptance.md). |
+| H8.3 · Implementado | Estadísticas privadas del evento. | Filtros, distribuciones y tiempos con muestras observadas. | Contraste con SQLite y fechas de Chile continental. |
+| H8.4 · Implementado | Gestión del estado del evento, autorización y revocación de guardias. | Transferencia transaccional de atención activa y auditoría de membresía. | Reintentos, aislamiento y revocación de sesiones antiguas. |
+| H9 · Implementado en la rama final | Entradas QR ficticias, promociones, acompañantes y búsqueda. | SDK Android y web conectados a los servicios del evento. | Vigencia y permisos automatizados. Cámara pendiente de comprobación física. |
+| H10 · En revisión | Guion, bases desechables, scripts, artefactos y verificación integral. | [Guion final](demo-final.md) y [aceptación](checkpoints/final-acceptance.md). | El cierre físico depende de los Samsung autorizados y la prueba LAN. |
 
 ## Plan de ejecución H6–H10 · Visión integral
 
@@ -26,12 +27,12 @@ H6 y H7–H7.3 están integrados a `main`. El flujo principal de H7.3 aprobó 6/
 
 ### H8 · Administración de eventos y personal
 
-- **H8.1 · Dashboard.** Mostrar el resumen operativo del evento autorizado y reorganizar cola, detalle, historial, retiro y purga demo en **Incidentes**. Las secciones futuras se muestran en desarrollo. [Flujo de GestiónWeb](current-workflow.md#gestiónweb-h81)
+- **H8.1 · Dashboard.** Mostrar el resumen operativo del evento autorizado y reorganizar cola, detalle, historial, retiro y purga demo en **Incidentes**. [Flujo de GestiónWeb](current-workflow.md#gestiónweb-h81)
 - **H8.2 · Recinto y zonas.** Amplía la edición del recinto y usa el catálogo como contexto del asistente progresivo. El despacho separa la zona probable, la evaluación inmediata del riesgo y la verificación del guardia. [Flujo de comprobación](current-workflow.md#recinto-y-zonas-h82)
 - **H8.3 · Estadísticas.** Incorporar métricas históricas privadas del evento con definiciones, filtros y gráficos verificables.
 - **H8.4 · Personal.** Gestionar las membresías de guardias del evento y definir el retiro de acceso y la reasignación, preservando el historial y la unicidad de las asignaciones activas.
 
-El acceso se limita a las membresías del evento. Los roles son `ATTENDEE`, `STAFF` y `ORGANIZER`. Las entradas, acompañantes y promociones se implementarán en H9.
+El acceso se limita a las membresías del evento. Los roles son `ATTENDEE`, `STAFF` y `ORGANIZER`. H9 incorpora entradas, acompañantes y promociones.
 
 ### H9 · Flujos complementarios de eventos
 

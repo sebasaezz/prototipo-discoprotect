@@ -1,5 +1,19 @@
 # Modelo de datos
 
+## Migraciones de H10
+
+| Migración | Cambios |
+| --- | --- |
+| `012_event_staff.sql` | Auditoría de altas, revocaciones y reemplazos de guardia. Identidad del actor y UUID de operación identifican el recibo. Se preservan el historial del incidente y su fase actual. |
+| `013_event_services.sql` | Entradas únicas por asistente y evento, validación auditada con hash de código, promociones versionadas, invitaciones de acompañantes por hash y auditoría de accesos operativos. |
+| `014_local_chat_locations.sql` | Indicios visuales por mensaje de chat con cita, zona probable opcional y versión del recinto. Los indicios ambiguos conservan la cita sin asignar zona. |
+
+Al revocar personal, una transacción inmediata comprueba el reemplazo cuando corresponde, transfiere la asignación conservando fechas, retira la membresía y elimina las sesiones del guardia saliente. La unicidad de asignación continúa bajo el índice parcial de incidentes. Un nuevo inicio de sesión otorga los permisos actuales de la cuenta.
+
+La credencial del QR es aleatoria de 192 bits y se conserva para que su titular pueda mostrarla. La auditoría guarda su hash, el evento y el operador que comprobó el ingreso. La validación y el consumo se registran en la misma transacción. Las invitaciones guardan solo el hash del código, una caducidad y el participante que aceptó. Un índice único impide vínculos simultáneos duplicados en ambas direcciones. Los registros operativos excluyen fichas médicas y contactos.
+
+La base de demo de H10 se crea en una ruta nueva con `backend/scripts/seed-final.mjs`. Sus históricos son ficticios. Para actualizar una base de trabajo, haz una copia consistente con SQLite y valida `PRAGMA integrity_check` y `PRAGMA foreign_key_check` antes de usar la copia para probar las migraciones.
+
 Los identificadores se tratan como cadenas opacas y los tiempos se guardan en UTC. Las conexiones de uso normal validan claves foráneas. Las migraciones se aplican en orden y se registran en `schema_migrations`. Se usa WAL con un tiempo de espera de 5 segundos para escritores. Las escrituras de ficha y contacto pasan por transacciones inmediatas.
 
 | Entidad | Datos y restricciones |

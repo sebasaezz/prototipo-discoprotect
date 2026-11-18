@@ -12,6 +12,7 @@
     "db:seed": "npm run build && node --env-file-if-exists=.env dist/src/db-cli.js seed",
     "db:reset": "npm run build && node --env-file-if-exists=.env dist/src/db-cli.js reset",
     "test": "npm run build && node --test dist/tests/*.test.js",
+    "acceptance:openai": "node --env-file-if-exists=.env scripts/acceptance-openai.mjs",
     "smoke:chat": "node --env-file-if-exists=.env scripts/smoke-chat.mjs"
   },
   "dependencies": { "fastify": "5.12.8", "zod": "4.6.7" },
