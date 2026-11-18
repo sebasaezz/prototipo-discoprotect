@@ -5,9 +5,11 @@ import { IncidentSync } from './IncidentSync.js';
 import { IncidentAdministration } from './IncidentAdministration.js';
 import { OrganizerLayout } from './OrganizerLayout.js';
 import { resetSection, sectionForHash, type Section } from './organizerNavigation.js';
-import { PendingSection } from './PendingSection.js';
 import { useEventIncidents } from './useEventIncidents.js';
 import { VenuePage } from './VenuePage.js';
+import { StatisticsPage } from './StatisticsPage.js';
+import { StaffPage } from './StaffPage.js';
+import { EventAdministrationPage, PromotionsPage, SearchPage, TicketsPage } from './EventServicesPages.js';
 
 export function OrganizerWorkspace({ session, onExpiry, onSignOut }: {
   session: Session;
@@ -58,7 +60,12 @@ export function OrganizerWorkspace({ session, onExpiry, onSignOut }: {
       setHash(window.location.hash);
       setSelected(id);
     }}>
-    {event ? <EventSections key={event.id} eventId={event.id} session={session} onExpiry={onExpiry}
+    {section === 'eventos' ? <EventAdministrationPage key={event?.id} event={event} session={session} onExpiry={onExpiry}
+      onSaved={saved => {
+        setAvailable(current => current.some(item => item.id === saved.id)
+          ? current.map(item => item.id === saved.id ? saved : item) : [...current, saved]);
+        setSelected(saved.id);
+      }} /> : event ? <EventSections key={event.id} eventId={event.id} session={session} onExpiry={onExpiry}
       section={section} onVenueRead={updateEventLabel} />
       : <section className="panel workspace-message" aria-label="Acceso al evento">
         {loading && <p role="status">Consultando eventos autorizados…</p>}
@@ -93,6 +100,10 @@ function EventSections({ eventId, session, onExpiry, section, onVenueRead }: {
     {items && <IncidentAdministration visible={section === 'incidentes'} items={items}
       session={session} event={eventId} onExpiry={onExpiry} onAccessLost={onAccessLost} refresh={invalidate} />}
     {section === 'recinto' && <VenuePage eventId={eventId} session={session} onExpiry={onExpiry} onVenueRead={onVenueRead} />}
-    {section !== 'dashboard' && section !== 'incidentes' && section !== 'recinto' && <PendingSection section={section} />}
+    {section === 'estadisticas' && <StatisticsPage eventId={eventId} session={session} onExpiry={onExpiry} />}
+    {section === 'personal' && <StaffPage eventId={eventId} session={session} onExpiry={onExpiry} />}
+    {section === 'anuncios' && <PromotionsPage eventId={eventId} session={session} onExpiry={onExpiry} />}
+    {section === 'entradas' && <TicketsPage eventId={eventId} session={session} onExpiry={onExpiry} />}
+    {section === 'buscar' && <SearchPage eventId={eventId} session={session} onExpiry={onExpiry} />}
   </>;
 }

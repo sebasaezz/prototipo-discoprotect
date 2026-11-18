@@ -19,6 +19,13 @@ export const zoneEdit = version.extend({
   kind: zoneKind.optional(), reference: notes(160).optional(),
 });
 export const pointEdit = version.extend({ name, kind: pointKind, zoneId: name.max(128), reference: name, active: z.boolean() });
+const timestamp = z.iso.datetime({ offset: true }).transform(value => new Date(value).toISOString());
+const scheduleFields = z.strictObject({
+  startsAt: timestamp, endsAt: timestamp, status: z.enum(['PLANNED', 'ACTIVE', 'ENDED']),
+});
+const validSchedule = (value: { startsAt: string; endsAt: string }) => value.startsAt < value.endsAt;
+export const eventCreation = scheduleFields.extend({ id: z.uuid(), name, venue: name, demoAttendees: z.boolean() }).refine(validSchedule);
+export const eventSchedule = scheduleFields.extend(version.shape).refine(validSchedule);
 
 type Venue = { name: string; venue: string; description: string | null; accessNotes: string | null; responseNotes: string | null };
 export type Zone = Omit<z.infer<typeof zoneEdit>, 'version' | 'kind' | 'reference'> & {
@@ -86,6 +93,44 @@ export function saveVenue(db: Db, session: Session, eventId: string, value: z.in
     return { action: 'UPDATE', result: eventForMember(db, eventId, session.personId) };
   });
   return operational ? { ...saved.result, version: saved.version } : saved.result;
+}
+
+export function readSchedule(db: Db, eventId: string) {
+  return db.prepare(`SELECT starts_at AS startsAt, ends_at AS endsAt, status, config_version AS version
+    FROM events WHERE id = ?`).get(eventId);
+}
+
+export function saveSchedule(db: Db, session: Session, eventId: string, value: z.infer<typeof eventSchedule>) {
+  const saved = change(db, session, eventId, value.version, 'VENUE', eventId, () => {
+    db.prepare('UPDATE events SET starts_at = ?, ends_at = ?, status = ? WHERE id = ?')
+      .run(value.startsAt, value.endsAt, value.status, eventId);
+    return { action: 'UPDATE', result: eventForMember(db, eventId, session.personId) };
+  });
+  return { ...saved.result, version: saved.version };
+}
+
+export function createEvent(db: Db, session: Session, value: z.infer<typeof eventCreation>) {
+  requireRole(session, 'ORGANIZER');
+  return atomic(db, () => {
+    const present = db.prepare('SELECT 1 FROM events WHERE id = ?').get(value.id);
+    if (present) {
+      requireMembership(db, session, value.id);
+      const current = eventForMember(db, value.id, session.personId);
+      if (current?.name === value.name && current.venue === value.venue && current.startsAt === value.startsAt &&
+        current.endsAt === value.endsAt && current.status === value.status) return current;
+      throw new ApiError(409, 'EVENT_EXISTS', 'El identificador corresponde a una configuración existente');
+    }
+    db.prepare('INSERT INTO events (id, name, venue, starts_at, ends_at, status) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(value.id, value.name, value.venue, value.startsAt, value.endsAt, value.status);
+    const member = db.prepare('INSERT INTO event_memberships (id, event_id, person_id, role) VALUES (?, ?, ?, ?)');
+    member.run(randomUUID(), value.id, session.personId, 'ORGANIZER');
+    if (value.demoAttendees) {
+      for (const person of db.prepare("SELECT id FROM people WHERE demo_key IN ('antonia', 'martin', 'sofia')").all()) {
+        member.run(randomUUID(), value.id, person.id, 'ATTENDEE');
+      }
+    }
+    return eventForMember(db, value.id, session.personId);
+  });
 }
 
 function updateAction(wasActive: unknown, active: boolean): Action {

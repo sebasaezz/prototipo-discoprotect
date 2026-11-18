@@ -99,11 +99,19 @@ export function ownIncidents(db: Db, eventId: string, personId: string) {
 }
 
 export function eventIncidents(db: Db, eventId: string, dispatch?: DispatchPolicy) {
+  if (dispatch) return eventDispatchIncidents(db, eventId, dispatch);
+  return eventIncidentRows(db, eventId).map(row => eventView(db, row));
+}
+
+function eventIncidentRows(db: Db, eventId: string) {
   const rows = db.prepare(`${selection} WHERE i.event_id = ? ORDER BY i.created_at DESC, i.id DESC`)
     .all(eventId) as Incident[];
-  if (!dispatch) return rows.map(row => eventView(db, row));
+  return rows;
+}
+
+export function eventDispatchIncidents(db: Db, eventId: string, dispatch: DispatchPolicy) {
   const now = Date.now();
-  return rows.map(row => {
+  return eventIncidentRows(db, eventId).map(row => {
     const item = eventView(db, row);
     return { ...item, dispatch: dispatchView(db, row, item.triage, dispatch, now) };
   }).sort(compareDispatch);

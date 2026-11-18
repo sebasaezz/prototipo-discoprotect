@@ -11,7 +11,7 @@ const profiles = [
 function insertDemo(db: Db) {
   const now = new Date().toISOString();
   const addPerson = db.prepare('INSERT INTO people VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING');
-  const addMember = db.prepare('INSERT INTO event_memberships VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING');
+  const addMember = db.prepare('INSERT INTO event_memberships VALUES (?, ?, ?, ?) ON CONFLICT(event_id, person_id) DO NOTHING');
   const addCard = db.prepare('INSERT INTO emergency_cards VALUES (?, ?, ?, ?, ?, ?, ?, 1) ON CONFLICT(id) DO NOTHING');
   const addContact = db.prepare('INSERT INTO emergency_contacts VALUES (?, ?, ?, ?, ?)');
   const addCredential = db.prepare('INSERT INTO nfc_credentials VALUES (?, ?, ?, 1, ?) ON CONFLICT(id) DO NOTHING');
@@ -37,9 +37,13 @@ function insertDemo(db: Db) {
   });
 
   addPerson.run('demo-guardia', 'guardia', 'Guardia Demo', null, now, now);
-  addMember.run('member-demo-guardia', 'demo-festival', 'demo-guardia', 'STAFF');
   addPerson.run('demo-guardia2', 'guardia2', 'Guardia Demo 2', null, now, now);
-  addMember.run('member-demo-guardia2', 'demo-festival', 'demo-guardia2', 'STAFF');
+  const hasStaffAudit = db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'event_staff_audit'").get();
+  const revoked = hasStaffAudit ? db.prepare(`SELECT 1 FROM event_staff_audit WHERE event_id = 'demo-festival'
+    AND staff_person_id = ? AND active = 0 AND changed = 1 LIMIT 1`) : null;
+  for (const id of ['demo-guardia', 'demo-guardia2']) {
+    if (!revoked?.get(id)) addMember.run(`member-${id}`, 'demo-festival', id, 'STAFF');
+  }
   addPerson.run('demo-organizador', 'organizador', 'Organizador Demo', null, now, now);
   addMember.run('member-demo-organizador', 'demo-festival', 'demo-organizador', 'ORGANIZER');
 }

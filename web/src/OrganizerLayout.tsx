@@ -28,9 +28,9 @@ export function OrganizerLayout({ section, hash, event, available, onSelect, onS
         content.current?.focus();
       }}>Saltar al contenido</a>
       <header className="workspace-header">
-        {event && <button type="button" className="secondary menu-toggle" ref={menuButton}
+        <button type="button" className="secondary menu-toggle" ref={menuButton}
           aria-expanded={menuOpen} aria-controls="workspace-nav"
-          onClick={() => setMenuOpen(open => !open)}>Menú</button>}
+          onClick={() => setMenuOpen(open => !open)}>Menú</button>
         <strong className="mobile-brand">Discoprotect</strong>
         {event && <div className="event-heading">
           <p className="event-name">{event.name}</p>
@@ -56,23 +56,23 @@ export function OrganizerLayout({ section, hash, event, available, onSelect, onS
       </header>
       <aside className={`workspace-sidebar${menuOpen ? ' menu-open' : ''}`}>
         <div className="sidebar-brand"><strong>Discoprotect</strong><span>GestiónWeb</span></div>
-        {event && <nav id="workspace-nav" aria-label="Secciones de GestiónWeb" onKeyDown={key => {
+        <nav id="workspace-nav" aria-label="Secciones de GestiónWeb" onKeyDown={key => {
           if (key.key === 'Escape' && menuOpen) {
             setMenuOpen(false);
             menuButton.current?.focus();
           }
         }}>
-          {Object.entries(sectionLabels).map(([id, label]) =>
+          {Object.entries(sectionLabels).filter(([id]) => event || id === 'eventos').map(([id, label]) =>
             <a key={id} href={`#${id}`} aria-current={id === section ? 'page' : undefined}
               onClick={() => {
                 if (menuOpen && hash === `#${id}`) menuButton.current?.focus();
                 setMenuOpen(false);
               }}>{label}</a>)}
-        </nav>}
+        </nav>
       </aside>
       <main id="contenido" className="workspace-main" ref={content} tabIndex={-1}>
         <div className="workspace-content">
-          <h1 id="page-title" tabIndex={-1}>{event ? sectionLabels[section] : 'GestiónWeb'}</h1>
+          <h1 id="page-title" tabIndex={-1}>{event || section === 'eventos' ? sectionLabels[section] : 'GestiónWeb'}</h1>
           {children}
         </div>
       </main>

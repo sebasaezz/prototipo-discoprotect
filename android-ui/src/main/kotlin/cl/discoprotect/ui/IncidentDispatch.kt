@@ -60,6 +60,7 @@ internal enum class DispatchPriority(val label: String, val icon: String, val ba
     val analysis: DispatchAnalysis?,
     val attendeeLocation: AttendeeDispatchLocation? = null,
     val operational: DispatchOperational? = null,
+    val locationEvidence: DispatchLocationEvidence? = null,
 ) {
     fun priorityLabel() = effectivePriority.label + when (prioritySource) {
         "AI_PROVISIONAL" -> " · Provisional IA"

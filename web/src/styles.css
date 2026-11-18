@@ -336,3 +336,9 @@ small { font-size: 0.9rem; }
   .indicator-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #workspace-nav { grid-template-columns: minmax(0, 1fr); }
 }
+.statistics-filters { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
+.statistics-filters label { display: grid; gap: .25rem; }
+.statistics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); gap: 1rem; }
+.distribution { list-style: none; padding: 0; }
+.distribution li { display: grid; grid-template-columns: 1fr auto; gap: .25rem; margin-bottom: .75rem; }
+.distribution meter { width: 100%; grid-column: 1 / -1; accent-color: #402078; }

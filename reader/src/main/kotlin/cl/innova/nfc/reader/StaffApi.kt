@@ -90,9 +90,23 @@ internal data class IncidentCommand(val incidentId: String, val action: Incident
 @Serializable internal data class DispatchDetail(val dispatch: IncidentDispatch, val zones: List<DispatchZone>)
 @Serializable internal data class DispatchReview(val revision: Long, val operationId: String)
 @Serializable internal data class DispatchReply(val review: DispatchReview, val dispatch: IncidentDispatch, val replayed: Boolean)
+@Serializable internal data class TicketCheck(val code: String, val operationId: String)
+@Serializable internal enum class TicketResult(val label: String) {
+    VALID("Entrada válida. Ingreso registrado."), USED("Entrada ya utilizada."), REVOKED("Entrada revocada."),
+    EXPIRED("Entrada vencida."), OTHER_EVENT("Entrada de otro evento."), INVALID("Código inválido."),
+}
+@Serializable internal data class TicketResultReply(val result: TicketResult, val replayed: Boolean)
+@Serializable internal data class StaffSearchResult(val id: String, val name: String? = null, val status: IncidentStatus? = null)
+@Serializable internal data class StaffSearchReply(val results: List<StaffSearchResult>)
 
 internal interface StaffApi {
     suspend fun health()
+    suspend fun validateTicket(session: StaffSession, event: StaffEvent, check: TicketCheck): TicketResultReply =
+        throw ApiFailure(ApiProblem.Unavailable)
+    suspend fun search(session: StaffSession, event: StaffEvent, type: String, term: String, status: IncidentStatus?, offset: Int): StaffSearchReply =
+        throw ApiFailure(ApiProblem.Unavailable)
+    suspend fun companions(session: StaffSession, event: StaffEvent, id: String): EventCompanions =
+        throw ApiFailure(ApiProblem.Unavailable)
     suspend fun login(pin: String, account: StaffAccount = StaffAccount.First): StaffSession
     suspend fun events(session: StaffSession): List<StaffEvent>
     suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident>
@@ -160,6 +174,23 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
     }
 
     private fun incidentUrl(event: StaffEvent) = eventUrl(event).addPathSegment("incidents")
+
+    override suspend fun validateTicket(session: StaffSession, event: StaffEvent, check: TicketCheck): TicketResultReply =
+        exchange(eventUrl(event).addPathSegments("tickets/validate").build(), session, json.encodeToString(check))
+
+    override suspend fun search(session: StaffSession, event: StaffEvent, type: String, term: String, status: IncidentStatus?, offset: Int): StaffSearchReply {
+        val url = eventUrl(event).addPathSegment("search").addQueryParameter("type", type)
+            .addQueryParameter("offset", offset.toString()).apply {
+                if (term.isNotBlank()) addQueryParameter(if (type == "incidents") "id" else "text", term)
+                if (status != null) addQueryParameter("status", status.name)
+            }.build()
+        return exchange(url, session)
+    }
+
+    override suspend fun companions(session: StaffSession, event: StaffEvent, id: String): EventCompanions {
+        requireReply(isIncidentUuid(id), ApiProblem.InvalidInput)
+        return exchange(incidentUrl(event).addPathSegment(id).addPathSegment("companions").build(), session)
+    }
 
     override suspend fun venue(session: StaffSession, event: StaffEvent): StaffVenue =
         exchange<StaffVenue>(eventUrl(event).addPathSegment("venue").build(), session).also { context ->

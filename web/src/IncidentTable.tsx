@@ -99,6 +99,7 @@ function DispatchCell({ item, dispatch, session, onExpiry, onAccessLost }: {
   }, [open, session, eventId, id, version, dispatch.revision, retry, onExpiry, onAccessLost]);
   const priority = dispatch.effectivePriority;
   const source = sourceLabels[dispatch.prioritySource];
+  const locationEvidence = dispatch.locationEvidence ?? dispatch.analysis?.locationEvidence;
   return <>
     <span className={`status priority-${priority.toLowerCase()}`}>
       <span aria-hidden="true">{priorityIcons[priority]} </span>{priorityLabels[priority]}{source && ` · ${source}`}
@@ -115,9 +116,9 @@ function DispatchCell({ item, dispatch, session, onExpiry, onAccessLost }: {
           Mensaje {risk.messageSeq} · «{risk.quote}»{risk.uncertain ? ' · Reporte incierto' : ''}
         </small>)}
       </>}
-      {dispatch.inferredLocation && dispatch.analysis?.locationEvidence && <>
-        <small>Seña del lugar probable · «{dispatch.analysis.locationEvidence.quote}»</small>
-        {dispatch.analysis.locationEvidence.feature && <small>En el catálogo · «{dispatch.analysis.locationEvidence.feature}»</small>}
+      {dispatch.inferredLocation && locationEvidence && <>
+        <small>Seña del lugar probable · «{locationEvidence.quote}»</small>
+        {locationEvidence.feature && <small>En el catálogo · «{locationEvidence.feature}»</small>}
       </>}
       {dispatch.attendeeLocation && <>
         <small>Zona indicada por el asistente · {dispatch.attendeeLocation.zoneName} · {dispatch.attendeeLocation.zoneId}</small>

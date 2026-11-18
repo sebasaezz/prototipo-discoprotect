@@ -12,6 +12,10 @@ import { triageDetail, reviewTriage } from './triage.js';
 import { reviewInput } from './triage-contract.js';
 import { previewPurge, purgeIncidents, purgeInput, purgeTarget } from './incident-purge.js';
 import * as venue from './venue.js';
+import { eventStatistics, statisticsQuery } from './statistics.js';
+import { changeEventStaff, eventStaff, staffChange } from './staff.js';
+import * as services from './event-services.js';
+import { eventSearch, searchQuery } from './event-search.js';
 
 export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = false,
   thresholds: Thresholds = { earlySeconds: 120, lateSeconds: 300 }, demoPurgeEnabled = false, firstAid = true) {
@@ -72,6 +76,104 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       db, attendee(request), parse(records.contactId, request.params).id, parse(records.version, request.body).version));
     api.get('/me/nfc-credential', async request => records.ownCredential(db, attendee(request)));
     api.get('/events', async request => ({ events: records.events(db, session(request).personId) }));
+    api.post('/events', async request => venue.createEvent(db, session(request), parse(venue.eventCreation, request.body)));
+    api.get('/events/:eventId/schedule', async request => {
+      const { eventId } = eventAccess(request, 'ORGANIZER');
+      return venue.readSchedule(db, eventId);
+    });
+    api.patch('/events/:eventId/schedule', async request => {
+      const { current, eventId } = eventAccess(request, 'ORGANIZER');
+      return venue.saveSchedule(db, current, eventId, parse(venue.eventSchedule, request.body));
+    });
+    api.get('/events/:eventId/statistics', async request => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId } = parse(records.eventId, request.params);
+      requireMembership(db, current, eventId);
+      return eventStatistics(db, eventId, parse(statisticsQuery, request.query), dispatch);
+    });
+    api.get('/events/:eventId/staff', async request => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId } = parse(records.eventId, request.params);
+      requireMembership(db, current, eventId);
+      return eventStaff(db, eventId);
+    });
+    api.patch('/events/:eventId/staff', async request => {
+      const current = session(request);
+      requireRole(current, 'ORGANIZER');
+      const { eventId } = parse(records.eventId, request.params);
+      return changeEventStaff(db, current, eventId, parse(staffChange, request.body));
+    });
+    function eventAccess(request: FastifyRequest, role?: 'ATTENDEE' | 'STAFF' | 'ORGANIZER') {
+      const current = session(request);
+      if (role) requireRole(current, role);
+      const { eventId } = parse(records.eventId, { eventId: (request.params as { eventId: string }).eventId });
+      requireMembership(db, current, eventId);
+      return { current, eventId };
+    }
+    const serviceId = records.eventId.extend({ id: z.uuid() });
+    const tickets = '/events/:eventId/tickets';
+    api.get(tickets, async request => {
+      const { eventId } = eventAccess(request, 'ORGANIZER');
+      return services.ticketCandidates(db, eventId, parse(services.listPage, request.query).offset);
+    });
+    api.post(tickets, async request => {
+      const { current, eventId } = eventAccess(request, 'ORGANIZER');
+      return services.issueTicket(db, current, eventId, parse(services.issueTicketInput, request.body));
+    });
+    api.post(`${tickets}/:id/revoke`, async request => {
+      const { current, eventId } = eventAccess(request, 'ORGANIZER');
+      return services.revokeTicket(db, current, eventId, parse(serviceId, request.params).id);
+    });
+    api.get(`${tickets}/mine`, async request => {
+      const { current, eventId } = eventAccess(request, 'ATTENDEE');
+      return services.ownTicket(db, eventId, current.personId);
+    });
+    api.post(`${tickets}/validate`, async request => {
+      const current = session(request);
+      if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
+      const { eventId } = parse(records.eventId, request.params);
+      return services.validateTicket(db, current, eventId, parse(services.ticketValidationInput, request.body));
+    });
+    const promotions = '/events/:eventId/promotions';
+    api.get(promotions, async request => {
+      const { current, eventId } = eventAccess(request);
+      if (current.role !== 'ORGANIZER') requireRole(current, 'ATTENDEE');
+      return services.promotions(db, eventId, current.role === 'ATTENDEE', parse(services.listPage, request.query).offset);
+    });
+    api.post(promotions, async request => {
+      const { current, eventId } = eventAccess(request, 'ORGANIZER');
+      return services.savePromotion(db, current, eventId, parse(services.promotionInput, request.body));
+    });
+    api.patch(`${promotions}/:id`, async request => {
+      const { current, eventId } = eventAccess(request, 'ORGANIZER');
+      return services.savePromotion(db, current, eventId, parse(services.promotionInput, request.body), parse(serviceId, request.params).id);
+    });
+    const companions = '/events/:eventId/companions';
+    api.get(companions, async request => {
+      const { current, eventId } = eventAccess(request, 'ATTENDEE');
+      return services.companions(db, eventId, current.personId, parse(services.listPage, request.query).offset);
+    });
+    api.post(`${companions}/invite`, async request => {
+      const { current, eventId } = eventAccess(request, 'ATTENDEE');
+      return services.companionInvite(db, current, eventId);
+    });
+    api.post(`${companions}/accept`, async request => {
+      const { current, eventId } = eventAccess(request, 'ATTENDEE');
+      return services.acceptCompanion(db, current, eventId, parse(services.companionAcceptInput, request.body).code);
+    });
+    api.post(`${companions}/:id/unlink`, async request => {
+      const { current, eventId } = eventAccess(request, 'ATTENDEE');
+      return services.closeCompanion(db, current, eventId, parse(serviceId, request.params).id);
+    });
+    api.get('/events/:eventId/search', async request => {
+      const { current, eventId } = eventAccess(request);
+      if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
+      const query = parse(searchQuery, request.query);
+      if (query.type === 'tickets') requireRole(current, 'ORGANIZER');
+      return { results: eventSearch(db, eventId, query, current.role === 'ORGANIZER') };
+    });
     api.get('/events/:eventId/venue', async request => {
       const current = session(request);
       if (current.role !== 'ORGANIZER') requireRole(current, 'STAFF');
@@ -148,6 +250,16 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
     });
     const incidentParams = records.eventId.extend(incidents.incidentId.shape);
     const incidentPath = '/events/:eventId/incidents/:id';
+    api.get(`${incidentPath}/companions`, async request => {
+      const { current, eventId } = eventAccess(request, 'STAFF');
+      const { id } = parse(incidentParams, request.params);
+      const { offset } = parse(services.listPage, request.query);
+      const incident = db.prepare(`SELECT requester_person_id FROM incidents WHERE id = ? AND event_id = ?
+        AND assigned_staff_id = ? AND status IN ('ASSIGNED', 'IN_PROGRESS')`).get(id, eventId, current.personId);
+      if (!incident) throw new ApiError(404, 'INCIDENT_NOT_FOUND', 'No tienes una atención activa para esta solicitud');
+      db.prepare('INSERT INTO companion_access_audit VALUES (?, ?, ?, ?)').run(eventId, id, current.personId, new Date().toISOString());
+      return services.companions(db, eventId, String(incident.requester_person_id), offset);
+    });
     const purgePath = '/events/:eventId/incidents/demo-purge';
     api.get(purgePath, async request => {
       const current = session(request);

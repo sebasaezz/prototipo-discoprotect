@@ -38,12 +38,19 @@ internal fun ReaderScreen(state: ReaderUiState, nfc: NfcAvailability, actions: R
 private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     var confirmation by remember(state.event?.id, state.staffId) { mutableStateOf<Pair<Incident, IncidentAction>?>(null) }
     var selectedId by remember(state.event?.id, state.staffId) { mutableStateOf<String?>(null) }
+    var services by remember(state.event?.id, state.staffId) { mutableStateOf(false) }
     var chatVisible by remember(selectedId) { mutableStateOf(false) }
     val selected = state.incidents?.firstOrNull { it.id == selectedId }
     BackHandler(selected != null) {
         if (chatVisible) chatVisible = false else selectedId = null
     }
     var note by remember(confirmation) { mutableStateOf("") }
+    if (services && state.event != null) {
+        BackHandler { services = false }
+        TextButton(onClick = { services = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a incidentes") }
+        StaffServicesScreen(actions) { id -> services = false; selectedId = id }
+        return
+    }
     if (selected != null && chatVisible) {
         Heading("Conversación", selected.requesterName)
         TextButton(onClick = { chatVisible = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a los detalles") }
@@ -66,6 +73,9 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     } else {
         TextButton(onClick = { selectedId = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a incidentes") }
         Heading("Detalle de la solicitud", selected.requesterName)
+        if (selected.status.active && selected.assignedStaff?.id == state.staffId && state.staffId != null) {
+            key(selected.id, state.staffId) { StaffCompanions(selected.id, actions) }
+        }
     }
     OutlinedButton(onClick = actions::refreshIncidents, enabled = !state.incidentsLoading && !state.incidentWriting,
         modifier = Modifier.heightIn(min = 48.dp)) {
@@ -91,6 +101,9 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     }
     if (selected == null) {
         TextButton(onClick = actions::continueReading, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ir al lector NFC") }
+        if (state.event != null) TextButton(onClick = { services = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("Recinto, control de entradas y búsqueda")
+        }
         TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) { Text("Configuración y evento") }
         state.incidents?.let { incidents ->
             val (active, history) = incidents.partition { it.status.active }
@@ -204,7 +217,7 @@ private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, action
     }
     dispatch.inferredLocation?.let {
         Field("Ubicación probable", it.label())
-        analysis?.locationEvidence?.let { evidence ->
+        (dispatch.locationEvidence ?: analysis?.locationEvidence)?.let { evidence ->
             val feature = evidence.feature?.let { clue -> " En esta zona se describe «$clue»." }.orEmpty()
             Field("Motivo", "El asistente dijo «${evidence.quote}».$feature")
         }

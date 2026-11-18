@@ -7,6 +7,7 @@ import java.io.InterruptedIOException
 import java.net.URI
 import java.time.Clock
 import java.time.Instant
+import cl.discoprotect.ui.EventCompanions
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -67,6 +68,18 @@ internal class AttendeeSession(val token: String, val expiresAt: Instant, val pe
 
 internal interface AttendeeApi {
     suspend fun health()
+    suspend fun ticket(session: AttendeeSession, eventId: String): TicketReply =
+        throw AttendeeFailure(FailureKind.Response)
+    suspend fun promotions(session: AttendeeSession, eventId: String): PromotionReply =
+        throw AttendeeFailure(FailureKind.Response)
+    suspend fun companions(session: AttendeeSession, eventId: String): EventCompanions =
+        throw AttendeeFailure(FailureKind.Response)
+    suspend fun invite(session: AttendeeSession, eventId: String): Invitation =
+        throw AttendeeFailure(FailureKind.Response)
+    suspend fun acceptInvite(session: AttendeeSession, eventId: String, code: String): AcceptedInvitation =
+        throw AttendeeFailure(FailureKind.Response)
+    suspend fun unlinkCompanion(session: AttendeeSession, eventId: String, id: String): ClosedCompanion =
+        throw AttendeeFailure(FailureKind.Response)
     suspend fun login(account: DemoAccount, onCredential: () -> Unit = {}): AttendeeSession
     suspend fun card(session: AttendeeSession): EmergencyCard
     suspend fun contacts(session: AttendeeSession): List<Contact>
@@ -89,6 +102,34 @@ internal class HttpAttendeeApi(
     private val client: OkHttpClient,
     private val clock: Clock = Clock.systemUTC(),
 ) : AttendeeApi {
+    override suspend fun ticket(session: AttendeeSession, eventId: String): TicketReply =
+        service(session, eventId, listOf("tickets", "mine"))
+
+    override suspend fun promotions(session: AttendeeSession, eventId: String): PromotionReply =
+        service(session, eventId, listOf("promotions"))
+
+    override suspend fun companions(session: AttendeeSession, eventId: String): EventCompanions =
+        service(session, eventId, listOf("companions"))
+
+    override suspend fun invite(session: AttendeeSession, eventId: String): Invitation =
+        service(session, eventId, listOf("companions", "invite"), "{}")
+
+    override suspend fun acceptInvite(session: AttendeeSession, eventId: String, code: String): AcceptedInvitation =
+        service(session, eventId, listOf("companions", "accept"), json.encodeToString(InvitationCode(code)))
+
+    override suspend fun unlinkCompanion(session: AttendeeSession, eventId: String, id: String): ClosedCompanion =
+        service(session, eventId, listOf("companions", id, "unlink"), "{}")
+
+    private suspend inline fun <reified T> service(
+        session: AttendeeSession, eventId: String, segments: List<String>, payload: String? = null,
+    ): T {
+        val url = sosEventEndpoint(eventId, segments.first()).newBuilder()
+        segments.drop(1).forEach { url.addPathSegment(it) }
+        val request = Request.Builder().url(url.build())
+        if (payload != null) request.post(payload.toRequestBody(jsonMedia))
+        return exchange(request, session.token)
+    }
+
     override suspend fun health() {
         val result = get<Health>("health")
         checkReply(result.status == "ok" && result.database == "ok", FailureKind.Server)
@@ -306,6 +347,17 @@ private fun IOException.failure() =
 private fun String.validSegment() = isNotBlank() && this !in setOf(".", "..")
 
 @Serializable private class Health(val status: String, val database: String)
+@Serializable internal data class DemoTicket(val code: String, val expiresAt: String, val usedAt: String?, val revokedAt: String?)
+@Serializable internal data class TicketReply(val ticket: DemoTicket?)
+@Serializable internal data class EventPromotion(
+    val id: String, val title: String, val description: String, val imageUrl: String?, val linkUrl: String?,
+    val endsAt: String,
+)
+@Serializable internal data class PromotionReply(val promotions: List<EventPromotion>)
+@Serializable internal data class Invitation(val code: String, val expiresAt: String)
+@Serializable private data class InvitationCode(val code: String)
+@Serializable internal data class AcceptedInvitation(val id: String)
+@Serializable internal data class ClosedCompanion(val closed: Boolean)
 @Serializable private class Login(val account: String)
 @Serializable private class SessionReply(val token: String, val role: String, val expiresAt: String)
 @Serializable private class Identity(val person: Person, val role: String)
