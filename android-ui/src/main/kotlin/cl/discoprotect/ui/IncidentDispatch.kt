@@ -34,6 +34,15 @@ internal enum class DispatchPriority(val label: String, val icon: String, val ba
 
 @Serializable internal data class DispatchLocationEvidence(val messageSeq: Long, val quote: String, val feature: String?)
 
+@Serializable internal enum class AttendeeLocationSource(val label: String) {
+    CONFIRMED_AI("Confirmada por el asistente"), INDICATED("Indicada por el asistente"),
+}
+
+@Serializable internal data class AttendeeDispatchLocation(
+    val zoneId: String, val zoneName: String, val source: AttendeeLocationSource, val messageSeq: Long,
+    val evidence: DispatchLocationEvidence,
+)
+
 @Serializable internal enum class DangerAssessment(val label: String) {
     UNCHANGED("Mantener evaluación de peligro"), CONFIRMED("Confirmar peligro actual"), CLEARED("Peligro descartado o superado"),
 }
@@ -43,6 +52,7 @@ internal enum class DispatchPriority(val label: String, val icon: String, val ba
     val humanPriority: DispatchPriority?, val elapsedSeconds: Long, val revision: Long, val evaluatedAt: String,
     val confirmedLocation: DispatchLocation?, val declaredLocation: DispatchLocation?, val inferredLocation: DispatchLocation?,
     val analysis: DispatchAnalysis?,
+    val attendeeLocation: AttendeeDispatchLocation? = null,
 ) {
     fun priorityLabel() = effectivePriority.label + when (prioritySource) {
         "AI_PROVISIONAL" -> " · Provisional IA"
@@ -53,8 +63,10 @@ internal enum class DispatchPriority(val label: String, val icon: String, val ba
 
     fun displayedLocation(): String = when {
         confirmedLocation != null -> "Confirmada · ${confirmedLocation.label()}"
-        declaredLocation != null -> "Declarada · ${declaredLocation.label()}"
+        attendeeLocation != null -> "${attendeeLocation.source.label} · ${attendeeLocation.zoneName}"
+        declaredLocation?.zoneName != null -> "Indicada por el asistente · ${declaredLocation.label()}"
         inferredLocation != null -> "Inferida por IA · ${inferredLocation.label()}"
+        declaredLocation != null -> "Declarada · ${declaredLocation.label()}"
         else -> "Ubicación desconocida"
     }
 }

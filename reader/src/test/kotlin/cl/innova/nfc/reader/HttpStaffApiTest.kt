@@ -61,18 +61,24 @@ class HttpStaffApiTest {
 
     @Test fun `dispatch decodes visual evidence and displays the verified location first`() = runBlocking {
         val id = "5c44bc28-7b70-4d42-a297-1bcd242ac1df"
-        reply("""{"zones":[],"dispatch":{"effectivePriority":"P2","prioritySource":"HUMAN","priorityReasons":[],
+        val body = """{"zones":[],"dispatch":{"effectivePriority":"P2","prioritySource":"HUMAN","priorityReasons":[],
             "humanPriority":"P2","elapsedSeconds":15,"revision":1,"evaluatedAt":"2026-11-17T22:00:00Z",
             "declaredLocation":{"zoneId":null,"zoneName":null,"text":"Junto al estand de mote"},
             "inferredLocation":{"zoneId":"entrada","zoneName":"Entrada principal","text":null},
+            "attendeeLocation":{"zoneId":"entrada","zoneName":"Entrada principal","source":"CONFIRMED_AI","messageSeq":3,
+              "evidence":{"messageSeq":1,"quote":"Junto al estand de mote","feature":"stand de mote con huesillo"}},
             "confirmedLocation":{"zoneId":"escenario","zoneName":"Escenario","text":"Junto a la valla"},
             "analysis":{"category":"OTHER","summary":"Junto al estand de mote","uncertainty":[],
               "observedAt":"2026-11-17T22:00:00Z","inputSeq":1,"locationEvidence":
-              {"messageSeq":1,"quote":"Junto al estand de mote","feature":"stand de mote con huesillo"}}}}""")
+              {"messageSeq":1,"quote":"Junto al estand de mote","feature":"stand de mote con huesillo"}}}}"""
+        reply(body)
         val dispatch = api.dispatch(session, event, id).dispatch
         assertEquals("Entrada principal", dispatch.inferredLocation?.zoneName)
         assertEquals("stand de mote con huesillo", dispatch.analysis?.locationEvidence?.feature)
         assertEquals("Confirmada · Escenario · Junto a la valla", dispatch.displayedLocation())
+        assertEquals("Confirmada por el asistente · Entrada principal",
+            dispatch.copy(confirmedLocation = null).displayedLocation())
+        assertEquals(3L, dispatch.attendeeLocation?.messageSeq)
     }
 
     @Test fun `closed server and response timeout are distinct`() = runBlocking {

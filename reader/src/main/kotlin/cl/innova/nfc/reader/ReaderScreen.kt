@@ -188,7 +188,12 @@ private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, action
         if (analysis.uncertainty.isNotEmpty()) Field("Por verificar", analysis.uncertainty.joinToString(" · "))
     }
     dispatch.declaredLocation?.let { Field("Ubicación declarada", it.label()) }
-    dispatch.confirmedLocation?.let { Field("Ubicación confirmada", it.label()) }
+    dispatch.confirmedLocation?.let { Field("Ubicación confirmada por el guardia", it.label()) }
+    dispatch.attendeeLocation?.let { location ->
+        Field(location.source.label, location.zoneName)
+        Field("Evidencia original", "«${location.evidence.quote}»")
+        if (dispatch.confirmedLocation == null) Field("Estado de la ubicación", "Pendiente de verificación en terreno.")
+    }
     dispatch.inferredLocation?.let {
         Field("Ubicación probable", it.label())
         analysis?.locationEvidence?.let { evidence ->

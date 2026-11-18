@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test, type TestContext } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApp } from '../src/app.js';
 import { chatInput, openAiChat, validateAnalysis, type ChatInput, type ChatProvider } from '../src/chat-analysis.js';
 import { createChatWorker } from '../src/chat-worker.js';
@@ -14,11 +17,11 @@ const pins = { STAFF: 'test-staff', STAFF_2: 'test-staff-two', ORGANIZER: 'test-
 const options = { model: 'gpt-6.1-sol', timeoutMs: 15_000, maxQueueAgeMs: 30_000, dailyLimit: 100, maxZones: 16 };
 const command = (text: string) => ({ clientMessageId: randomUUID(), text });
 
-async function fixture(t: TestContext) {
-  const db = openDb(':memory:');
+async function fixture(t: TestContext, path = ':memory:') {
+  let db = openDb(path);
   migrate(db);
   seed(db);
-  const app = createApp(db, pins, false, true);
+  let app = createApp(db, pins, false, true);
   t.after(async () => { await app.close(); db.close(); });
   const login = async (account: string, pin?: string) => {
     const response = await app.inject({ method: 'POST', url: prefix + '/demo/sessions', payload: { account, pin } });
@@ -42,7 +45,16 @@ async function fixture(t: TestContext) {
       page: async () => (await app.inject({ url: own + '/conversation', headers })).json(),
     };
   };
-  return { db, app, login, create, headers };
+  return {
+    get db() { return db; }, get app() { return app; }, login, create, headers,
+    async restart() {
+      await app.close();
+      db.close();
+      db = openDb(path);
+      migrate(db);
+      app = createApp(db, pins, false, true);
+    },
+  };
 }
 
 function output(input: ChatInput, reply: string | null) {
@@ -54,6 +66,144 @@ function output(input: ChatInput, reply: string | null) {
       summary: 'Se reporta una caída.', reply, ...(input.venueContext ? { zoneFeature: null } : {}),
     }) }] }] };
 }
+
+const visualReport = 'Hay alguien que no responde en el toro mecánico.';
+const bullQuote = 'en el toro mecánico';
+const visualFeature = 'toro mecánico junto al portón';
+
+function proposedAccess(input: ChatInput) {
+  const result = output(input, 'Te leo.');
+  const content = result.output[0].content[0];
+  const first = input.messages.find(message => message.type === 'ATTENDEE' && message.text === visualReport);
+  if (first) {
+    const initial = input.messages.at(-1)?.seq === first.seq;
+    content.text = JSON.stringify({ ...JSON.parse(content.text), severity: initial ? 'P0' : 'PENDING',
+      zoneId: 'acceso', zoneFeature: visualFeature, location: { seq: first.seq, quote: bullQuote },
+      danger: initial ? { kind: 'UNRESPONSIVE', evidence: { seq: first.seq, quote: 'no responde' } } : null });
+  }
+  return result;
+}
+
+test('location confirmation is local, durable and stops the reported loop without lowering P0', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'discoprotect-location-'));
+  const f = await fixture(t, join(directory, 'demo.sqlite'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  f.db.prepare("UPDATE zones SET description = ? WHERE event_id = 'demo-festival' AND id = 'acceso'").run(visualFeature);
+  const staff = await f.login('guardia', pins.STAFF);
+  const organizer = await f.login('organizador', pins.ORGANIZER);
+  let calls = 0;
+  const provider: ChatProvider = async input => { calls++; return proposedAccess(input); };
+  let worker = createChatWorker(f.db, { ...options, provider });
+  const incident = await f.create(visualReport);
+  const route = queue + '/' + incident.id;
+  const dispatch = async () => (await f.app.inject({ url: route + '/dispatch', headers: organizer })).json().dispatch;
+  await worker.tick();
+  assert.equal((await dispatch()).inferredLocation.zoneId, 'acceso');
+  assert.match((await incident.page()).messages.at(-1).text, /¿Me lo confirmas\?/);
+  await worker.stop();
+  await f.restart(); // Restart while the question is outstanding.
+  const key = randomUUID();
+  const first = await incident.send('si', key);
+  assert.equal(first.statusCode, 201, first.body);
+  assert.equal(first.json().conversation.aiStatus, 'READY');
+  assert.equal((await incident.send('si', key)).statusCode, 200);
+  assert.equal((await incident.page()).messages.length, 4);
+  assert.match((await incident.page()).messages.at(-1).text, /Registré tu ubicación indicada/);
+  assert.equal(calls, 1);
+  await f.restart(); // Restart again after the local acknowledgement.
+  const confirmed = await dispatch();
+  assert.equal(confirmed.attendeeLocation.zoneId, 'acceso');
+  assert.equal(confirmed.attendeeLocation.zoneName, 'Acceso principal');
+  assert.equal(confirmed.attendeeLocation.source, 'CONFIRMED_AI');
+  assert.equal(confirmed.attendeeLocation.evidence.quote, bullQuote);
+  assert.equal(confirmed.confirmedLocation, null);
+  assert.equal(confirmed.effectivePriority, 'P0');
+  assert.deepEqual(confirmed.criticalEvidence, { kind: 'UNRESPONSIVE', messageSeq: 1, analysisSeq: 1 });
+
+  worker = createChatWorker(f.db, { ...options, provider });
+  for (const followup of ['aloo', 'si', 'sí, estoy en Acceso principal', 'si, lo confirmo']) {
+    await incident.send(followup);
+    await worker.tick();
+  }
+  const chat = await incident.page();
+  assert.equal(chat.messages.filter((message: { text: string }) => message.text.includes('¿Me lo confirmas?')).length, 1);
+  assert.equal(chat.conversation.aiStatus, 'READY');
+  assert.equal((await dispatch()).attendeeLocation.messageSeq, first.json().message.seq);
+  assert.equal((await dispatch()).effectivePriority, 'P0');
+
+  const second = await f.create(visualReport);
+  await worker.tick();
+  const before = calls;
+  assert.equal((await second.send('Sí, lo confirmo')).json().conversation.aiStatus, 'READY');
+  await worker.tick();
+  assert.equal(calls, before);
+
+  assert.equal((await f.app.inject({ method: 'POST', url: route + '/claim', headers: staff,
+    payload: { version: 1, operationId: randomUUID() } })).statusCode, 200);
+  const review = await f.app.inject({ method: 'POST', url: route + '/dispatch/reviews', headers: staff,
+    payload: { expectedRevision: 0, operationId: randomUUID(), humanPriority: null, dangerAssessment: 'UNCHANGED',
+      confirmedLocation: { zoneId: 'escenario', text: 'Verificación en terreno' }, reason: 'Revisado presencialmente' } });
+  assert.equal(review.statusCode, 200, review.body);
+  assert.equal(review.json().dispatch.confirmedLocation.zoneId, 'escenario');
+  assert.equal(review.json().dispatch.attendeeLocation.zoneId, 'acceso');
+  assert.equal(review.json().dispatch.effectivePriority, 'P0');
+  await worker.stop();
+});
+
+test('rejected, interrupted or invalid proposals cannot be confirmed, and exact place names work offline', async t => {
+  const f = await fixture(t);
+  const organizer = await f.login('organizador', pins.ORGANIZER);
+  f.db.prepare("UPDATE zones SET description = ? WHERE event_id = 'demo-festival' AND id = 'acceso'").run(visualFeature);
+  const worker = createChatWorker(f.db, { ...options, provider: async input => proposedAccess(input) });
+  const offline = createChatWorker(f.db, { ...options, provider: null });
+  const read = async (id: string) => (await f.app.inject({ url: queue + '/' + id + '/dispatch', headers: organizer })).json().dispatch;
+
+  const rejected = await f.create(visualReport);
+  await worker.tick();
+  assert.equal((await rejected.send('No')).json().conversation.aiStatus, 'READY');
+  assert.match((await rejected.page()).messages.at(-1).text, /otro objeto/);
+  assert.equal((await read(rejected.id)).inferredLocation, null);
+  await rejected.send('sí');
+  await offline.tick();
+  assert.equal((await read(rejected.id)).attendeeLocation, null);
+  assert.equal((await rejected.page()).conversation.aiStatus, 'UNAVAILABLE');
+
+  const ambiguous = await f.create(visualReport);
+  await worker.tick();
+  await ambiguous.send('Sí, no sé');
+  await worker.tick();
+  await ambiguous.send('sí');
+  await worker.tick();
+  assert.equal((await read(ambiguous.id)).attendeeLocation, null);
+  assert.equal((await ambiguous.page()).messages.filter((message: { text: string }) => message.text.includes('¿Me lo confirmas?')).length, 1);
+
+  const deactivated = await f.create(visualReport);
+  await worker.tick();
+  const changed = await f.app.inject({ method: 'PATCH', url: prefix + '/events/demo-festival/zones/acceso', headers: organizer,
+    payload: { version: 1, name: 'Acceso principal', description: visualFeature, active: false } });
+  assert.equal(changed.statusCode, 200, changed.body);
+  assert.equal((await deactivated.send('Exactamente')).json().conversation.aiStatus, 'READY');
+  assert.equal((await read(deactivated.id)).attendeeLocation, null);
+  assert.equal((await read(deactivated.id)).inferredLocation, null);
+
+  const direct = await f.create('Sí, estoy en el Escenario.');
+  assert.equal((await direct.page()).conversation.aiStatus, 'READY');
+  assert.equal((await read(direct.id)).attendeeLocation.source, 'INDICATED');
+  assert.equal((await read(direct.id)).attendeeLocation.zoneId, 'escenario');
+  await direct.send('Me moví');
+  assert.equal((await read(direct.id)).attendeeLocation, null);
+  f.db.exec(`INSERT INTO events (id, name, venue, starts_at, ends_at, status)
+    SELECT 'otro', name, venue, starts_at, ends_at, status FROM events WHERE id = 'demo-festival';
+    INSERT INTO zones (event_id, id, name) VALUES ('otro', 'privada', 'Zona privada'),
+      ('demo-festival', 'escenario-alt', 'El Escenario');`);
+  for (const text of ['sí', 'Estoy en la Zona privada', 'Estoy en el Escenario', 'Estoy en Acceso principal']) {
+    const unknown = await f.create(text);
+    await offline.tick();
+    assert.equal((await read(unknown.id)).attendeeLocation, null);
+  }
+  await worker.stop();
+  await offline.stop();
+});
 
 test('venue context is filtered and scoped, with cited inference and an immutable label', async t => {
   const { app, create, login, db } = await fixture(t);

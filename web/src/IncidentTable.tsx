@@ -7,9 +7,17 @@ const priorityIcons = { P0: '!', P1: '▲', P2: '◆', P3: '●', PENDING: '?' }
 const sourceLabels: Record<string, string> = { HUMAN: 'Guardia', AI_PROVISIONAL: 'Provisional IA', DECLARED_DANGER: 'Peligro declarado' };
 
 function displayLocation(dispatch: Dispatch) {
+  if (dispatch.confirmedLocation) {
+    const { zoneName, text } = dispatch.confirmedLocation;
+    return ['Confirmada por el guardia', zoneName, text].filter(Boolean).join(' · ');
+  }
+  if (dispatch.attendeeLocation) {
+    const { source, zoneName } = dispatch.attendeeLocation;
+    return `${source === 'CONFIRMED_AI' ? 'Confirmada por el asistente' : 'Indicada por el asistente'} · ${zoneName}`;
+  }
   for (const [source, location] of [
-    ['Confirmada', dispatch.confirmedLocation], ['Declarada', dispatch.declaredLocation],
-    ['Inferida por IA', dispatch.inferredLocation],
+    ['Indicada por el asistente', dispatch.declaredLocation?.zoneName ? dispatch.declaredLocation : null],
+    ['Inferida por IA', dispatch.inferredLocation], ['Declarada', dispatch.declaredLocation],
   ] as const) {
     if (location) return [source, location.zoneName, location.text].filter(Boolean).join(' · ');
   }
@@ -37,7 +45,8 @@ export function IncidentTable({ items, session, onExpiry, onAccessLost, actions,
           {items.map(item => (
             <tr key={item.id}>
               <th scope="row">{item.requesterName}<code>{item.id}</code></th>
-              <td>{item.dispatch ? displayLocation(item.dispatch)
+              <td>{item.dispatch ? <>{displayLocation(item.dispatch)}
+                {item.dispatch.attendeeLocation && !item.dispatch.confirmedLocation && <small>Pendiente de verificación en terreno</small>}</>
                 : <>{item.zoneName ?? 'Ubicación desconocida'}{item.locationText && <small>{item.locationText}</small>}</>}</td>
               <td><span className={`status ${item.status.toLowerCase()}`}>{incidentLabels[item.status]}</span>
                 {item.resolutionNote && <small>{item.resolutionNote}</small>}</td>
@@ -95,6 +104,10 @@ function DispatchCell({ item, dispatch, session, onExpiry, onAccessLost }: {
     <small>{Math.floor(dispatch.elapsedSeconds / 60)} min {dispatch.elapsedSeconds % 60} s desde la emisión</small>
     <details className="triage-detail" onToggle={event => setOpen(event.currentTarget.open)}>
       <summary>Despacho y auditoría</summary>
+      {dispatch.attendeeLocation && <>
+        <small>Zona indicada por el asistente · {dispatch.attendeeLocation.zoneName} · {dispatch.attendeeLocation.zoneId}</small>
+        <small>Evidencia original · «{dispatch.attendeeLocation.evidence.quote}»</small>
+      </>}
       {dispatch.analysis && <>
         <small>Resumen sugerido por IA · {dispatch.analysis.summary}</small>
         {dispatch.analysis.uncertainty.length > 0 && <small>Por verificar · {dispatch.analysis.uncertainty.join(' · ')}</small>}

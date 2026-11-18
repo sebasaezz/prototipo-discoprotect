@@ -4,6 +4,7 @@ import { category } from './triage-contract.js';
 import { hasPersonalData, safeDescription } from './triage-provider.js';
 import { venueInfo, venuePoints, venueZones } from './venue.js';
 import { corroboratesFeature, isCurrentVisualReport, normalizeText as normalize, visualScore } from './visual-location.js';
+import { askForClue, canonicalPlaceName } from './chat-location.js';
 
 export const chatPromptVersion = 'h8.2-chat-v1';
 export const venuePromptVersion = 'h8.2-venue-v2';
@@ -146,16 +147,19 @@ function corroboratesDanger(danger: NonNullable<Analysis['danger']>, input: Chat
   });
 }
 
-function venueReply(input: ChatInput, hasFacts: boolean, zoneName: string | null) {
+export function locationQuestion(input: ChatInput, zoneName: string | null) {
   if (zoneName && /^[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N} &()/-]{0,79}$/u.test(zoneName) &&
       !/\b(?:enviad[oa]s?|despachad[oa]s?|llama|evacua|dirigete|camina|corre|tratamiento|medicamento)\b/u.test(normalize(zoneName))) {
     const proposed = `Por lo que me dices, podrías estar en «${zoneName}». ¿Me lo confirmas?`;
     if (canPublishReply(proposed, input)) return proposed;
   }
-  if (zoneName) return 'Recibí tu mensaje. ¿Puedes confirmar en qué lugar estás?';
+  return null;
+}
+
+export function replyWithoutLocation(input: ChatInput, hasFacts: boolean) {
   const latest = normalize(input.messages.at(-1)?.text ?? '');
-  if (/^(?:hola|buenas|buen(?:os dias|as tardes|as noches))[.!\s]*$/u.test(latest)) {
-    return 'Hola, estoy aquí para ayudarte. ¿Puedes contarme qué está ocurriendo?';
+  if (/^(?:hola+|alo+|buenas|buen(?:os dias|as tardes|as noches))[.!\s]*$/u.test(latest)) {
+    return 'Hola, te leo. ¿Hay algo más que quieras contarme sobre lo que está ocurriendo?';
   }
   return hasFacts ? 'Gracias por compartirlo. Tu reporte fue recibido.' : 'Recibí tu mensaje. ¿Puedes contarme qué está ocurriendo?';
 }
@@ -201,16 +205,15 @@ export function validateAnalysis(value: unknown, input: ChatInput): { result: An
   // Expose only cited facts and server-owned wording when the model has seen untrusted venue data.
   const facts = [...new Set(result.facts.map(fact => fact.quote))];
   const zoneName = input.zones.find(zone => zone.id === result.zoneId)?.name ?? null;
-  const clarification = result.zoneId === null && result.location !== null
-    ? '¿Qué otro objeto, letrero o acceso ves cerca?' : null;
+  const clarification = result.zoneId === null && result.location !== null ? askForClue : null;
   return {
     result: {
       ...result,
       locationEvidence,
       summary: facts.join(' · ').slice(0, 400) || 'Información del incidente pendiente de confirmar.',
       uncertainty: result.zoneId ? [] : ['Ubicación por confirmar'],
-      reply: zoneName ? venueReply(input, facts.length > 0, zoneName)
-        : reply === null ? null : clarification ?? venueReply(input, facts.length > 0, null),
+      reply: zoneName ? locationQuestion(input, zoneName) ?? replyWithoutLocation(input, facts.length > 0)
+        : reply === null ? null : clarification ?? replyWithoutLocation(input, facts.length > 0),
     },
     usage,
   };
@@ -256,16 +259,17 @@ export function recheckLocation(db: Db, eventId: string, result: Analysis, input
   const current = zones.find(zone => zone.id === result.zoneId);
   const namedInInput = input.zones.find(zone => zone.id === result.zoneId)?.name;
   const feature = evidence?.feature;
+  const distinctName = !current || zones.filter(zone => canonicalPlaceName(zone.name) === canonicalPlaceName(current.name)).length === 1;
   const stillSupported = evidence && feature
     ? descriptions.some(zone => zone.id === result.zoneId && zone.description.includes(feature)) &&
       corroboratesFeature(evidence.quote, feature, result.zoneId, descriptions)
     : !evidence || descriptions.filter(zone => visualScore(evidence.quote, zone.description) >= 2).length < 2 ||
       matchesZone(evidence.quote, result.zoneId, input, true);
-  if (current && safeVenueText(current.name, 160) === namedInInput &&
+  if (current && distinctName && safeVenueText(current.name, 160) === namedInInput &&
       (!input.venueContext || input.venueContext.revision === currentRevision) &&
       stillSupported) return result;
   return { ...result, zoneId: null, locationEvidence: undefined, uncertainty: ['Ubicación por confirmar'],
-    reply: result.reply === null ? null : '¿Qué otro objeto, letrero o acceso ves cerca?' };
+    reply: result.reply === null ? null : askForClue };
 }
 
 function withVenueContext(db: Db, eventId: string, input: ChatInput, zones: ReturnType<typeof venueZones>) {

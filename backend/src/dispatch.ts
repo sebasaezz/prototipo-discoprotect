@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { requireMembership, type Session } from './auth.js';
+import { attendeeChatLocation, supersededInference } from './chat-location.js';
 import { priority, type Analysis, type Priority } from './chat-analysis.js';
 import { atomic, type Db } from './db.js';
 import { ApiError } from './errors.js';
@@ -106,7 +107,8 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
     WHERE incident_id = ? AND danger_assessment <> 'UNCHANGED' ORDER BY revision DESC LIMIT 1`).get(source.id);
   const danger = (assessmentRow?.value ?? 'UNCHANGED') as Assessment;
   const results = db.prepare(`SELECT input_seq AS seq, result_json AS json, finished_at AS finishedAt, inferred_zone_name AS zoneName
-    FROM incident_chat_ai_runs WHERE incident_id = ? AND status = 'COMPLETE' ORDER BY input_seq`).all(source.id) as
+    FROM incident_chat_ai_runs WHERE incident_id = ? AND status = 'COMPLETE' AND reason IS NOT 'LOCAL_LOCATION'
+    ORDER BY input_seq`).all(source.id) as
     { seq: number; json: string; finishedAt: number; zoneName: string | null }[];
   const analyses = results.map(result => ({ ...result, analysis: JSON.parse(result.json) as Analysis }));
   const latest = analyses.at(-1);
@@ -123,13 +125,14 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
   );
   const declared = source.zoneName || source.locationText || analysis?.location
     ? { zoneId: source.zoneId, zoneName: source.zoneName, text: source.locationText ?? analysis?.location?.quote ?? null } : null;
-  const inferred = latest?.zoneName && analysis?.zoneId
+  const inferred = latest?.zoneName && analysis?.zoneId &&
+      !supersededInference(db, source.id, analysis.zoneId, analysis.location?.seq ?? latest.seq)
     ? { zoneId: analysis.zoneId, zoneName: latest.zoneName, text: null } : null;
   return {
     effectivePriority, prioritySource, priorityReasons, initialAiPriority, latestAiPriority, humanPriority,
     policyVersion: policy.version, evaluatedAt: new Date(now).toISOString(), elapsedSeconds,
     revision: row?.revision ?? 0, confirmedLocation: confirmedLocation(row),
-    declaredLocation: declared, inferredLocation: inferred, dangerAssessment: danger,
+    declaredLocation: declared, inferredLocation: inferred, attendeeLocation: attendeeChatLocation(db, source.id), dangerAssessment: danger,
     criticalEvidence: critical && evidence ? {
       kind: evidence.kind, messageSeq: evidence.evidence.seq, analysisSeq: critical.seq,
     } : null,

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireMembership, type Session } from './auth.js';
 import { atomic, type Db } from './db.js';
 import { ApiError } from './errors.js';
+import { handleLocationAnswer } from './chat-location.js';
 
 export const messageInput = z.strictObject({
   clientMessageId: z.uuid().toLowerCase(),
@@ -98,8 +99,18 @@ export function append(db: Db, id: string, type: MessageRow['type'], personId: s
     randomUUID(), id, lastSeq, type, personId, input.text, now,
     input.clientMessageId ?? null, input.clientMessageId ? hashMessage(input.text) : null);
   if (type === 'ATTENDEE') {
-    db.prepare(`INSERT INTO incident_chat_ai_runs (incident_id, input_seq, queued_at, status)
+    const queued = db.prepare(`INSERT INTO incident_chat_ai_runs (incident_id, input_seq, queued_at, status)
       SELECT id, ?, ?, 'QUEUED' FROM incidents WHERE id = ? AND status = 'OPEN'`).run(lastSeq, Date.parse(now), id);
+    if (queued.changes) {
+      const target = find(db, id)!;
+      const localReply = handleLocationAnswer(db, target, { seq: lastSeq, text: input.text });
+      if (localReply) {
+        const reply = append(db, id, 'AI', null, { text: localReply }, now);
+        db.prepare(`UPDATE incident_chat_ai_runs SET status = 'COMPLETE', reason = 'LOCAL_LOCATION', result_json = '{}',
+          message_seq = ?, finished_at = ? WHERE incident_id = ? AND input_seq = ?`)
+          .run(reply.seq, Date.parse(now), id, lastSeq);
+      }
+    }
   }
   return db.prepare(`${messages} AND m.seq = ?`).get(id, lastSeq) as MessageRow;
 }

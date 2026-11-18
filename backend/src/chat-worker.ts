@@ -1,4 +1,6 @@
-import { chatInput, chatPromptVersion, recheckLocation, validateAnalysis, venuePromptVersion, type ChatProvider } from './chat-analysis.js';
+import { chatInput, chatPromptVersion, locationQuestion, recheckLocation, replyWithoutLocation, validateAnalysis,
+  venuePromptVersion, type ChatProvider } from './chat-analysis.js';
+import { askForClue, attendeeChatLocation, canAskLocation, recordLocation } from './chat-location.js';
 import { append } from './conversations.js';
 import { atomic, type Db } from './db.js';
 import { reserveDailyCall } from './triage-worker.js';
@@ -67,10 +69,23 @@ export function createChatWorker(db: Db, options: Options, report: (event: objec
         .get(job.id, job.version);
       const reason = stopped ? 'INTERRUPTED' : !current ? 'STALE' : failure;
       const accepted = reason === null && analysis ? recheckLocation(db, job.eventId, analysis.result, input) : undefined;
+      const inferredZoneName = input.zones.find(zone => zone.id === accepted?.zoneId)?.name ?? null;
+      const question = accepted?.locationEvidence && locationQuestion(input, inferredZoneName);
+      const proposed = question && accepted?.reply === question && accepted.zoneId && inferredZoneName &&
+        accepted.locationEvidence && input.venueContext ? {
+          zoneId: accepted.zoneId, zoneName: inferredZoneName, evidenceSeq: accepted.locationEvidence.messageSeq,
+          evidence: accepted.locationEvidence.quote, feature: accepted.locationEvidence.feature, venueRevision: input.venueContext.revision,
+        } : null;
+      const target = { incidentId: job.id, eventId: job.eventId };
+      const shouldAsk = proposed && proposed.evidenceSeq === job.seq && canAskLocation(db, job.id, job.seq, proposed.zoneId);
+      const oldClue = accepted?.reply === askForClue && accepted.location?.seq !== job.seq && attendeeChatLocation(db, job.id);
+      if (accepted && ((proposed && !shouldAsk) || oldClue)) {
+        accepted.reply = replyWithoutLocation(input, accepted.facts.length > 0);
+      }
       const message = accepted?.reply ? append(db, job.id, 'AI', null,
         { text: accepted.reply }, new Date(now).toISOString()) : null;
+      if (message && shouldAsk) recordLocation(db, target, message.seq, 'PROPOSED', proposed);
       const outcome = accepted && !message ? 'UNSAFE_REPLY' : reason;
-      const inferredZoneName = input.zones.find(zone => zone.id === accepted?.zoneId)?.name ?? null;
       db.prepare(`UPDATE incident_chat_ai_runs SET status = ?, reason = ?, result_json = ?, message_seq = ?, inferred_zone_name = ?,
         finished_at = ?, input_tokens = ?, output_tokens = ? WHERE incident_id = ? AND input_seq = ?`).run(
         accepted ? 'COMPLETE' : reason === 'STALE' ? 'DISCARDED' : 'MANUAL',
