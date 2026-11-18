@@ -29,11 +29,13 @@ export function createChatWorker(db: Db, options: Options, report: (event: objec
       WHERE incident_id = ? AND input_seq > ? AND reply_seq IS NOT NULL LIMIT 1`).get(job.id, job.seq)) return null;
     const memory = readIncidentMemory(db, job.id, job.seq);
     const known = attendeeChatLocation(db, job.id);
+    const catalog = catalogLocation(db, job.id, job.seq);
     const reply = conversationalReply(memory, {
       text: String(row?.text ?? ''), failed, question: latest ? candidate?.question : null,
       acknowledgment: candidate?.acknowledgment, wording: candidate?.reply,
-      zoneName: latest && !known && candidate?.location?.seq === job.seq ? zoneName : null,
-      hasLocation: Boolean(known || candidate?.zoneId || !candidate?.location && catalogLocation(db, job.id, job.seq)?.inferred),
+      zoneName: latest && !known ? (candidate?.location?.seq === job.seq ? zoneName : null) ??
+        (catalog?.location?.seq === job.seq ? catalog.inferred?.zoneName : null) : null,
+      hasLocation: Boolean(known || candidate?.zoneId || catalog?.inferred),
       allowQuestion: latest,
     });
     const message = append(db, job.id, 'AI', null, { text: reply.text }, new Date(now).toISOString());

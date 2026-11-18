@@ -35,8 +35,9 @@ export type IncidentMemory = {
 };
 
 // Match the complete answer. A greeting, conditional or mixed reply carries no binary assertion.
-const yes = /^(?:si|correcto|exactamente)$/u;
-const no = /^no$/u;
+const yes = /^(?:(?:creo|parece) que )?(?:si|correcto|exactamente)$/u;
+const no = /^(?:(?:creo|parece) que )?no$/u;
+const unknown = /^(?:no se|no estoy segur[oa]|no puedo saber)$/u;
 const conditional = /\b(?:si |en caso de|que hago si|hipotetic|podria|simulacro|falsa alarma)/u;
 const uncertainty = /\b(?:parece|creo|no se si|quizas|tal vez|posiblemente)\b/u;
 const resolvedOrNegated = /\b(?:ya no (?:hay|sangra|convulsiona|se pegan)|(?:ya|ahora) (?:volvio a|esta respirando|responde|respondio)|hubo|habia|fue un|no hay|no esta (?:inconsciente|sangrando|convulsionando)|nunca)\b/u;
@@ -66,7 +67,8 @@ export function observeAttendee(db: Db, id: string, seq: number, original: strin
       .get(id, seq - 1)?.question as Question | null | undefined;
     const answer = yes.test(text) ? true : no.test(text) ? false : undefined;
     if (previous && answer !== undefined) {
-      const observation: Observation = { quote: safe, question: previous, answer, questionSeq: seq - 1 };
+      const observation: Observation = { quote: safe, question: previous, answer, questionSeq: seq - 1,
+        uncertain: uncertainty.test(text) };
       if (previous === 'BREATHING') {
         observation.breathing = answer ? 'NORMAL' : 'ABNORMAL';
         if (!answer) observation.risk = 'BREATHING';
@@ -77,6 +79,8 @@ export function observeAttendee(db: Db, id: string, seq: number, original: strin
       }
       if (previous === 'SCENE') observation.scene = answer ? 'DANGER' : 'SAFE';
       facts.push(observation);
+    } else if (previous && unknown.test(text)) {
+      facts.push({ quote: safe, question: previous, questionSeq: seq - 1, uncertain: true });
     } else {
       const clauses = safe.match(/[^.!?;]+[.!?;]?/gu) ?? [];
       for (const raw of clauses) {
@@ -144,7 +148,7 @@ export function readIncidentMemory(db: Db, incidentId: string, limit = Number.MA
       }
     }
     if (row.question && row.replySeq !== null && row.replySeq <= limit) {
-      memory.recentQuestions = [...memory.recentQuestions, row.question].slice(-3);
+      if (!memory.recentQuestions.includes(row.question)) memory.recentQuestions.push(row.question);
     }
     if (row.protocol) memory.protocol = row.protocol;
   }

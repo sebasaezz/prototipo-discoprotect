@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireMembership, type Session } from './auth.js';
 import { atomic, type Db } from './db.js';
 import { ApiError } from './errors.js';
-import { handleLocationAnswer } from './chat-location.js';
+import { handleLocationAnswer, inferLocalLocation } from './chat-location.js';
 import { observeAttendee, readIncidentMemory, recordTurnReply } from './chat-risk.js';
 import { conversationalReply, urgentReply } from './chat-response.js';
 
@@ -110,6 +110,7 @@ export function append(db: Db, id: string, type: MessageRow['type'], personId: s
     if (queued.changes) {
       const target = find(db, id)!;
       const location = handleLocationAnswer(db, target, { seq: lastSeq, text: input.text });
+      if (!location) inferLocalLocation(db, target, { seq: lastSeq, text: input.text });
       const memory = readIncidentMemory(db, id, lastSeq);
       const answered = facts.some(fact => fact.question !== undefined);
       const urgent = urgentReply(memory, lastSeq, firstAid);

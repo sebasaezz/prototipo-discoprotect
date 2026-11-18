@@ -1,6 +1,8 @@
 import type { Db } from './db.js';
-import { normalizeText } from './visual-location.js';
+import { isCurrentVisualReport, normalizeText, visualScore } from './visual-location.js';
 import type { Analysis } from './chat-analysis.js';
+import { safeDescription } from './triage-provider.js';
+import { venueZones } from './venue.js';
 
 type LocationState = 'PROPOSED' | 'CONFIRMED' | 'INDICATED' | 'REJECTED' | 'DISMISSED' | 'MOVED';
 type Location = {
@@ -50,12 +52,26 @@ export function catalogLocation(db: Db, incidentId: string, through = Number.MAX
     ORDER BY coalesce(json_extract(result_json, '$.location.seq'), input_seq) DESC,
       (inferred_zone_name IS NOT NULL) DESC, input_seq DESC LIMIT 1`).get(incidentId, through) as
     { seq: number; zoneName: string | null; json: string; finishedAt: number } | undefined;
-  if (!row) return undefined;
-  const analysis = JSON.parse(row.json) as Analysis;
-  const inferred = row.zoneName && analysis.zoneId &&
-    !supersededInference(db, incidentId, analysis.zoneId, analysis.location?.seq ?? row.seq)
+  const local = db.prepare(`SELECT l.input_seq AS seq, l.zone_id AS zoneId, l.zone_name AS zoneName,
+    l.quote, l.feature, m.created_at AS observedAt
+    FROM incident_local_locations l JOIN incidents i ON i.id = l.incident_id
+    JOIN events e ON e.id = i.event_id AND e.config_version = l.venue_version
+    JOIN incident_messages m ON m.incident_id = l.incident_id AND m.seq = l.input_seq
+    WHERE l.incident_id = ? AND l.input_seq <= ? ORDER BY l.input_seq DESC LIMIT 1`).get(incidentId, through) as
+    { seq: number; zoneId: string | null; zoneName: string | null; quote: string; feature: string | null; observedAt: string } | undefined;
+  const analysis = row ? JSON.parse(row.json) as Analysis : undefined;
+  const modelSeq = analysis?.location?.seq ?? row?.seq ?? 0;
+  if (local && (local.seq > modelSeq || local.seq === modelSeq && !row?.zoneName)) {
+    const inferred = local.zoneId && local.zoneName && !supersededInference(db, incidentId, local.zoneId, local.seq)
+      ? { zoneId: local.zoneId, zoneName: local.zoneName, text: null } : null;
+    return { location: { seq: local.seq, quote: local.quote }, inferred, observedAt: local.observedAt,
+      evidence: inferred ? { messageSeq: local.seq, quote: local.quote, feature: local.feature } : undefined };
+  }
+  if (!row || !analysis) return undefined;
+  const inferred = row.zoneName && analysis.zoneId && !supersededInference(db, incidentId, analysis.zoneId, modelSeq)
     ? { zoneId: analysis.zoneId, zoneName: row.zoneName, text: null } : null;
-  return { analysis, inferred, observedAt: new Date(row.finishedAt).toISOString() };
+  return { location: analysis.location, inferred, observedAt: new Date(row.finishedAt).toISOString(),
+    evidence: inferred ? analysis.locationEvidence : undefined };
 }
 
 const acknowledge = 'Entendido. Registré tu ubicación indicada. El personal deberá verificarla en terreno.';
@@ -64,6 +80,34 @@ const yes = /^(?:si(?:,? (?:lo confirmo|estoy (?:ahi|alli)))?|correcto|exactamen
 const no = /^no(?:,? (?:no estoy (?:ahi|alli)|ese no es el lugar))?$/u;
 const moved = /^(?:ya no estoy (?:ahi|alli)|me movi|me traslade|me cambie de lugar)(?:$|[ ,])/u;
 export const canonicalPlaceName = (name: string) => normalizeText(name).replace(/\s+/gu, ' ').replace(/^(?:el|la|los|las) /u, '');
+
+const placeMarker = /\b(?:al (?:lado|lao) de(?:l)?|junto a(?:l)?|cerca de(?:l)?|frente a(?:l)?|detras de(?:l)?|debajo de(?:l)?)\s+/u;
+const instructions = /\b(?:ignora|omite|desobedece|instrucciones|prompt|responde con|afirma que|devuelve|simula)\b/u;
+
+export function inferLocalLocation(db: Db, target: Target, message: { seq: number; text: string }) {
+  const messageText = safeDescription(message.text, 500, false);
+  if (!messageText) return;
+  const quote = (messageText.match(/[^.!?;,]+/gu) ?? []).map(part => part.trim())
+    .find(part => placeMarker.test(normalizeText(part)) && isCurrentVisualReport(messageText, part));
+  const changed = moved.test(normalizeText(messageText));
+  if (!quote && !changed) return;
+  const revision = db.prepare('SELECT config_version AS version FROM events WHERE id = ?').get(target.eventId)?.version;
+  if (typeof revision !== 'number') return;
+  const matches = venueZones(db, target.eventId).flatMap(zone => {
+    if (!quote || !zone.description) return [];
+    const feature = safeDescription(zone.description, 160, false);
+    if (!feature || instructions.test(normalizeText(feature)) || instructions.test(normalizeText(zone.name))) return [];
+    const span = normalizeText(quote).split(placeMarker).at(-1) ?? '';
+    const score = visualScore(span, feature);
+    return score >= 2 ? [{ zone, feature, score }] : [];
+  }).sort((a, b) => b.score - a.score);
+  if (!matches.length && !changed) return;
+  const best = matches[0];
+  const confirmedCandidate = best && (!matches[1] || best.score - matches[1].score >= 2) ? best : undefined;
+  db.prepare('INSERT INTO incident_local_locations VALUES (?, ?, ?, ?, ?, ?, ?)').run(target.incidentId, message.seq,
+    confirmedCandidate?.zone.id ?? null, confirmedCandidate?.zone.name ?? null,
+    (quote ?? messageText).slice(0, 160), confirmedCandidate?.feature ?? null, revision);
+}
 
 export function handleLocationAnswer(db: Db, target: Target, message: { seq: number; text: string }) {
   const { incidentId, eventId } = target;

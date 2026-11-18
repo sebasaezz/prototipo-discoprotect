@@ -579,8 +579,14 @@ test('visual cues resolve through description, retain evidence and abstain on am
 
   excerpt = 'inventaron un stand de mote con huesillo';
   const fabricatedClue = await create(reports[0]);
+  const immediate = await read(fabricatedClue.id);
+  assert.equal(immediate.inferredLocation.zoneId, id);
+  assert.equal(immediate.analysis, null);
+  assert.match(immediate.locationEvidence.feature, /stand de mote con huesillo/);
   await worker.tick();
-  assert.equal((await read(fabricatedClue.id)).inferredLocation, null);
+  const grounded = await read(fabricatedClue.id);
+  assert.deepEqual(grounded.locationEvidence, immediate.locationEvidence);
+  assert.doesNotMatch(JSON.stringify(grounded.locationEvidence), /inventaron/);
   excerpt = feature;
   const negated = await create('No estoy al lado del stand de mote con huesillo.');
   await worker.tick();
@@ -615,14 +621,16 @@ test('visual cues resolve through description, retain evidence and abstain on am
   assert.equal(original.inferredLocation.zoneName, zone.name);
   assert.equal(original.confirmedLocation.zoneId, 'escenario');
 
+  const alternative = await add({ ...zone, name: 'Entrada de prueba' }, 5);
+  assert.equal(alternative.statusCode, 201);
   for (const candidate of [id, randomUUID()]) {
     proposed = candidate;
-    // Supply another valid contextual zone so the worker uses the enriched contract.
-    if (candidate === id) assert.equal((await add({ ...zone, name: 'Entrada de prueba' }, 5)).statusCode, 201);
     const attempted = await create(reports[0]);
     await worker.tick();
     assert.ok(!inputs.at(-1)?.zones.some(item => item.id === candidate));
-    assert.equal((await read(attempted.id)).inferredLocation, null);
+    const dispatch = await read(attempted.id);
+    assert.equal(dispatch.inferredLocation.zoneId, alternative.json().zone.id);
+    assert.equal(dispatch.analysis, null);
     assert.equal((await attempted.page()).conversation.aiStatus, 'UNAVAILABLE');
   }
 });

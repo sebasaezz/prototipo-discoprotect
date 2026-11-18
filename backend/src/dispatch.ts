@@ -139,9 +139,9 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
   const localUrgent = prioritySource === 'AI' && effectivePriority === 'P1' && memory.consciousness?.value === 'ALTERED' &&
     latestAiPriority !== 'P0' && latestAiPriority !== 'P1';
   const locationRun = catalogLocation(db, source.id);
-  const candidate = locationRun?.analysis;
-  const declared = source.zoneName || source.locationText || candidate?.location
-    ? { zoneId: source.zoneId, zoneName: source.zoneName, text: source.locationText ?? candidate?.location?.quote ?? null } : null;
+  const location = locationRun?.location;
+  const declared = source.zoneName || source.locationText || location
+    ? { zoneId: source.zoneId, zoneName: source.zoneName, text: source.locationText ?? location?.quote ?? null } : null;
   const inferred = locationRun?.inferred ?? null;
   return {
     effectivePriority,
@@ -153,6 +153,7 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
     policyVersion: policy.version, evaluatedAt: new Date(now).toISOString(), elapsedSeconds,
     revision: row?.revision ?? 0, confirmedLocation: confirmedLocation(row),
     declaredLocation: declared, inferredLocation: inferred, inferredAt: inferred ? locationRun?.observedAt ?? null : null,
+    locationEvidence: locationRun?.evidence ?? null,
     attendeeLocation: attendeeChatLocation(db, source.id), dangerAssessment: danger,
     operational: operationalSummary(memory),
     criticalEvidence: latestRisk ? { kind: latestRisk.kind, messageSeq: latestRisk.messageSeq, analysisSeq: null } : critical && evidence ? {
@@ -161,7 +162,7 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
     analysis: analysis && latest ? {
       category: analysis.category, summary: analysis.summary, uncertainty: analysis.uncertainty,
       observedAt: new Date(latest.finishedAt).toISOString(), inputSeq: latest.seq,
-      ...(inferred && candidate?.locationEvidence ? { locationEvidence: candidate.locationEvidence } : {}),
+      ...(inferred && locationRun?.evidence ? { locationEvidence: locationRun.evidence } : {}),
     } : null,
   };
 }
