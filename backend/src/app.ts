@@ -14,7 +14,7 @@ import { previewPurge, purgeIncidents, purgeInput, purgeTarget } from './inciden
 import * as venue from './venue.js';
 
 export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = false,
-  thresholds: Thresholds = { earlySeconds: 120, lateSeconds: 300 }, demoPurgeEnabled = false) {
+  thresholds: Thresholds = { earlySeconds: 120, lateSeconds: 300 }, demoPurgeEnabled = false, firstAid = true) {
   const app = Fastify({ logger: logging, logController: new LogController({ disableRequestLogging: true }), bodyLimit: 32 * 1024 });
   const dispatch = activatePolicy(db, thresholds);
   const queueQuery = z.strictObject({ order: z.literal('dispatch').optional() });
@@ -115,7 +115,7 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       const current = session(request);
       requireRole(current, 'ATTENDEE');
       const { eventId } = parse(records.eventId, request.params);
-      const result = incidents.createIncident(db, current, eventId, parse(incidents.createInput, request.body), triageEnabled);
+      const result = incidents.createIncident(db, current, eventId, parse(incidents.createInput, request.body), triageEnabled, firstAid);
       return reply.code(result.created ? 201 : 200).send(result.body);
     });
     api.get('/me/incidents', async request => {
@@ -179,14 +179,14 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       const current = session(request);
       requireRole(current, 'ATTENDEE');
       const { id } = parse(incidents.incidentId, request.params);
-      const { created, ...body } = sendMessage(db, current, id, undefined, parse(messageInput, request.body));
+      const { created, ...body } = sendMessage(db, current, id, undefined, parse(messageInput, request.body), firstAid);
       return reply.code(created ? 201 : 200).send(body);
     });
     api.post(`${incidentPath}/conversation/messages`, async (request, reply) => {
       const current = session(request);
       requireRole(current, 'STAFF');
       const { id, eventId } = parse(incidentParams, request.params);
-      const { created, ...body } = sendMessage(db, current, id, eventId, parse(messageInput, request.body));
+      const { created, ...body } = sendMessage(db, current, id, eventId, parse(messageInput, request.body), firstAid);
       return reply.code(created ? 201 : 200).send(body);
     });
     api.get(incidentPath, async request => {

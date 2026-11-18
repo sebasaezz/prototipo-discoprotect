@@ -7,7 +7,9 @@ import { join } from 'node:path';
 import { createApp } from '../src/app.js';
 import { chatInput, openAiChat, validateAnalysis, type ChatInput, type ChatProvider } from '../src/chat-analysis.js';
 import { createChatWorker } from '../src/chat-worker.js';
-import { migrate, openDb } from '../src/db.js';
+import { migrate, openDb, type Db } from '../src/db.js';
+import { recordLocation } from '../src/chat-location.js';
+import { readChatConfig, readConfig, readTriageConfig } from '../src/config.js';
 import { evaluatePriority } from '../src/dispatch.js';
 import { seed } from '../src/seed.js';
 
@@ -17,11 +19,11 @@ const pins = { STAFF: 'test-staff', STAFF_2: 'test-staff-two', ORGANIZER: 'test-
 const options = { model: 'gpt-6.1-sol', timeoutMs: 15_000, maxQueueAgeMs: 30_000, dailyLimit: 100, maxZones: 16 };
 const command = (text: string) => ({ clientMessageId: randomUUID(), text });
 
-async function fixture(t: TestContext, path = ':memory:') {
+async function fixture(t: TestContext, path = ':memory:', firstAid = true) {
   let db = openDb(path);
   migrate(db);
   seed(db);
-  let app = createApp(db, pins, false, true);
+  let app = createApp(db, pins, false, true, undefined, false, firstAid);
   t.after(async () => { await app.close(); db.close(); });
   const login = async (account: string, pin?: string) => {
     const response = await app.inject({ method: 'POST', url: prefix + '/demo/sessions', payload: { account, pin } });
@@ -52,7 +54,7 @@ async function fixture(t: TestContext, path = ':memory:') {
       db.close();
       db = openDb(path);
       migrate(db);
-      app = createApp(db, pins, false, true);
+      app = createApp(db, pins, false, true, undefined, false, firstAid);
     },
   };
 }
@@ -84,7 +86,182 @@ function proposedAccess(input: ChatInput) {
   return result;
 }
 
-test('location confirmation is local, durable and stops the reported loop without lowering P0', async t => {
+function legacyQuestion(db: Db, id: string) {
+  // Reproduce an outstanding 010 location question, which the progressive engine no longer generates.
+  db.prepare("UPDATE incident_messages SET body = '¿Me lo confirmas?' WHERE incident_id = ? AND seq = 2").run(id);
+  db.prepare('UPDATE incident_chat_observations SET question = NULL, protocol = NULL WHERE incident_id = ?').run(id);
+  recordLocation(db, { incidentId: id, eventId: 'demo-festival' }, 2, 'PROPOSED', {
+    zoneId: 'acceso', zoneName: 'Acceso principal', evidenceSeq: 1, evidence: bullQuote, feature: visualFeature, venueRevision: 1,
+  });
+}
+
+test('progressive chat prioritizes breathing, grounds a probable place and retains danger across replies', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'discoprotect-progressive-'));
+  const f = await fixture(t, join(directory, 'demo.sqlite'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  f.db.prepare("UPDATE zones SET name = 'Entrada principal', description = ? WHERE event_id = 'demo-festival' AND id = 'acceso'")
+    .run(visualFeature);
+  const staff = await f.login('guardia', pins.STAFF);
+  const organizer = await f.login('organizador', pins.ORGANIZER);
+  let calls = 0;
+  const provider: ChatProvider = async input => {
+    calls++;
+    const raw = output(input, 'Te leo.');
+    const message = input.messages.at(-1)!;
+    const first = message.text.includes('desmayado');
+    const item = raw.output[0].content[0];
+    item.text = JSON.stringify({ ...JSON.parse(item.text), question: first ? 'LANDMARK' : 'BREATHING',
+      ...(first ? { zoneId: 'acceso', zoneFeature: visualFeature, location: { seq: message.seq, quote: 'al lado del toro mecánico' } } : {}) });
+    return raw;
+  };
+  let worker = createChatWorker(f.db, { ...options, provider });
+  const incident = await f.create('Hay alguien desmayado al lado del toro mecánico.');
+  const route = queue + '/' + incident.id;
+  const read = async (headers = staff) => (await f.app.inject({ url: route + '/dispatch', headers })).json().dispatch;
+  assert.equal((await read()).effectivePriority, 'P1');
+  await worker.tick();
+  assert.equal((await read(organizer)).inferredLocation.zoneName, 'Entrada principal');
+  assert.equal((await read()).confirmedLocation, null);
+  const first = (await incident.page()).messages.at(-1);
+  assert.match(first.text, /ubicación probable.*Entrada principal.*respira normalmente/s);
+  assert.doesNotMatch(first.text, /confirmas|letrero/);
+  await worker.stop();
+  await f.restart();
+  worker = createChatWorker(f.db, { ...options, provider });
+
+  const negative = await incident.send('No');
+  await worker.tick();
+  assert.equal(calls, 1);
+  const critical = await read();
+  assert.equal(critical.effectivePriority, 'P0');
+  assert.equal(critical.prioritySource, 'LOCAL_RISK');
+  assert.equal(critical.attendeeLocation, null);
+  assert.deepEqual(critical.operational.risks.at(-1), { kind: 'BREATHING', quote: 'No', messageSeq: negative.json().message.seq,
+    questionSeq: first.seq, uncertain: false });
+  assert.equal(critical.inferredLocation.zoneId, 'acceso');
+  assert.match((await incident.page()).messages.at(-1).text, /SAMU al 131.*RCP.*DEA/);
+
+  for (const text of ['Aló', 'Parece que no está respirando.', 'Ahora respira normalmente.']) {
+    await incident.send(text);
+    assert.equal((await read()).effectivePriority, 'P0');
+    await worker.tick();
+  }
+  const updated = await read();
+  assert.match(updated.operational.situation, /respiración normal/);
+  assert.ok(updated.operational.pending.some((text: string) => /contradictorios/.test(text)));
+  assert.ok(updated.operational.risks.some((risk: { uncertain: boolean }) => risk.uncertain));
+  const published = (await incident.page()).messages.filter((message: { author: { type: string } }) => message.author.type === 'AI');
+  assert.equal(published.filter((msg: { text: string }) => msg.text.includes('¿La persona respira normalmente?')).length, 1);
+
+  await incident.send('Ahora estoy en el Escenario.');
+  const moved = await read();
+  assert.equal(moved.attendeeLocation.zoneId, 'escenario');
+  assert.equal(moved.inferredLocation, null);
+  assert.ok(f.db.prepare(`SELECT 1 FROM incident_chat_ai_runs WHERE incident_id = ? AND inferred_zone_name = 'Entrada principal'`).get(incident.id));
+  assert.equal((await f.app.inject({ method: 'POST', url: route + '/claim', headers: staff,
+    payload: { version: 1, operationId: randomUUID() } })).statusCode, 200);
+  const review = await f.app.inject({ method: 'POST', url: route + '/dispatch/reviews', headers: staff,
+    payload: { expectedRevision: 0, operationId: randomUUID(), humanPriority: 'P2', dangerAssessment: 'CLEARED',
+      confirmedLocation: { zoneId: 'escenario', text: 'Verificado' }, reason: 'Verificado en terreno' } });
+  assert.equal(review.statusCode, 200, review.body);
+  assert.equal(review.json().dispatch.effectivePriority, 'P2');
+  const priorCount = (await incident.page()).messages.length;
+  await incident.send('Ahora no responde.');
+  const newRisk = await read();
+  assert.equal(newRisk.effectivePriority, 'P0');
+  assert.equal(newRisk.confirmedLocation.zoneId, 'escenario');
+  assert.equal((await incident.page()).messages.length, priorCount + 1); // Staff retains chat control.
+  await worker.stop();
+});
+
+test('first aid is available before the provider, with pediatric, scene and failure boundaries', async t => {
+  const f = await fixture(t);
+  const staff = await f.login('guardia', pins.STAFF);
+  const read = async (id: string) => (await f.app.inject({ url: queue + '/' + id + '/dispatch', headers: staff })).json().dispatch;
+  const offline = createChatWorker(f.db, { ...options, provider: null });
+  for (const [text, protocol, expected] of [
+    ['El lactante no responde y no respira.', 'BLS_PEDIATRIC', /ventilaciones/],
+    ['Un adulto no responde y apenas boquea.', 'BLS_ADULT', /RCP.*DEA/],
+    ['La persona no responde y no respira.', 'BLS_AGE_UNKNOWN', /edad aproximada al operador/],
+    ['La persona sangra mucho.', 'SEVERE_BLEEDING', /presiona firmemente/],
+    ['Hay fuego y una persona no respira.', 'SCENE_DANGER', /lugar seguro/],
+  ] as const) {
+    const incident = await f.create(text);
+    const dispatch = await read(incident.id);
+    const chat = await incident.page();
+    assert.equal(dispatch.effectivePriority, 'P0');
+    assert.ok(dispatch.operational.guidance.endsWith(protocol));
+    assert.match(chat.messages.at(-1).text, expected);
+    assert.match(chat.messages.at(-1).text, /131/);
+    if (protocol === 'SCENE_DANGER') assert.doesNotMatch(chat.messages.at(-1).text, /inicia RCP/);
+    await offline.tick();
+    assert.equal((await incident.page()).messages.length, chat.messages.length);
+  }
+
+  for (const text of ['Si la persona no respira, ¿qué hago?', 'No están pegando. No hay fuego.', 'No está inconsciente.']) {
+    const incident = await f.create(text);
+    assert.notEqual((await read(incident.id)).effectivePriority, 'P0');
+    await offline.tick();
+    assert.match((await incident.page()).messages.at(-1).text, /Tu mensaje quedó registrado/);
+  }
+
+  const timed = await f.create('Alguien se desmayó.');
+  const timeout = createChatWorker(f.db, { ...options, timeoutMs: 1, provider: async () => {
+    await new Promise(resolve => setTimeout(resolve, 15));
+    return {};
+  } });
+  await timeout.tick();
+  assert.equal((await timed.page()).conversation.aiStatus, 'UNAVAILABLE');
+  assert.match((await timed.page()).messages.at(-1).text, /respira normalmente/);
+  assert.equal((await read(timed.id)).effectivePriority, 'P1');
+  assert.equal(f.db.prepare('SELECT reason FROM incident_chat_ai_runs WHERE incident_id = ?').get(timed.id)?.reason, 'TIMEOUT');
+  await timeout.stop();
+  await offline.stop();
+  const disabled = await fixture(t, ':memory:', false);
+  const urgentWithGuidanceOff = await disabled.create('No responde y no respira.');
+  const response = (await urgentWithGuidanceOff.page()).messages.at(-1).text;
+  assert.match(response, /131/);
+  assert.doesNotMatch(response, /RCP|DEA/);
+});
+
+test('short answers use the selected question, with explicit independent chat configuration', async t => {
+  const f = await fixture(t);
+  const staff = await f.login('guardia', pins.STAFF);
+  let question = 'LANDMARK';
+  const worker = createChatWorker(f.db, { ...options, separateBudget: true, provider: async input => {
+    const value = output(input, 'Te leo.');
+    const content = value.output[0].content[0];
+    content.text = JSON.stringify({ ...JSON.parse(content.text), question });
+    return value;
+  } });
+  const incident = await f.create('Estoy en un pasillo.');
+  await worker.tick();
+  assert.match((await incident.page()).messages.at(-1).text, /letrero/);
+  await incident.send('No');
+  question = 'SCENE';
+  await incident.send('Hay alguien pidiendo ayuda.');
+  await worker.tick();
+  assert.match((await incident.page()).messages.at(-1).text, /algún peligro/);
+  await incident.send('Sí');
+  await worker.tick();
+  const row = (await f.app.inject({ url: queue + '/' + incident.id + '/dispatch', headers: staff })).json().dispatch;
+  assert.equal(row.attendeeLocation, null);
+  assert.notEqual(row.effectivePriority, 'P0');
+  assert.match(row.operational.situation, /peligro en la escena/);
+  const env = { TRIAGE_ENABLED: 'false', CHAT_AI_ENABLED: 'true', OPENAI_API_KEY: 'test-key', CHAT_AI_DAILY_LIMIT: '7',
+    FIRST_AID_ENABLED: 'false' };
+  assert.equal(readTriageConfig(env).key, undefined);
+  assert.ok(readChatConfig(env).key);
+  assert.equal(readChatConfig(env).dailyLimit, 7);
+  assert.equal(readChatConfig(env).separateBudget, true);
+  assert.equal(readConfig(env).firstAid, false);
+  assert.equal(readChatConfig({ ...env, TRIAGE_ENABLED: 'true', CHAT_AI_ENABLED: 'false' }).key, undefined);
+  assert.equal(f.db.prepare('SELECT reserved FROM chat_ai_daily_usage').get()?.reserved, 2);
+  assert.equal(f.db.prepare('SELECT reserved FROM triage_daily_usage').get(), undefined);
+  await worker.stop();
+});
+
+test('outstanding 010 confirmations survive restart without repeating the question or lowering P0', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'discoprotect-location-'));
   const f = await fixture(t, join(directory, 'demo.sqlite'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -98,6 +275,7 @@ test('location confirmation is local, durable and stops the reported loop withou
   const route = queue + '/' + incident.id;
   const dispatch = async () => (await f.app.inject({ url: route + '/dispatch', headers: organizer })).json().dispatch;
   await worker.tick();
+  legacyQuestion(f.db, incident.id);
   assert.equal((await dispatch()).inferredLocation.zoneId, 'acceso');
   assert.match((await incident.page()).messages.at(-1).text, /¿Me lo confirmas\?/);
   await worker.stop();
@@ -133,6 +311,7 @@ test('location confirmation is local, durable and stops the reported loop withou
 
   const second = await f.create(visualReport);
   await worker.tick();
+  legacyQuestion(f.db, second.id);
   const before = calls;
   assert.equal((await second.send('Sí, lo confirmo')).json().conversation.aiStatus, 'READY');
   await worker.tick();
@@ -160,6 +339,7 @@ test('rejected, interrupted or invalid proposals cannot be confirmed, and exact 
 
   const rejected = await f.create(visualReport);
   await worker.tick();
+  legacyQuestion(f.db, rejected.id);
   assert.equal((await rejected.send('No')).json().conversation.aiStatus, 'READY');
   assert.match((await rejected.page()).messages.at(-1).text, /otro objeto/);
   assert.equal((await read(rejected.id)).inferredLocation, null);
@@ -170,6 +350,7 @@ test('rejected, interrupted or invalid proposals cannot be confirmed, and exact 
 
   const ambiguous = await f.create(visualReport);
   await worker.tick();
+  legacyQuestion(f.db, ambiguous.id);
   await ambiguous.send('Sí, no sé');
   await worker.tick();
   await ambiguous.send('sí');
@@ -179,6 +360,7 @@ test('rejected, interrupted or invalid proposals cannot be confirmed, and exact 
 
   const deactivated = await f.create(visualReport);
   await worker.tick();
+  legacyQuestion(f.db, deactivated.id);
   const changed = await f.app.inject({ method: 'PATCH', url: prefix + '/events/demo-festival/zones/acceso', headers: organizer,
     payload: { version: 1, name: 'Acceso principal', description: visualFeature, active: false } });
   assert.equal(changed.statusCode, 200, changed.body);
@@ -347,8 +529,8 @@ test('visual cues resolve through description, retain evidence and abstain on am
     assert.equal(dispatch.confirmedLocation, null);
     assert.deepEqual(dispatch.analysis.locationEvidence, { messageSeq: 1, quote, feature });
     const reply = (await incident.page()).messages.at(-1).text;
-    assert.match(reply, /podrías estar en «Entrada principal».*¿Me lo confirmas\?/);
-    assert.doesNotMatch(reply, /llegará|confirmada/);
+    assert.match(reply, /ubicación probable es «Entrada principal»/);
+    assert.doesNotMatch(reply, /llegará|confirmada|Me lo confirmas/);
   }
 
   const route = queue + '/' + incidents[0].id;
@@ -378,7 +560,7 @@ test('visual cues resolve through description, retain evidence and abstain on am
   await worker.tick();
   assert.equal(inputs.at(-1)?.zones.length, 1);
   assert.equal((await read(ambiguous.id)).inferredLocation, null);
-  assert.match((await ambiguous.page()).messages.at(-1).text, /otro objeto/);
+  assert.match((await ambiguous.page()).messages.at(-1).text, /letrero u otra referencia/);
   assert.equal((await edit(otherId, { ...nearby, active: false }, 3)).statusCode, 200);
 
   let release!: () => void;
@@ -393,7 +575,7 @@ test('visual cues resolve through description, retain evidence and abstain on am
   }
   await tick;
   assert.equal((await read(pending.id)).inferredLocation, null);
-  assert.match((await pending.page()).messages.at(-1).text, /otro objeto/);
+  assert.doesNotMatch((await pending.page()).messages.at(-1).text, /Entrada principal/);
   const original = await read(incidents[0].id);
   assert.equal(original.analysis.locationEvidence.feature, feature);
   assert.equal(original.inferredLocation.zoneName, zone.name);
@@ -436,6 +618,11 @@ test('conversational SOS replies to every turn, reports failures and stops at ha
     if (text === 'Antes del traspaso') await handoffGate;
     if (text === 'Simular error') throw new Error('PROVIDER_ERROR');
     const generated = output(input, replies.get(text) ?? null);
+    if (text === 'ayuda' || text === 'Estamos junto a la tarima.') {
+      const content = generated.output[0].content[0];
+      content.text = JSON.stringify({ ...JSON.parse(content.text), acknowledgment: text === 'ayuda' ? 'EMPATHY' : 'UPDATE',
+        question: 'AFFECTED' });
+    }
     if (text === 'hola') {
       const content = generated.output[0].content[0];
       content.text = JSON.stringify({ ...JSON.parse(content.text), facts: [], severity: 'PENDING' });
@@ -463,10 +650,11 @@ test('conversational SOS replies to every turn, reports failures and stops at ha
   const aiText = (snapshot: typeof page) => snapshot.messages
     .filter((item: { author: { type: string } }) => item.author.type === 'AI')
     .map((item: { text: string }) => item.text);
-  assert.deepEqual(aiText(page), ['hola', 'ayuda', '?', 'Estamos junto a la tarima.'].map(text => replies.get(text)));
+  assert.deepEqual(aiText(page), ['Hola, te leo.', 'Entiendo que esto puede asustar.', 'Te leo.',
+    'Entendido, anoté lo que me cuentas. ¿Hay alguien más afectado?']);
   assert.equal(page.conversation.aiStatus, 'READY');
   assert.deepEqual(requests.map(input => input.messages.at(-1)?.text), ['hola', 'ayuda', '?', 'Estamos junto a la tarima.']);
-  assert.deepEqual(requests[1].messages.map(message => message.text), ['hola', replies.get('hola'), 'ayuda']);
+  assert.deepEqual(requests[1].messages.map(message => message.text), ['hola', 'Hola, te leo.', 'ayuda']);
   assert.ok(requests[0].zones.some(zone => zone.aliases.includes('la tarima')));
   const runs = db.prepare('SELECT input_seq AS input, message_seq AS reply FROM incident_chat_ai_runs ORDER BY input_seq').all();
   assert.equal(runs.length, 4);
@@ -478,14 +666,15 @@ test('conversational SOS replies to every turn, reports failures and stops at ha
     await worker.tick();
     const failed = await incident.page();
     assert.equal(failed.conversation.aiStatus, 'UNAVAILABLE', text);
-    assert.equal(aiText(failed).length, 4);
+    assert.match(aiText(failed).at(-1) ?? '', /Tu mensaje quedó registrado/);
     assert.equal(db.prepare('SELECT reason FROM incident_chat_ai_runs ORDER BY input_seq DESC LIMIT 1').get()?.reason, reason);
   }
 
   await incident.send('Aclaración final');
   await worker.tick();
   assert.equal((await incident.page()).conversation.aiStatus, 'READY');
-  assert.equal(aiText(await incident.page()).at(-1), replies.get('Aclaración final'));
+  assert.equal(aiText(await incident.page()).at(-1), 'Gracias por contármelo.');
+  const publishedBeforeClaim = aiText(await incident.page()).length;
   await incident.send('Antes del traspaso');
   const inFlight = worker.tick();
   await incident.send('Todavía necesito ayuda.');
@@ -496,7 +685,7 @@ test('conversational SOS replies to every turn, reports failures and stops at ha
   await inFlight;
   await worker.tick();
   assert.equal((await incident.page()).conversation.control, 'STAFF');
-  assert.equal(aiText(await incident.page()).length, 5);
+  assert.equal(aiText(await incident.page()).length, publishedBeforeClaim);
   assert.equal(db.prepare("SELECT count(*) AS n FROM incident_chat_ai_runs WHERE status = 'DISCARDED'").get()?.n, 2);
   assert.equal(db.prepare('SELECT reserved FROM triage_daily_usage').get()?.reserved, 9);
 });

@@ -34,6 +34,12 @@ internal enum class DispatchPriority(val label: String, val icon: String, val ba
 
 @Serializable internal data class DispatchLocationEvidence(val messageSeq: Long, val quote: String, val feature: String?)
 
+@Serializable internal data class DispatchRisk(val kind: String, val messageSeq: Long, val quote: String, val uncertain: Boolean)
+
+@Serializable internal data class DispatchOperational(
+    val situation: String, val pending: List<String>, val guidance: String?, val risks: List<DispatchRisk>,
+)
+
 @Serializable internal enum class AttendeeLocationSource(val label: String) {
     CONFIRMED_AI("Confirmada por el asistente"), INDICATED("Indicada por el asistente"),
 }
@@ -53,11 +59,14 @@ internal enum class DispatchPriority(val label: String, val icon: String, val ba
     val confirmedLocation: DispatchLocation?, val declaredLocation: DispatchLocation?, val inferredLocation: DispatchLocation?,
     val analysis: DispatchAnalysis?,
     val attendeeLocation: AttendeeDispatchLocation? = null,
+    val operational: DispatchOperational? = null,
 ) {
     fun priorityLabel() = effectivePriority.label + when (prioritySource) {
         "AI_PROVISIONAL" -> " · Provisional IA"
         "HUMAN" -> " · Guardia"
         "DECLARED_DANGER" -> " · Peligro declarado"
+        "LOCAL_RISK" -> " · Señal crítica del chat"
+        "LOCAL_URGENT" -> " · Señal urgente del chat"
         else -> ""
     }
 

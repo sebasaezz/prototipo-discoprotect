@@ -4,6 +4,8 @@ import { requireMembership, type Session } from './auth.js';
 import { atomic, type Db } from './db.js';
 import { ApiError } from './errors.js';
 import { handleLocationAnswer } from './chat-location.js';
+import { observeAttendee, readIncidentMemory, recordTurnReply } from './chat-risk.js';
+import { conversationalReply, urgentReply } from './chat-response.js';
 
 export const messageInput = z.strictObject({
   clientMessageId: z.uuid().toLowerCase(),
@@ -53,11 +55,14 @@ function control(row: ConversationRow) {
 
 function view(db: Db, row: ConversationRow) {
   const state = control(row);
-  const job = db.prepare(`SELECT status, message_seq AS messageSeq FROM incident_chat_ai_runs
+  const job = db.prepare(`SELECT status, reason, message_seq AS messageSeq FROM incident_chat_ai_runs
     WHERE incident_id = ? AND input_seq = ?`).get(row.incidentId, row.lastAttendeeSeq);
+  const offeredGuidance = job && job.messageSeq !== null && db.prepare(`SELECT 1 FROM incident_chat_observations
+    WHERE incident_id = ? AND input_seq = ? AND protocol IS NOT NULL`).get(row.incidentId, row.lastAttendeeSeq);
   const aiStatus = state !== 'AUTO' || !job ? 'MANUAL'
+    : offeredGuidance ? 'READY'
     : job?.status === 'QUEUED' || job?.status === 'RUNNING' ? 'PENDING'
-    : job.status === 'COMPLETE' && job.messageSeq !== null ? 'READY' : 'UNAVAILABLE';
+    : job.status === 'COMPLETE' && job.messageSeq !== null && job.reason !== 'UNSAFE_REPLY' ? 'READY' : 'UNAVAILABLE';
   return {
     incidentId: row.incidentId, control: state, controlVersion: row.version, lastSeq: row.lastSeq,
     guard: row.staffId ? { id: row.staffId, displayName: row.staffName } : null,
@@ -90,7 +95,7 @@ function hashMessage(text: string) {
 }
 
 export function append(db: Db, id: string, type: MessageRow['type'], personId: string | null,
-  input: { text: string; clientMessageId?: string }, now: string) {
+  input: { text: string; clientMessageId?: string }, now: string, firstAid = true) {
   const { lastSeq } = db.prepare(`UPDATE incident_conversations SET last_seq = last_seq + 1,
     last_attendee_seq = CASE WHEN ? = 'ATTENDEE' THEN last_seq + 1 ELSE last_attendee_seq END
     WHERE incident_id = ? RETURNING last_seq AS lastSeq`).get(type, id) as { lastSeq: number };
@@ -99,16 +104,28 @@ export function append(db: Db, id: string, type: MessageRow['type'], personId: s
     randomUUID(), id, lastSeq, type, personId, input.text, now,
     input.clientMessageId ?? null, input.clientMessageId ? hashMessage(input.text) : null);
   if (type === 'ATTENDEE') {
+    const facts = observeAttendee(db, id, lastSeq, input.text);
     const queued = db.prepare(`INSERT INTO incident_chat_ai_runs (incident_id, input_seq, queued_at, status)
       SELECT id, ?, ?, 'QUEUED' FROM incidents WHERE id = ? AND status = 'OPEN'`).run(lastSeq, Date.parse(now), id);
     if (queued.changes) {
       const target = find(db, id)!;
-      const localReply = handleLocationAnswer(db, target, { seq: lastSeq, text: input.text });
-      if (localReply) {
-        const reply = append(db, id, 'AI', null, { text: localReply }, now);
-        db.prepare(`UPDATE incident_chat_ai_runs SET status = 'COMPLETE', reason = 'LOCAL_LOCATION', result_json = '{}',
-          message_seq = ?, finished_at = ? WHERE incident_id = ? AND input_seq = ?`)
-          .run(reply.seq, Date.parse(now), id, lastSeq);
+      const location = handleLocationAnswer(db, target, { seq: lastSeq, text: input.text });
+      const memory = readIncidentMemory(db, id, lastSeq);
+      const answered = facts.some(fact => fact.question !== undefined);
+      const urgent = urgentReply(memory, lastSeq, firstAid);
+      const local = urgent ?? (location ? { text: location, question: null, protocol: null }
+        : answered ? conversationalReply(memory, { text: input.text, acknowledgment: 'UPDATE' }) : null);
+      if (local) {
+        const reply = append(db, id, 'AI', null, { text: local.text }, now);
+        recordTurnReply(db, id, lastSeq, reply.seq, local.question, local.protocol);
+        if (answered || location && !urgent) {
+          db.prepare(`UPDATE incident_chat_ai_runs SET status = 'COMPLETE', reason = 'LOCAL_LOCATION', result_json = '{}',
+            message_seq = ?, finished_at = ? WHERE incident_id = ? AND input_seq = ?`)
+            .run(reply.seq, Date.parse(now), id, lastSeq);
+        } else {
+          db.prepare('UPDATE incident_chat_ai_runs SET message_seq = ? WHERE incident_id = ? AND input_seq = ?')
+            .run(reply.seq, id, lastSeq);
+        }
       }
     }
   }
@@ -116,9 +133,9 @@ export function append(db: Db, id: string, type: MessageRow['type'], personId: s
 }
 
 export function createConversation(db: Db, id: string, mode: 'CHAT' | 'SOS', personId: string,
-  first: MessageInput | undefined, now: string) {
+  first: MessageInput | undefined, now: string, firstAid = true) {
   db.prepare('INSERT INTO incident_conversations (incident_id, creation_mode, created_at) VALUES (?, ?, ?)').run(id, mode, now);
-  if (first) append(db, id, 'ATTENDEE', personId, first, now);
+  if (first) append(db, id, 'ATTENDEE', personId, first, now, firstAid);
   return creationReceipt(db, id, personId, mode, first);
 }
 
@@ -142,7 +159,7 @@ export function readConversation(db: Db, session: Session, id: string, eventId: 
   return { conversation: view(db, row), messages: items, nextAfterSeq: items.at(-1)?.seq ?? afterSeq, hasMore: page.length > limit };
 }
 
-export function sendMessage(db: Db, session: Session, id: string, eventId: string | undefined, input: MessageInput) {
+export function sendMessage(db: Db, session: Session, id: string, eventId: string | undefined, input: MessageInput, firstAid = true) {
   return atomic(db, () => {
     const row = scope(db, session, id, eventId);
     if (session.role === 'STAFF' && row.staffId !== session.personId) {
@@ -163,7 +180,8 @@ export function sendMessage(db: Db, session: Session, id: string, eventId: strin
       WHERE incident_id = ? AND author_person_id = ? AND created_at > ? ORDER BY created_at LIMIT 1 OFFSET 19`)
       .get(id, session.personId, new Date(now - 60_000).toISOString());
     if (recent) throw new ApiError(429, 'CHAT_RATE_LIMIT', 'Espera antes de enviar otro mensaje', { retryAfter: 60 });
-    const message = append(db, id, session.role === 'STAFF' ? 'STAFF' : 'ATTENDEE', session.personId, input, new Date(now).toISOString());
+    const message = append(db, id, session.role === 'STAFF' ? 'STAFF' : 'ATTENDEE', session.personId, input,
+      new Date(now).toISOString(), firstAid);
     return { created: true, message: messageView(message, session.personId), conversation: view(db, find(db, id)!) };
   });
 }

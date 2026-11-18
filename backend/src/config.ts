@@ -12,6 +12,7 @@ const schema = z.object({
   DEMO_ORGANIZER_PIN: pin,
   ALLOW_DEMO_RESET: z.enum(['true', 'false']).default('false'),
   DEMO_PURGE_ENABLED: z.enum(['true', 'false']).default('false'),
+  FIRST_AID_ENABLED: z.enum(['true', 'false']).default('true'),
   DISPATCH_EARLY_SECONDS: z.coerce.number().int().positive().default(120),
   DISPATCH_LATE_SECONDS: z.coerce.number().int().positive().default(300),
 }).refine(value => value.DISPATCH_EARLY_SECONDS < value.DISPATCH_LATE_SECONDS, {
@@ -27,6 +28,9 @@ const workerSchema = z.object({
 });
 
 const chatSchema = z.object({
+  CHAT_AI_ENABLED: z.enum(['true', 'false']).optional(),
+  CHAT_AI_DAILY_LIMIT: z.coerce.number().int().min(1).max(10_000).optional(),
+  CHAT_AI_MAX_QUEUE_AGE_MS: z.coerce.number().int().min(1).max(300_000).optional(),
   OPENAI_CHAT_MODEL: z.string().regex(/^[\w.-]{1,128}$/).default('gpt-6.1-sol'),
   CHAT_AI_TIMEOUT_MS: z.coerce.number().int().min(1).max(60_000).default(15_000),
   CHAT_AI_MAX_ZONES: z.coerce.number().int().min(1).max(32).default(16),
@@ -36,13 +40,17 @@ export function readChatConfig(env: NodeJS.ProcessEnv) {
   const common = readTriageConfig(env);
   const settings = chatSchema.safeParse(env);
   const values = settings.success ? settings.data : chatSchema.parse({});
+  const key = env.OPENAI_API_KEY?.trim();
   return {
-    key: settings.success ? common.key : undefined,
+    key: settings.success && values.CHAT_AI_ENABLED !== undefined
+      ? values.CHAT_AI_ENABLED === 'true' && key && /^[\x21-\x7e]+$/.test(key) ? key : undefined
+      : settings.success ? common.key : undefined,
     model: values.OPENAI_CHAT_MODEL,
     timeoutMs: values.CHAT_AI_TIMEOUT_MS,
     maxZones: values.CHAT_AI_MAX_ZONES,
-    maxQueueAgeMs: common.maxQueueAgeMs,
-    dailyLimit: common.dailyLimit,
+    maxQueueAgeMs: values.CHAT_AI_MAX_QUEUE_AGE_MS ?? common.maxQueueAgeMs,
+    dailyLimit: values.CHAT_AI_DAILY_LIMIT ?? common.dailyLimit,
+    separateBudget: values.CHAT_AI_DAILY_LIMIT !== undefined,
   };
 }
 
@@ -74,6 +82,7 @@ export function readConfig(env: NodeJS.ProcessEnv) {
     pins: { STAFF: config.DEMO_STAFF_PIN, STAFF_2: config.DEMO_STAFF_2_PIN, ORGANIZER: config.DEMO_ORGANIZER_PIN },
     allowReset: config.ALLOW_DEMO_RESET === 'true',
     demoPurgeEnabled: config.DEMO_PURGE_ENABLED === 'true',
+    firstAid: config.FIRST_AID_ENABLED === 'true',
     dispatchThresholds: { earlySeconds: config.DISPATCH_EARLY_SECONDS, lateSeconds: config.DISPATCH_LATE_SECONDS },
   };
 }

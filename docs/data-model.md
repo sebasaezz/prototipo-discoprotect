@@ -19,7 +19,7 @@ Los identificadores se tratan como cadenas opacas y los tiempos se guardan en UT
 
 La ficha y sus contactos comparten una versión. Toda mutación exitosa aumenta esa versión y actualiza la fecha. La resolución NFC devuelve ambos en una sola lectura consistente. El seed provisiona seis cuentas y tres fichas ficticias. Las ejecuciones posteriores preservan las ediciones y eliminaciones de contactos de las fichas existentes. La restauración explícita recrea las cuentas, el evento demo y sus registros relacionados con cascada. La cuota diaria y las tablas separadas de purga se conservan.
 
-## Migraciones 001–010
+## Migraciones 001–011
 
 | Migración | Datos que agrega o cambia |
 | --- | --- |
@@ -33,6 +33,7 @@ La ficha y sus contactos comparten una versión. Toda mutación exitosa aumenta 
 | `008` | Reconstruye `incidents` e `incident_transitions` para admitir los nuevos estados y transiciones. Agrega un índice único parcial para guardias activos y las tablas de auditoría de purga. |
 | `009` | Extiende eventos y zonas. Crea puntos operativos y auditoría versionada. Registra revisión del contexto de IA y copia el nombre de zona inferida de análisis anteriores según el catálogo al migrar. |
 | `010` | Agrega `incident_chat_locations` para vincular pregunta, respuesta, zona y evidencia a las secuencias del chat. Las preguntas publicadas antes de actualizar quedan como historial. |
+| `011` | Registra observaciones por mensaje, la pregunta efectivamente publicada y el protocolo aplicado. Agrega la secuencia observada a las revisiones de guardia y un contador diario independiente opcional para el chat. |
 
 La 008 comprueba si un guardia tiene más de un incidente en `ASSIGNED` o `IN_PROGRESS`. Si detecta duplicados, aborta con un error antes de reconstruir las tablas. Requiere regularizar esas asignaciones de forma explícita. Durante la reconstrucción, el migrador desactiva temporalmente el enforcement de claves foráneas para preservar filas dependientes, ejecuta `PRAGMA foreign_key_check` antes de confirmar y vuelve a activar la validación. [Preparación de una base anterior](current-workflow.md#7-despliegue-local)
 
@@ -43,6 +44,8 @@ La 008 comprueba si un guardia tiene más de un incidente en `ASSIGNED` o `IN_PR
 Cada chat conserva `last_seq` y `last_attendee_seq`. La secuencia y la clave de mensaje del cliente son únicas por conversación. Los mensajes de IA se enlazan con la fila del trabajo que los originó. Los turnos pueden quedar en cola, en ejecución, completados, en atención manual o descartados. Un análisis válido con respuesta descartada por seguridad puede conservarse sin un mensaje asociado. `triage_daily_usage` cuenta reservas por día UTC compartidas por ambas modalidades de IA. Los intentos se reservan antes de llamar al proveedor.
 
 Las transiciones de ubicación del chat se anexan por secuencia. Cada pregunta guarda zona, revisión del catálogo y evidencia. La respuesta siguiente puede confirmar, rechazar o descartar la propuesta. Una indicación directa guarda el nombre y el ID canónicos. Los turnos con respuesta local se registran como `LOCAL_LOCATION` y quedan fuera del cálculo de prioridad de IA. El resultado de peligro anterior conserva su evidencia.
+
+`incident_chat_observations` conserva hechos reportados con su secuencia, incertidumbre, pregunta precedente y, cuando corresponde, una respuesta local y el protocolo versionado. El despacho deriva el estado reciente y conserva señales críticas anteriores para auditoría. Las revisiones nuevas registran el último mensaje de asistente observado. Esto permite volver a elevar la prioridad ante evidencia nueva, sin reabrir evidencia ya evaluada.
 
 Los turnos nuevos guardan el nombre de la zona de su catálogo de entrada si la inferencia se acepta. También guardan la revisión cuando reciben contexto ampliado. El análisis `h8.2-venue-v2` congela en `result_json.locationEvidence` la secuencia, cita del asistente y fragmento de descripción corroborado. Un cambio de configuración mientras el proveedor responde puede invalidar la propuesta antes de publicarla. Una vez guardado el análisis, sus citas y nombre se preservan aunque cambie la configuración. El esquema 009 admite esta evidencia en JSON y los turnos históricos conservan su formato.
 

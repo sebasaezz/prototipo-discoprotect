@@ -133,6 +133,7 @@ internal fun IncidentChat(
     }
 
     Text("Conversación", style = MaterialTheme.typography.titleMedium)
+    if (attendee) Text("Prototipo académico. Ante una emergencia médica en Chile, llama al 131.")
     val state = chat
     if (disconnected) Status("Sin conexión con el chat · se muestra la última consulta.", Tone.Warning)
     if (state == null && !disconnected) Text("Consultando conversación…")

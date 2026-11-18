@@ -181,6 +181,14 @@ private fun QueueCard(incident: Incident, label: String, open: () -> Unit) {
 
 @Composable
 private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, actions: ReaderController, staffId: String?) {
+    dispatch.operational?.let { report ->
+        Field("Situación reportada", report.situation)
+        Field("Por verificar", report.pending.joinToString(" · "))
+        if (report.guidance != null) Text("Orientación de emergencia registrada")
+        report.risks.forEach { risk ->
+            Field("Mensaje ${risk.messageSeq}", "«${risk.quote}»" + if (risk.uncertain) " · Reporte incierto" else "")
+        }
+    }
     val analysis = dispatch.analysis
     if (analysis != null) {
         Field("Resumen sugerido por IA", analysis.summary)

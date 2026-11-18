@@ -67,6 +67,9 @@ class HttpStaffApiTest {
             "inferredLocation":{"zoneId":"entrada","zoneName":"Entrada principal","text":null},
             "attendeeLocation":{"zoneId":"entrada","zoneName":"Entrada principal","source":"CONFIRMED_AI","messageSeq":3,
               "evidence":{"messageSeq":1,"quote":"Junto al estand de mote","feature":"stand de mote con huesillo"}},
+            "operational":{"situation":"Se reporta posible ausencia de respiración normal","pending":["Verificación en terreno"],
+              "guidance":"CL-PRIMERA-RESPUESTA-2025-v1/BLS_AGE_UNKNOWN",
+              "risks":[{"kind":"BREATHING","messageSeq":5,"quote":"No","uncertain":true}]},
             "confirmedLocation":{"zoneId":"escenario","zoneName":"Escenario","text":"Junto a la valla"},
             "analysis":{"category":"OTHER","summary":"Junto al estand de mote","uncertainty":[],
               "observedAt":"2026-11-17T22:00:00Z","inputSeq":1,"locationEvidence":
@@ -79,6 +82,8 @@ class HttpStaffApiTest {
         assertEquals("Confirmada por el asistente · Entrada principal",
             dispatch.copy(confirmedLocation = null).displayedLocation())
         assertEquals(3L, dispatch.attendeeLocation?.messageSeq)
+        assertEquals(5L, dispatch.operational?.risks?.single()?.messageSeq)
+        assertTrue(dispatch.copy(prioritySource = "LOCAL_RISK").priorityLabel().contains("Señal crítica del chat"))
     }
 
     @Test fun `closed server and response timeout are distinct`() = runBlocking {

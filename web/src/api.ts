@@ -21,7 +21,10 @@ export type Dispatch = {
   confirmedLocation: Location | null; declaredLocation: Location | null; inferredLocation: Location | null;
   attendeeLocation?: { zoneId: string; zoneName: string; source: 'CONFIRMED_AI' | 'INDICATED'; messageSeq: number;
     evidence: { messageSeq: number; quote: string; feature: string | null } } | null;
-  analysis: { summary: string; uncertainty: string[]; observedAt: string } | null;
+  operational?: { situation: string; pending: string[]; guidance: string | null;
+    risks: { kind: string; messageSeq: number; quote: string; uncertain: boolean }[] } | null;
+  analysis: { summary: string; uncertainty: string[]; observedAt: string;
+    locationEvidence?: { messageSeq: number; quote: string; feature: string | null } } | null;
 };
 type DispatchAudit = {
   dispatch: Dispatch;

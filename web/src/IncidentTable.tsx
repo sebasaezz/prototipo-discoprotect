@@ -4,7 +4,10 @@ import { alertLabels, categoryLabels, missingLabels, reasonLabels, triageLabels,
 
 const date = new Intl.DateTimeFormat('es-CL', { dateStyle: 'short', timeStyle: 'medium' });
 const priorityIcons = { P0: '!', P1: '▲', P2: '◆', P3: '●', PENDING: '?' };
-const sourceLabels: Record<string, string> = { HUMAN: 'Guardia', AI_PROVISIONAL: 'Provisional IA', DECLARED_DANGER: 'Peligro declarado' };
+const sourceLabels: Record<string, string> = {
+  HUMAN: 'Guardia', AI_PROVISIONAL: 'Provisional IA', DECLARED_DANGER: 'Peligro declarado', LOCAL_RISK: 'Señal crítica del chat',
+  LOCAL_URGENT: 'Señal urgente del chat',
+};
 
 function displayLocation(dispatch: Dispatch) {
   if (dispatch.confirmedLocation) {
@@ -101,9 +104,21 @@ function DispatchCell({ item, dispatch, session, onExpiry, onAccessLost }: {
       <span aria-hidden="true">{priorityIcons[priority]} </span>{priorityLabels[priority]}{source && ` · ${source}`}
     </span>
     <small>{dispatch.priorityReasons.join(' · ')}</small>
+    {dispatch.operational && <small>{dispatch.operational.situation}</small>}
     <small>{Math.floor(dispatch.elapsedSeconds / 60)} min {dispatch.elapsedSeconds % 60} s desde la emisión</small>
     <details className="triage-detail" onToggle={event => setOpen(event.currentTarget.open)}>
       <summary>Despacho y auditoría</summary>
+      {dispatch.operational && <>
+        <small>Por verificar · {dispatch.operational.pending.join(' · ')}</small>
+        {dispatch.operational.guidance && <small>Orientación de emergencia registrada</small>}
+        {dispatch.operational.risks.map(risk => <small key={`${risk.kind}-${risk.messageSeq}`}>
+          Mensaje {risk.messageSeq} · «{risk.quote}»{risk.uncertain ? ' · Reporte incierto' : ''}
+        </small>)}
+      </>}
+      {dispatch.inferredLocation && dispatch.analysis?.locationEvidence && <>
+        <small>Seña del lugar probable · «{dispatch.analysis.locationEvidence.quote}»</small>
+        {dispatch.analysis.locationEvidence.feature && <small>En el catálogo · «{dispatch.analysis.locationEvidence.feature}»</small>}
+      </>}
       {dispatch.attendeeLocation && <>
         <small>Zona indicada por el asistente · {dispatch.attendeeLocation.zoneName} · {dispatch.attendeeLocation.zoneId}</small>
         <small>Evidencia original · «{dispatch.attendeeLocation.evidence.quote}»</small>

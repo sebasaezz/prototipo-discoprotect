@@ -142,7 +142,7 @@ export function incidentDispatch(db: Db, eventId: string, id: string, policy: Di
 }
 
 export function createIncident(db: Db, session: Session, eventId: string, input: z.output<typeof createInput>,
-  triageEnabled: boolean) {
+  triageEnabled: boolean, firstAid = true) {
   return atomic(db, () => {
     requireMembership(db, session, eventId);
     if (db.prepare('SELECT 1 FROM incident_tombstones WHERE requester_person_id = ? AND client_request_id = ?')
@@ -173,7 +173,7 @@ export function createIncident(db: Db, session: Session, eventId: string, input:
       .run(id, eventId, session.personId, input.zoneId, input.locationText, input.clientRequestId, now, now,
         input.reasonCode, description);
     initializeTriage(db, id, Date.parse(now), !mode && triageEnabled, input.reasonCode, description);
-    const receipt = mode ? createConversation(db, id, mode, session.personId, first, now) : undefined;
+    const receipt = mode ? createConversation(db, id, mode, session.personId, first, now, firstAid) : undefined;
     const incident = ownView(findIncident(db, id, 'owner', session.personId));
     return { created: true, body: receipt ? { incident, ...receipt } : incident };
   });
