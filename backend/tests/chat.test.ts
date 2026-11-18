@@ -18,6 +18,9 @@ const queue = prefix + '/events/demo-festival/incidents';
 const pins = { STAFF: 'test-staff', STAFF_2: 'test-staff-two', ORGANIZER: 'test-organizer' };
 const options = { model: 'gpt-6.1-sol', timeoutMs: 15_000, maxQueueAgeMs: 30_000, dailyLimit: 100, maxZones: 16 };
 const command = (text: string) => ({ clientMessageId: randomUUID(), text });
+const aiText = (snapshot: { messages: { author: { type: string }; text: string }[] }) => snapshot.messages
+  .filter(item => item.author.type === 'AI')
+  .map(item => item.text);
 
 async function fixture(t: TestContext, path = ':memory:', firstAid = true) {
   let db = openDb(path);
@@ -172,6 +175,37 @@ test('progressive chat prioritizes breathing, grounds a probable place and retai
   assert.equal(newRisk.confirmedLocation.zoneId, 'escenario');
   assert.equal((await incident.page()).messages.length, priorCount + 1); // Staff retains chat control.
   await worker.stop();
+});
+
+test('an older analysis cannot interrupt a newer question or reinterpret a different fact', async t => {
+  const f = await fixture(t);
+  const incident = await f.create('Alguien se cayó.');
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const worker = createChatWorker(f.db, { ...options, provider: async input => {
+    await gate;
+    return output(input, 'Te leo.');
+  } });
+  const inFlight = worker.tick();
+  await incident.send('No responde.');
+  assert.match(aiText(await incident.page()).at(-1)!, /respira normalmente/);
+  release();
+  await inFlight;
+  assert.equal(aiText(await incident.page()).length, 1);
+  await incident.send('No');
+  assert.match(aiText(await incident.page()).at(-1)!, /inicia RCP/);
+  await worker.stop();
+
+  const second = await fixture(t);
+  const fall = await second.create('Alguien se desmayó.');
+  const fallback = createChatWorker(second.db, { ...options, provider: null });
+  await fallback.tick();
+  assert.match(aiText(await fall.page()).at(-1)!, /respira normalmente/);
+  await fall.send('No, no responde.');
+  const reply = aiText(await fall.page()).at(-1)!;
+  assert.match(reply, /131/);
+  assert.doesNotMatch(reply, /inicia RCP/);
+  await fallback.stop();
 });
 
 test('first aid is available before the provider, with pediatric, scene and failure boundaries', async t => {
@@ -647,9 +681,6 @@ test('conversational SOS replies to every turn, reports failures and stops at ha
   assert.equal((await incident.send('Estamos junto a la tarima.')).statusCode, 201);
   await worker.tick();
   const page = await incident.page();
-  const aiText = (snapshot: typeof page) => snapshot.messages
-    .filter((item: { author: { type: string } }) => item.author.type === 'AI')
-    .map((item: { text: string }) => item.text);
   assert.deepEqual(aiText(page), ['Hola, te leo.', 'Entiendo que esto puede asustar.', 'Te leo.',
     'Entendido, anoté lo que me cuentas. ¿Hay alguien más afectado?']);
   assert.equal(page.conversation.aiStatus, 'READY');

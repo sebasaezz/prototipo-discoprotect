@@ -25,6 +25,8 @@ export function createChatWorker(db: Db, options: Options, report: (event: objec
       FROM incident_messages m JOIN incident_conversations c ON c.incident_id = m.incident_id
       WHERE m.incident_id = ? AND m.seq = ?`).get(job.id, job.seq);
     const latest = row?.latest === job.seq;
+    if (!latest && db.prepare(`SELECT 1 FROM incident_chat_observations
+      WHERE incident_id = ? AND input_seq > ? AND reply_seq IS NOT NULL LIMIT 1`).get(job.id, job.seq)) return null;
     const memory = readIncidentMemory(db, job.id, job.seq);
     const known = attendeeChatLocation(db, job.id);
     const reply = conversationalReply(memory, {

@@ -35,8 +35,8 @@ export type IncidentMemory = {
 };
 
 // Match the complete answer. A greeting, conditional or mixed reply carries no binary assertion.
-const yes = /^(?:si|correcto|exactamente|si,? (?:respira normalmente|responde|hay alguien))$/u;
-const no = /^(?:no|no,? (?:no respira normalmente|no responde|no hay nadie))$/u;
+const yes = /^(?:si|correcto|exactamente)$/u;
+const no = /^no$/u;
 const conditional = /\b(?:si |en caso de|que hago si|hipotetic|podria|simulacro|falsa alarma)/u;
 const uncertainty = /\b(?:parece|creo|no se si|quizas|tal vez|posiblemente)\b/u;
 const resolvedOrNegated = /\b(?:ya no (?:hay|sangra|convulsiona|se pegan)|(?:ya|ahora) (?:volvio a|esta respirando|responde|respondio)|hubo|habia|fue un|no hay|no esta (?:inconsciente|sangrando|convulsionando)|nunca)\b/u;
