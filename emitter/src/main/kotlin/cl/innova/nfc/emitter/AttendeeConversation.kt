@@ -4,20 +4,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import cl.discoprotect.ui.*
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 
 @Composable
 internal fun AttendeeConversation(
@@ -27,7 +20,7 @@ internal fun AttendeeConversation(
         incident.id, attendee = true, outbox = actions.chatOutbox,
         load = { actions.conversation(incident.id, it) },
         send = { actions.message(incident.id, it) },
-        attendeeLayout = { chat ->
+        conversationLayout = { chat ->
             ConversationLayout(state, incident, chat, actions, modifier)
         },
     )
@@ -35,7 +28,7 @@ internal fun AttendeeConversation(
 
 @Composable
 private fun ConversationLayout(
-    state: AttendeeState, incident: Incident, chat: AttendeeChatContent,
+    state: AttendeeState, incident: Incident, chat: IncidentChatContent,
     actions: AttendeeController, modifier: Modifier,
 ) {
     val imeOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
@@ -87,16 +80,16 @@ private fun ConversationLayout(
         ) {
             if (systemMessage != null) item(key = "received") {
                 Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-                    SystemNote(systemMessage)
-                    SystemNote("Prototipo académico · Ante una emergencia médica en Chile, llama al 131.")
+                    ChatSystemNote(systemMessage)
+                    ChatSystemNote("Prototipo académico · Ante una emergencia médica en Chile, llama al 131.")
                 }
             }
-            items(results, key = { it.seq }) { ChatBubble(it) }
+            items(results, key = { it.seq }) { SharedChatBubble(it, attendee = true) }
             if (closed) item(key = "closed") {
-                SystemNote("Conversación cerrada")
+                ChatSystemNote("Conversación cerrada")
             }
         }
-        if (chat.allowed || chat.pending) ChatComposer(chat)
+        if (chat.allowed || chat.pending) SharedChatComposer(chat)
     }
 
     if (details) {
@@ -120,76 +113,4 @@ private fun chatStatus(chat: ChatState?): String? = when (chat?.control) {
     ChatControl.STAFF -> chat.guard?.let { "Guardia a cargo · ${it.displayName}" } ?: "Personal de seguridad a cargo"
     ChatControl.CLOSED -> null
     null -> "Consultando conversación…"
-}
-
-@Composable
-private fun SystemNote(message: String) {
-    Box(Modifier.fillMaxWidth().padding(vertical = Space.xs), contentAlignment = Alignment.Center) {
-        Text(message, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun ChatBubble(message: ChatMessage) {
-    val mine = message.author.type == ChatAuthorType.ATTENDEE
-    val colors = MaterialTheme.colorScheme
-    val (fill, ink, author) = when (message.author.type) {
-        ChatAuthorType.ATTENDEE -> Triple(colors.primaryContainer, colors.onPrimaryContainer, "Tú")
-        ChatAuthorType.AI -> Triple(colors.surface, colors.onSurface, "Asistente IA")
-        ChatAuthorType.STAFF -> Triple(colors.tertiaryContainer, colors.onTertiaryContainer,
-            "Personal de seguridad · ${message.author.displayName}")
-    }
-    BoxWithConstraints(
-        Modifier.fillMaxWidth(),
-        contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart,
-    ) {
-        Surface(
-            modifier = Modifier.widthIn(max = maxWidth * 0.88f),
-            shape = MaterialTheme.shapes.large, color = fill, contentColor = ink,
-        ) {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = Space.sm)) {
-                Text(author, style = MaterialTheme.typography.labelMedium)
-                Text(message.text, style = MaterialTheme.typography.bodyLarge)
-                val time = remember(message.createdAt) {
-                    DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
-                        .withZone(ZoneId.systemDefault()).format(Instant.parse(message.createdAt))
-                }
-                Text(time, style = MaterialTheme.typography.labelMedium, modifier = Modifier.align(Alignment.End))
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChatComposer(chat: AttendeeChatContent) {
-    Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-        HorizontalDivider()
-        if (chat.rejected) Status("El servidor rechazó el mensaje.", Tone.Warning)
-        if (chat.pending && !chat.sending) Status("Envío sin confirmar", Tone.Warning)
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Space.sm),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            OutlinedTextField(
-                chat.draft, { if (!chat.sending && !chat.pending) chat.edit(it) },
-                enabled = chat.allowed,
-                label = { Text("Mensaje") }, maxLines = 3,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                modifier = Modifier.weight(1f),
-            )
-            Button(
-                onClick = chat.send, enabled = chat.canSend,
-                modifier = Modifier.heightIn(min = 48.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = Space.sm),
-            ) {
-                Text(when {
-                    chat.sending -> "Enviando…"
-                    chat.pending -> "Reintentar"
-                    else -> "Enviar"
-                })
-            }
-        }
-    }
 }

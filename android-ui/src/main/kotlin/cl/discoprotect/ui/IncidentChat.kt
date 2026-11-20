@@ -58,7 +58,10 @@ internal fun ChatWrite.valid(id: String, draft: ChatDraft, author: ChatAuthorTyp
 
 internal class ChatRejected : Exception()
 
+internal data class ChatSnapshot(val cursor: Long, val state: ChatState?, val messages: List<ChatMessage>)
+
 internal class ChatOutbox {
+    val snapshots = mutableMapOf<String, ChatSnapshot>()
     private val drafts = MutableStateFlow<Map<String, ChatDraft>>(emptyMap())
     val pending = drafts.asStateFlow()
     private val editorTexts = mutableMapOf<String, String>()
@@ -82,10 +85,11 @@ internal class ChatOutbox {
     fun clearSession() {
         drafts.value = emptyMap()
         editorTexts.clear()
+        snapshots.clear()
     }
 }
 
-internal data class AttendeeChatContent(
+internal data class IncidentChatContent(
     val state: ChatState?,
     val messages: List<ChatMessage>,
     val draft: String,
@@ -109,26 +113,27 @@ internal fun IncidentChat(
     send: suspend (ChatDraft) -> ChatWrite,
     sendLabel: String = "Enviar mensaje",
     emptyConversationMessage: String? = null,
-    attendeeLayout: (@Composable (AttendeeChatContent) -> Unit)? = null,
+    conversationLayout: (@Composable (IncidentChatContent) -> Unit)? = null,
 ) {
     val owner = LocalLifecycleOwner.current
     val loader by rememberUpdatedState(load)
     val sender by rememberUpdatedState(send)
     val scope = rememberCoroutineScope()
-    var cursor by remember(incidentId) { mutableLongStateOf(0L) }
-    var chat by remember(incidentId) { mutableStateOf<ChatState?>(null) }
-    var messages by remember(incidentId) { mutableStateOf(emptyList<ChatMessage>()) }
+    val cached = remember(incidentId) { if (attendee) null else outbox.snapshots[incidentId] }
+    var cursor by remember(incidentId) { mutableLongStateOf(cached?.cursor ?: 0L) }
+    var chat by remember(incidentId) { mutableStateOf(cached?.state) }
+    var messages by remember(incidentId) { mutableStateOf(cached?.messages.orEmpty()) }
     var draft by remember(incidentId) { mutableStateOf(outbox[incidentId]?.text ?: outbox.editorText(incidentId)) }
     val outbound by outbox.pending.collectAsState()
     val pending = outbound[incidentId]
     var sending by remember(incidentId) { mutableStateOf(false) }
-    var disconnected by remember(incidentId) { mutableStateOf(false) }
+    var disconnected by remember(incidentId) { mutableStateOf(cached != null) }
     var rejected by remember(incidentId) { mutableStateOf(false) }
 
     fun updateDraft(text: String) {
         if (text.length > 500) return
         draft = text
-        if (attendeeLayout != null) outbox.updateEditor(incidentId, text)
+        if (conversationLayout != null) outbox.updateEditor(incidentId, text)
     }
 
     LaunchedEffect(owner, incidentId) {
@@ -148,6 +153,7 @@ internal fun IncidentChat(
                             updateDraft("")
                         }
                         cursor = page.nextAfterSeq
+                        if (!attendee) outbox.snapshots[incidentId] = ChatSnapshot(cursor, chat, messages)
                         more = page.hasMore
                     } while (more)
                     disconnected = false
@@ -179,6 +185,7 @@ internal fun IncidentChat(
                 messages = (messages + reply.message).distinctBy { it.seq }.sortedBy { it.seq }
                 if ((chat?.controlVersion ?: 0) <= reply.conversation.controlVersion &&
                     (chat?.lastSeq ?: 0) <= reply.conversation.lastSeq) chat = reply.conversation
+                if (!attendee) outbox.snapshots[incidentId] = ChatSnapshot(cursor, chat, messages)
                 outbox.clear(incidentId, attempt)
                 updateDraft("")
             } catch (cancelled: CancellationException) {
@@ -193,8 +200,8 @@ internal fun IncidentChat(
             }
         }
     }
-    if (attendeeLayout != null) {
-        attendeeLayout(AttendeeChatContent(chat, messages, draft, sending, pending != null, disconnected,
+    if (conversationLayout != null) {
+        conversationLayout(IncidentChatContent(chat, messages, draft, sending, pending != null, disconnected,
             rejected, allowed, canSend, ::updateDraft, ::submit))
         return
     }
