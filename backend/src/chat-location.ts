@@ -1,8 +1,8 @@
 import type { Db } from './db.js';
-import { isCurrentVisualReport, normalizeText, visualScore } from './visual-location.js';
+import { isCurrentVisualReport, locationReport, normalizeText, visualScore } from './visual-location.js';
 import type { Analysis } from './chat-analysis.js';
-import { safeDescription } from './triage-provider.js';
-import { venueZones } from './venue.js';
+import { messageText, venueText } from './chat-text.js';
+import { maxZoneDescription, venueZones } from './venue.js';
 
 type LocationState = 'PROPOSED' | 'CONFIRMED' | 'INDICATED' | 'REJECTED' | 'DISMISSED' | 'MOVED';
 type Location = {
@@ -81,32 +81,33 @@ const no = /^no(?:,? (?:no estoy (?:ahi|alli)|ese no es el lugar))?$/u;
 const moved = /^(?:ya no estoy (?:ahi|alli)|me movi|me traslade|me cambie de lugar)(?:$|[ ,])/u;
 export const canonicalPlaceName = (name: string) => normalizeText(name).replace(/\s+/gu, ' ').replace(/^(?:el|la|los|las) /u, '');
 
-const placeMarker = /\b(?:al (?:lado|lao) de(?:l)?|junto a(?:l)?|cerca de(?:l)?|frente a(?:l)?|detras de(?:l)?|debajo de(?:l)?)\s+/u;
-const instructions = /\b(?:ignora|omite|desobedece|instrucciones|prompt|responde con|afirma que|devuelve|simula)\b/u;
-
 export function inferLocalLocation(db: Db, target: Target, message: { seq: number; text: string }) {
-  const messageText = safeDescription(message.text, 500, false);
-  if (!messageText) return;
-  const quote = (messageText.match(/[^.!?;,]+/gu) ?? []).map(part => part.trim())
-    .find(part => placeMarker.test(normalizeText(part)) && isCurrentVisualReport(messageText, part));
-  const changed = moved.test(normalizeText(messageText));
-  if (!quote && !changed) return;
+  const text = messageText(message.text);
+  if (!text) return;
+  const reports = (text.match(/[^.!?;,]+/gu) ?? []).map(part => part.trim())
+    .filter(part => locationReport.test(normalizeText(part)));
+  const quote = reports.find(part => isCurrentVisualReport(text, part));
+  const correction = !quote ? reports.find(part =>
+    /\bno (?:estoy|estamos|veo|vemos|queda|es|en|junto|cerca|al lado)\b/u.test(normalizeText(part)) &&
+    !isCurrentVisualReport(text, part)) : undefined;
+  const changed = moved.test(normalizeText(text));
+  if (!quote && !correction && !changed) return;
   const revision = db.prepare('SELECT config_version AS version FROM events WHERE id = ?').get(target.eventId)?.version;
   if (typeof revision !== 'number') return;
   const matches = venueZones(db, target.eventId).flatMap(zone => {
     if (!quote || !zone.description) return [];
-    const feature = safeDescription(zone.description, 160, false);
-    if (!feature || instructions.test(normalizeText(feature)) || instructions.test(normalizeText(zone.name))) return [];
-    const span = normalizeText(quote).split(placeMarker).at(-1) ?? '';
+    const feature = venueText(zone.description, maxZoneDescription);
+    if (!feature || !venueText(zone.name, 160)) return [];
+    const span = normalizeText(quote).split(locationReport).at(-1) ?? '';
     const score = visualScore(span, feature);
     return score >= 2 ? [{ zone, feature, score }] : [];
   }).sort((a, b) => b.score - a.score);
-  if (!matches.length && !changed) return;
+  if (!matches.length && !correction && !changed) return;
   const best = matches[0];
-  const confirmedCandidate = best && (!matches[1] || best.score - matches[1].score >= 2) ? best : undefined;
+  const probable = best && (!matches[1] || best.score > matches[1].score) ? best : undefined;
   db.prepare('INSERT INTO incident_local_locations VALUES (?, ?, ?, ?, ?, ?, ?)').run(target.incidentId, message.seq,
-    confirmedCandidate?.zone.id ?? null, confirmedCandidate?.zone.name ?? null,
-    (quote ?? messageText).slice(0, 160), confirmedCandidate?.feature ?? null, revision);
+    probable?.zone.id ?? null, probable?.zone.name ?? null,
+    (quote ?? correction ?? text).slice(0, 160), probable?.feature ?? null, revision);
 }
 
 export function handleLocationAnswer(db: Db, target: Target, message: { seq: number; text: string }) {

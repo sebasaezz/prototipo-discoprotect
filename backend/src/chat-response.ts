@@ -1,4 +1,5 @@
 import type { IncidentMemory, Question } from './chat-risk.js';
+import { venueText } from './chat-text.js';
 import { normalizeText } from './visual-location.js';
 
 const questions: Record<Question, string> = {
@@ -16,7 +17,13 @@ const acknowledgments = {
 } as const;
 export type Acknowledgment = keyof typeof acknowledgments;
 export type Reply = { text: string; question: Question | null; protocol: string | null };
-const neutralWording = /^(?:te (?:leo|escucho)|gracias por (?:avisar(?:me)?|contar(?:lo|melo)|aclarar(?:lo|melo))|entiendo (?:tu preocupacion|que esto puede asustar)|anote (?:tu mensaje|lo que me cuentas)|recibi tu mensaje)[.!]?$/u;
+const acknowledgmentPhrase = /^(?:te (?:leo|escucho)|gracias por (?:avisar(?:me)?|contar(?:lo|melo)|aclarar(?:lo|melo))|entiendo (?:tu preocupacion|que esto puede asustar)|anote (?:tu mensaje|lo que me cuentas)|recibi tu mensaje|gracias por (?:tu mensaje|el aviso|la referencia|la aclaracion|compartir (?:esa|la|esta) referencia)|entiendo que (?:necesitas ayuda|es dificil|puede ser dificil|es preocupante)|podemos ir paso a paso|cuentame lo que puedas|te estoy leyendo|ya lei tu mensaje)$/u;
+
+export function conversationalWording(text: string) {
+  const phrases = text.split(/[.!?]+(?:\s+|$)/u)
+    .filter(sentence => acknowledgmentPhrase.test(normalizeText(sentence))).slice(0, 2);
+  return phrases.length ? phrases.map(phrase => phrase.trim() + '.').join(' ') : null;
+}
 
 // AHA BLS adult and pediatric 2025, AHA/Red Cross First Aid 2024, Chile SAMU 131.
 // The model never supplies protocol wording or enables a protocol.
@@ -70,17 +77,14 @@ export function conversationalReply(memory: IncidentMemory, input: {
   const question = input.allowQuestion === false ? null :
     priority.find(available) ?? (input.question && available(input.question) ? input.question : null);
   const greeting = /^(?:hola+|alo+|buenas)[.!\s]*$/u.test(normalizeText(input.text));
-  const zone = input.zoneName && /^[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N} &()/-]{0,79}$/u.test(input.zoneName) &&
-    !/\b(?:llama|evacua|dirigete|enviad[oa]|llegara|tratamiento|toma|administra|inyecta|pastilla|medicamento)\b/u.test(normalizeText(input.zoneName))
-    ? `Por lo que describes, la ubicación probable es «${input.zoneName}».` : null;
-  const wording = input.wording && neutralWording.test(normalizeText(input.wording))
-    ? input.wording.replace(/[.!]?$/u, '.') : null;
-  const intro = zone ?? (input.failed ? 'Tu mensaje quedó registrado.' :
-    greeting ? 'Hola, te leo.' : wording ?? acknowledgments[input.acknowledgment ?? 'LISTEN']);
+  const name = venueText(input.zoneName ?? null, 160);
+  const zone = name ? `Por lo que describes, la ubicación probable es «${name}».` : null;
+  const intro = zone ?? (greeting ? 'Hola, te leo.' : input.failed ? 'Tu mensaje quedó registrado.' :
+    input.wording ?? acknowledgments[input.acknowledgment ?? 'LISTEN']);
   const briefHelp = question === 'BREATHING' && memory.consciousness?.value === 'ALTERED'
     ? ' Si no responde, pide ayuda a alguien cercano y avisa al personal.' : '';
   return { text: question ? `${intro} ${questions[question]}${briefHelp}` :
-    input.failed ? `${intro} Si hay peligro inmediato, avisa al personal del recinto y llama al 131 ante una emergencia médica.`
+    input.failed && !greeting ? `${intro} Si hay peligro inmediato, avisa al personal del recinto y llama al 131 ante una emergencia médica.`
       : intro, question, protocol: null };
 }
 

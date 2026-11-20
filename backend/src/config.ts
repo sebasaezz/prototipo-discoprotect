@@ -27,13 +27,27 @@ const workerSchema = z.object({
   TRIAGE_DAILY_LIMIT: z.coerce.number().int().min(1).max(10_000).default(100),
 });
 
+export const chatDefaults = {
+  timeoutMs: 30_000,
+  maxZones: 64,
+  contextBytes: 32_768,
+  recentMessages: 16,
+  maxOutputTokens: 2_560,
+  maxIncidentCalls: 60,
+};
+
 const chatSchema = z.object({
   CHAT_AI_ENABLED: z.enum(['true', 'false']).optional(),
   CHAT_AI_DAILY_LIMIT: z.coerce.number().int().min(1).max(10_000).optional(),
   CHAT_AI_MAX_QUEUE_AGE_MS: z.coerce.number().int().min(1).max(300_000).optional(),
   OPENAI_CHAT_MODEL: z.string().regex(/^[\w.-]{1,128}$/).default('gpt-6.1-sol'),
-  CHAT_AI_TIMEOUT_MS: z.coerce.number().int().min(1).max(60_000).default(15_000),
-  CHAT_AI_MAX_ZONES: z.coerce.number().int().min(1).max(32).default(16),
+  CHAT_AI_TIMEOUT_MS: z.coerce.number().int().min(1).max(60_000).default(chatDefaults.timeoutMs),
+  CHAT_AI_MAX_ZONES: z.coerce.number().int().min(1).max(128).default(chatDefaults.maxZones),
+  CHAT_AI_CONTEXT_BYTES: z.coerce.number().int().min(12_288).max(131_072).default(chatDefaults.contextBytes),
+  CHAT_AI_RECENT_MESSAGES: z.coerce.number().int().min(2).max(32).default(chatDefaults.recentMessages),
+  CHAT_AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(768).max(4096).default(chatDefaults.maxOutputTokens),
+  CHAT_AI_MAX_INCIDENT_CALLS: z.coerce.number().int().min(1).max(200).default(chatDefaults.maxIncidentCalls),
+  CHAT_AI_DIAGNOSTICS: z.enum(['true', 'false']).default('false'),
 });
 
 export function readChatConfig(env: NodeJS.ProcessEnv) {
@@ -48,6 +62,11 @@ export function readChatConfig(env: NodeJS.ProcessEnv) {
     model: values.OPENAI_CHAT_MODEL,
     timeoutMs: values.CHAT_AI_TIMEOUT_MS,
     maxZones: values.CHAT_AI_MAX_ZONES,
+    contextBytes: values.CHAT_AI_CONTEXT_BYTES,
+    recentMessages: values.CHAT_AI_RECENT_MESSAGES,
+    maxOutputTokens: values.CHAT_AI_MAX_OUTPUT_TOKENS,
+    maxIncidentCalls: values.CHAT_AI_MAX_INCIDENT_CALLS,
+    diagnostics: values.CHAT_AI_DIAGNOSTICS === 'true',
     maxQueueAgeMs: values.CHAT_AI_MAX_QUEUE_AGE_MS ?? common.maxQueueAgeMs,
     dailyLimit: values.CHAT_AI_DAILY_LIMIT ?? common.dailyLimit,
     separateBudget: values.CHAT_AI_DAILY_LIMIT !== undefined,
