@@ -12,6 +12,7 @@ import { triageDetail, reviewTriage } from './triage.js';
 import { reviewInput } from './triage-contract.js';
 import { previewPurge, purgeIncidents, purgeInput, purgeTarget } from './incident-purge.js';
 import * as venue from './venue.js';
+import { eventMap } from './event-map.js';
 import { eventStatistics, statisticsQuery } from './statistics.js';
 import { changeEventStaff, eventStaff, staffChange } from './staff.js';
 import * as services from './event-services.js';
@@ -173,6 +174,10 @@ export function createApp(db: Db, pins: Pins, logging = false, triageEnabled = f
       const query = parse(searchQuery, request.query);
       if (query.type === 'tickets') requireRole(current, 'ORGANIZER');
       return { results: eventSearch(db, eventId, query, current.role === 'ORGANIZER') };
+    });
+    api.get('/events/:eventId/map', async request => {
+      const { eventId } = eventAccess(request);
+      return eventMap(db, eventId);
     });
     api.get('/events/:eventId/venue', async request => {
       const current = session(request);

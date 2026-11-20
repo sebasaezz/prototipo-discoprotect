@@ -1,6 +1,7 @@
 package cl.innova.nfc.emitter
 
 import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.GeoLocation
 import cl.discoprotect.ui.ChatDraft
 import cl.discoprotect.ui.IncidentStatus
 import cl.discoprotect.ui.SosReason
@@ -21,6 +22,7 @@ internal data class SosRequest(
     val locationText: String?,
     val reasonCode: SosReason? = null,
     val description: String? = null,
+    val geoLocation: GeoLocation? = null,
 )
 
 internal sealed interface SosAttempt {
@@ -31,7 +33,8 @@ internal sealed interface SosAttempt {
         val firstMessage: ChatDraft? = null) : SosAttempt {
         override fun matches(incident: Incident) = incident.eventId == eventId &&
             incident.clientRequestId == body.clientRequestId && incident.hasConversation == (mode != null) && incident.zoneId == body.zoneId &&
-            incident.locationText == body.locationText
+            incident.locationText == body.locationText &&
+            (body.geoLocation?.matches(incident.geoLocation) ?: (incident.geoLocation == null))
     }
 
     data class Cancel(override val eventId: String, val id: String) : SosAttempt {
@@ -53,6 +56,7 @@ internal data class SosState(
     val historyError: String? = null,
     val lastConsultedAt: Instant? = null,
     val historyFresh: Boolean = false,
+    val selectedLocation: GeoLocation? = null,
 )
 
 private const val holdSteps = 30

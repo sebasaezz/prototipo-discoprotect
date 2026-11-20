@@ -1,6 +1,8 @@
 package cl.innova.nfc.emitter
 
 import cl.discoprotect.ui.Incident
+import cl.discoprotect.ui.GeoLocation
+import cl.discoprotect.ui.GeoSource
 import cl.discoprotect.ui.IncidentStatus
 import java.time.Clock
 import java.time.Instant
@@ -93,6 +95,32 @@ class SosControllerTest {
         assertEquals(incident.id, app.state.value.sos.receipt)
         assertNull(incident.zoneId)
         assertEquals(listOf(incident), ready(backend).state.value.sos.incidents)
+    }
+
+    @Test fun `SOS freezes the selected point and rejects editing while retry is pending`() = runTest {
+        val backend = Server()
+        val app = ready(backend)
+        val selected = GeoLocation(-33.46310, -70.66095, source = GeoSource.DEMO, capturedAt = now.toString())
+        app.navigate(Section.Map)
+        assertTrue(app.selectLocation(event.id, selected))
+        app.navigate(Section.Services)
+        app.navigate(Section.Home)
+        runCurrent()
+        assertEquals(selected, app.state.value.sos.selectedLocation)
+        backend.loseResponse = true
+        app.sendHelp()
+        runCurrent()
+        assertEquals(SosOutcome.Uncertain, app.state.value.sos.outcome)
+        app.navigate(Section.Map)
+        assertFalse(app.selectLocation(event.id, selected.copy(latitude = -33.465)))
+        app.navigate(Section.Home)
+        backend.loseResponse = false
+        app.retrySos()
+        runCurrent()
+        assertEquals(2, backend.attempts.size)
+        assertEquals(backend.attempts.first(), backend.attempts.last())
+        assertEquals(selected, backend.attempts.last().body.geoLocation)
+        assertEquals(selected, app.state.value.sos.incidents!!.single().geoLocation)
     }
 
     @Test fun `offline chat preserves the attempt and late reads cannot publish after switching account`() = runTest {
@@ -339,7 +367,7 @@ class SosControllerTest {
             val incident = saved.getOrPut(body.clientRequestId) {
                 Incident(UUID.randomUUID().toString(), attempt.eventId, session.person.name,
                     body.zoneId, null, body.locationText,
-                    IncidentStatus.OPEN, now.toString(), now.toString(), session.person.id, body.clientRequestId, hasConversation = true)
+                    IncidentStatus.OPEN, now.toString(), now.toString(), session.person.id, body.clientRequestId, hasConversation = true, geoLocation = body.geoLocation)
             }
             if (loseResponse) throw AttendeeFailure(FailureKind.Timeout)
             return incident

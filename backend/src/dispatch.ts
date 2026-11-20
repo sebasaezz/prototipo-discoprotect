@@ -1,3 +1,4 @@
+import type { GeoLocation } from './event-map.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { requireMembership, type Session } from './auth.js';
@@ -38,6 +39,7 @@ type ReviewRow = {
 };
 
 type Source = {
+  geoLocationJson?: string | null;
   id: string; eventId: string; status: string; reasonCode: ReasonCode | null; createdAt: string; updatedAt: string;
   zoneId: string | null; zoneName: string | null; locationText: string | null;
 };
@@ -151,6 +153,7 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
       : localUrgent ? ['Posible desmayo reportado, pendiente de verificación'] : priorityReasons,
     initialAiPriority, latestAiPriority, humanPriority,
     policyVersion: policy.version, evaluatedAt: new Date(now).toISOString(), elapsedSeconds,
+    ...(source.geoLocationJson ? { geoLocation: JSON.parse(source.geoLocationJson) as GeoLocation } : {}),
     revision: row?.revision ?? 0, confirmedLocation: confirmedLocation(row),
     declaredLocation: declared, inferredLocation: inferred, inferredAt: inferred ? locationRun?.observedAt ?? null : null,
     locationEvidence: locationRun?.evidence ?? null,

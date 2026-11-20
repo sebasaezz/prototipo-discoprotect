@@ -56,12 +56,13 @@ internal data class Incident(
     val triage: IncidentTriage? = null,
     val hasConversation: Boolean = false,
     val dispatch: IncidentDispatch? = null,
+    val geoLocation: GeoLocation? = null,
 ) {
     fun validFor(event: String): Boolean = eventId == event && isIncidentUuid(id) &&
         requesterName.isNotBlank() && (zoneId == null) == (zoneName == null) &&
         (zoneId == null || zoneId.isNotBlank() && !zoneName.isNullOrBlank()) &&
         (locationText == null || locationText.isNotBlank() && locationText.length <= 160) &&
-        version > 0 &&
+        (geoLocation?.valid() != false) && version > 0 &&
         (status !in setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS, IncidentStatus.RESOLVED, IncidentStatus.CLOSED) || assignedAt != null) &&
         (status != IncidentStatus.OPEN || assignedAt == null) &&
         (status !in setOf(IncidentStatus.IN_PROGRESS, IncidentStatus.RESOLVED) || startedAt != null) &&

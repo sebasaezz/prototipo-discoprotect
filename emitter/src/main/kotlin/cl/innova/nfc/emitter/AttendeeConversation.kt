@@ -64,6 +64,7 @@ private fun ConversationLayout(
                     Text("Detalles")
                 }
             }
+            incident.geoLocation?.let { Text("Ubicación enviada · ${it.source.label}", style = MaterialTheme.typography.bodyMedium) }
             chatStatus(chat.state)?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
         }
         Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {

@@ -2,6 +2,12 @@
 
 Contrato de la rama H10. Para el recorrido por pantallas, consulta el [flujo actual](current-workflow.md).
 
+## Mapa del recinto y ubicación SOS opcional
+
+`GET /events/:eventId/map` requiere una membresía vigente. Devuelve el polígono WGS84, límites de cámara, zonas activas y puntos habilitados para vista pública. La respuesta contiene `map: null` cuando el evento carece de mapa.
+
+`POST /events/:eventId/incidents` acepta `geoLocation` opcional con `latitude`, `longitude`, `accuracyMeters`, `source` y `capturedAt`. Las consultas autorizadas de incidente y despacho incluyen el objeto cuando existe. Un reintento exacto recupera la ubicación persistida. Las coordenadas son evidencia adicional para el despacho. [Tipos, validación y procedencia](maps/lollapalooza-2027-map-plan.md#contrato-rest-y-persistencia)
+
 ## Servicios de evento H8.3–H9
 
 Las rutas siguientes se exponen bajo `/api/v1`. Todas requieren una sesión vigente. Las rutas con `:eventId` verifican el rol y la membresía de ese evento.

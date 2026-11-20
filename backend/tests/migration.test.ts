@@ -41,7 +41,10 @@ test('003 preserves H5 data, indexes and keys and can be run repeatedly', t => {
   assert.deepEqual(snapshot(), before);
   assert.equal(db.prepare("SELECT count(*) AS count FROM people WHERE demo_key = 'guardia2'").get()?.count, 1);
   const finalIndexes = indexes.all();
-  assert.deepEqual(finalIndexes.filter(index => index.name !== 'incidents_one_active_per_guard'), beforeIndexes);
+  const added = ['incidents_one_active_per_guard', 'incidents_event_id_id'];
+  assert.deepEqual(finalIndexes.filter(index => !added.includes(String(index.name))), beforeIndexes);
+  assert.equal(finalIndexes.find(index => index.name === 'incidents_event_id_id')?.sql,
+    'CREATE UNIQUE INDEX incidents_event_id_id ON incidents(event_id, id)');
   assert.match(String(finalIndexes.find(index => index.name === 'incidents_one_active_per_guard')?.sql),
     /CREATE UNIQUE INDEX .* WHERE status IN \('ASSIGNED', 'IN_PROGRESS'\)/s);
   assert.equal(db.prepare('SELECT count(*) AS count FROM incidents WHERE version = 1 AND assigned_staff_id IS NULL').get()?.count, 2);

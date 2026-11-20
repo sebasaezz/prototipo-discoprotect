@@ -5,10 +5,12 @@ import { atomic, type Db } from './db.js';
 import { compareDispatch, dispatchView, type DispatchPolicy } from './dispatch.js';
 import { conversationView, createConversation, creationReceipt, discardChatWork, messageInput } from './conversations.js';
 import { ApiError } from './errors.js';
+import { geoLocationInput, sameGeoLocation, validateIncidentLocation, type GeoLocation } from './event-map.js';
 import { dangerAlert, reasonCode, type ReasonCode } from './triage-contract.js';
 import { finishManually, initializeTriage, triageView } from './triage.js';
 
 const createFields = {
+  geoLocation: geoLocationInput.nullish().transform(value => value ?? null),
   clientRequestId: z.uuid().transform(value => value.toLowerCase()),
   zoneId: z.string().min(1).max(128).nullish().transform(value => value ?? null),
   locationText: z.string().trim().max(160).nullish().transform(value => value || null),
@@ -56,6 +58,7 @@ type Incident = {
   reasonCode: ReasonCode | null;
   description: string | null;
   hasConversation: number;
+  geoLocationJson: string | null;
 };
 
 const selection = `SELECT i.id, i.event_id AS eventId, i.requester_person_id AS requesterPersonId,
@@ -64,18 +67,24 @@ const selection = `SELECT i.id, i.event_id AS eventId, i.requester_person_id AS 
   i.version, i.assigned_at AS assignedAt, i.started_at AS startedAt, i.resolved_at AS resolvedAt,
   i.assigned_staff_id AS assignedStaffId, guard.name AS assignedStaffName, i.resolution_note AS resolutionNote,
   i.reason_code AS reasonCode, i.description,
+  CASE WHEN geo.incident_id IS NOT NULL THEN json_object('latitude', geo.latitude, 'longitude', geo.longitude,
+    'accuracyMeters', geo.accuracy_meters, 'source', geo.source, 'capturedAt', geo.captured_at) END AS geoLocationJson,
   EXISTS(SELECT 1 FROM incident_conversations c WHERE c.incident_id = i.id) AS hasConversation
   FROM incidents i JOIN people p ON p.id = i.requester_person_id
   LEFT JOIN zones z ON z.event_id = i.event_id AND z.id = i.zone_id
-  LEFT JOIN people guard ON guard.id = i.assigned_staff_id`;
+  LEFT JOIN people guard ON guard.id = i.assigned_staff_id
+  LEFT JOIN incident_geo_locations geo ON geo.incident_id = i.id AND geo.event_id = i.event_id`;
 
-function ownView({ assignedStaffId, assignedStaffName, resolutionNote, reasonCode, description, hasConversation, ...incident }: Incident) {
-  return { ...incident, ...(hasConversation ? { hasConversation: true } : {}) };
+const decodeGeo = (value: string | null): GeoLocation | null => value === null ? null : JSON.parse(value) as GeoLocation;
+const geoView = (value: string | null) => value === null ? {} : { geoLocation: decodeGeo(value)! };
+
+function ownView({ assignedStaffId, assignedStaffName, resolutionNote, reasonCode, description, hasConversation, geoLocationJson, ...incident }: Incident) {
+  return { ...incident, ...geoView(geoLocationJson), ...(hasConversation ? { hasConversation: true } : {}) };
 }
 
-function eventView(db: Db, { requesterPersonId, clientRequestId, assignedStaffId, assignedStaffName, description, hasConversation, ...incident }: Incident) {
+function eventView(db: Db, { requesterPersonId, clientRequestId, assignedStaffId, assignedStaffName, description, hasConversation, geoLocationJson, ...incident }: Incident) {
   return {
-    ...incident, ...(hasConversation ? { hasConversation: true } : {}),
+    ...incident, ...geoView(geoLocationJson), ...(hasConversation ? { hasConversation: true } : {}),
     assignedStaff: assignedStaffId ? { id: assignedStaffId, name: assignedStaffName } : null,
     dangerAlert: dangerAlert(incident.reasonCode), triage: triageView(db, incident.id),
   };
@@ -164,7 +173,8 @@ export function createIncident(db: Db, session: Session, eventId: string, input:
       .get(session.personId, input.clientRequestId) as Incident | undefined;
     if (previous) {
       if (previous.eventId !== eventId || previous.zoneId !== input.zoneId || previous.locationText !== input.locationText ||
-          previous.reasonCode !== input.reasonCode || previous.description !== description) {
+          previous.reasonCode !== input.reasonCode || previous.description !== description ||
+          !sameGeoLocation(decodeGeo(previous.geoLocationJson), input.geoLocation)) {
         throw new ApiError(409, 'REQUEST_CONFLICT', 'La clave de solicitud ya se usó con otros datos');
       }
       const incident = ownView(previous);
@@ -174,12 +184,18 @@ export function createIncident(db: Db, session: Session, eventId: string, input:
     if (input.zoneId !== null && !db.prepare('SELECT 1 FROM zones WHERE event_id = ? AND id = ? AND active = 1').get(eventId, input.zoneId)) {
       throw new ApiError(400, 'INVALID_INPUT', 'Selecciona una zona activa de este evento');
     }
+    if (input.geoLocation) validateIncidentLocation(db, eventId, input.geoLocation);
     const id = randomUUID();
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO incidents (id, event_id, requester_person_id, zone_id, location_text,
       status, client_request_id, created_at, updated_at, reason_code, description) VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)`)
       .run(id, eventId, session.personId, input.zoneId, input.locationText, input.clientRequestId, now, now,
         input.reasonCode, description);
+    if (input.geoLocation) {
+      const { latitude, longitude, accuracyMeters, source, capturedAt } = input.geoLocation;
+      db.prepare(`INSERT INTO incident_geo_locations (incident_id, event_id, latitude, longitude, accuracy_meters, source, captured_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, eventId, latitude, longitude, accuracyMeters, source, capturedAt);
+    }
     initializeTriage(db, id, Date.parse(now), !mode && triageEnabled, input.reasonCode, description);
     const receipt = mode ? createConversation(db, id, mode, session.personId, first, now, firstAid) : undefined;
     const incident = ownView(findIncident(db, id, 'owner', session.personId));

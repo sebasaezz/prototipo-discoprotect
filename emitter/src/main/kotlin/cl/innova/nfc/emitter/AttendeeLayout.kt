@@ -79,7 +79,7 @@ internal fun AttendeeLayout(
         ) {
             key(state.section, state.draft?.javaClass, state.conversationId) {
                 val body = Modifier.widthIn(max = 560.dp).fillMaxWidth()
-                val scroll = if (showConversation) Modifier.fillMaxHeight()
+                val scroll = if (showConversation || state.section == Section.Map) Modifier.fillMaxHeight()
                     else Modifier.verticalScroll(rememberScrollState())
                 Column(
                     body.then(scroll).padding(
