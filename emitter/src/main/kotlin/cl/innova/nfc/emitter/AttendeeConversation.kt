@@ -137,7 +137,8 @@ private fun ChatBubble(message: ChatMessage) {
     val (fill, ink, author) = when (message.author.type) {
         ChatAuthorType.ATTENDEE -> Triple(colors.primaryContainer, colors.onPrimaryContainer, "Tú")
         ChatAuthorType.AI -> Triple(colors.surface, colors.onSurface, "Asistente IA")
-        ChatAuthorType.STAFF -> Triple(colors.tertiaryContainer, colors.onTertiaryContainer, "Personal de seguridad")
+        ChatAuthorType.STAFF -> Triple(colors.tertiaryContainer, colors.onTertiaryContainer,
+            "Personal de seguridad · ${message.author.displayName}")
     }
     BoxWithConstraints(
         Modifier.fillMaxWidth(),

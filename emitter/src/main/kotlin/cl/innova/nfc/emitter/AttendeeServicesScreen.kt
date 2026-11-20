@@ -13,12 +13,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import cl.discoprotect.ui.*
 import com.google.zxing.BarcodeFormat
+import com.google.zxing.common.BitMatrix
 import com.google.zxing.qrcode.QRCodeWriter
 import java.time.Instant
 import kotlinx.coroutines.delay
@@ -66,12 +70,19 @@ internal fun AttendeeServicesScreen(state: AttendeeState, ui: ServiceUiState, ac
     error?.let { Status(it, Tone.Warning) }
     if (ui.events == null && error == null) Text("Consultando eventos…")
     if (ui.events?.isEmpty() == true) Text("Tu cuenta no tiene eventos disponibles.")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-        selected?.let {
-            Text(it.name, Modifier.align(Alignment.CenterVertically), style = MaterialTheme.typography.titleMedium)
+    val prioritizeQr = selected != null && ui.tab == ServiceTab.Ticket &&
+        (LocalConfiguration.current.screenWidthDp <= 340 || LocalDensity.current.fontScale >= 1.3f)
+    val canSelectEvent = state.sos.pending == null && state.task == null
+    if (prioritizeQr && selected != null) {
+        Text(selected.name, style = MaterialTheme.typography.titleMedium)
+    } else {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            selected?.let {
+                Text(it.name, Modifier.align(Alignment.CenterVertically), style = MaterialTheme.typography.titleMedium)
+            }
+            EventPicker(ui.events.orEmpty(), selected, canSelectEvent,
+                compact = selected != null, select = actions::selectServiceEvent)
         }
-        EventPicker(ui.events.orEmpty(), selected, state.sos.pending == null && state.task == null,
-            compact = selected != null, select = actions::selectServiceEvent)
     }
     if (state.sos.pending != null) {
         Text("Hay una solicitud pendiente de confirmar.")
@@ -87,17 +98,22 @@ internal fun AttendeeServicesScreen(state: AttendeeState, ui: ServiceUiState, ac
             }
         }
         when (ui.tab) {
-            ServiceTab.Ticket -> TicketPanel(selected.id, refresh, panels, actions)
+            ServiceTab.Ticket -> TicketPanel(selected.id, refresh, panels, actions, prioritizeQr)
             ServiceTab.Promotions -> PromotionsPanel(selected.id, refresh, panels, actions)
             ServiceTab.Companions -> CompanionsPanel(selected.id, refresh, panels, actions)
         }
+    }
+    if (prioritizeQr) {
+        EventPicker(ui.events.orEmpty(), selected, canSelectEvent, compact = true, select = actions::selectServiceEvent)
     }
     TextButton(onClick = { refresh++ }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Actualizar servicios") }
 }
 
 
 @Composable
-private fun TicketPanel(eventId: String, refresh: Int, ui: ServiceEventUi, actions: AttendeeController) {
+private fun TicketPanel(
+    eventId: String, refresh: Int, ui: ServiceEventUi, actions: AttendeeController, prioritizeQr: Boolean,
+) {
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var now by remember { mutableStateOf(Instant.now()) }
@@ -115,7 +131,7 @@ private fun TicketPanel(eventId: String, refresh: Int, ui: ServiceEventUi, actio
         finally { loading = false }
     }
     val entry = ui.ticket
-    Text("Presenta el QR ficticio al control de ingreso.", style = MaterialTheme.typography.bodyMedium)
+    if (!prioritizeQr) TicketHint()
     when {
         loading -> Text("Consultando entrada…")
         error != null -> Status(error!!, Tone.Warning)
@@ -129,15 +145,25 @@ private fun TicketPanel(eventId: String, refresh: Int, ui: ServiceEventUi, actio
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 TicketQr(matrix)
             }
-            Text("Código para ingreso manual")
-            SelectionContainer { Text(entry.code) }
+            if (prioritizeQr) TicketHint()
+            Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+                Text("Código para ingreso manual")
+                SelectionContainer {
+                    Text(entry.code, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
+                }
+            }
         }
         else -> Status("La entrada recibida no es válida.", Tone.Warning)
     }
 }
 
 @Composable
-private fun TicketQr(matrix: com.google.zxing.common.BitMatrix) {
+private fun TicketHint() {
+    Text("Presenta el QR ficticio al control de ingreso.", style = MaterialTheme.typography.bodyMedium)
+}
+
+@Composable
+private fun TicketQr(matrix: BitMatrix) {
     Canvas(Modifier.size(200.dp).semantics { contentDescription = "QR de la entrada ficticia" }) {
         drawRect(Color.White)
         val module = kotlin.math.floor(size.width / matrix.width)
