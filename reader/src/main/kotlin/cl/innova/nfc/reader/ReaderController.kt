@@ -50,6 +50,7 @@ internal data class ReaderUiState(
     val event: StaffEvent? = null,
     val local: Boolean = false,
     val notice: String? = null,
+    val readingVisible: Boolean = false,
     val scan: ScanState = ScanState.Ready,
     val debug: NfcDebug = NfcDebug(),
     val incidentsVisible: Boolean = false,
@@ -72,7 +73,7 @@ internal data class ReaderUiState(
     val triageNotice: String? = null,
 ) {
     val canContinue get() = signedIn && event != null && server == ServerState.Connected
-    val canScan get() = !configuring && !incidentsVisible && (local || signedIn && event != null) && scan == ScanState.Ready
+    val canScan get() = readingVisible && !configuring && (local || signedIn && event != null) && scan == ScanState.Ready
     val incidentsCurrent get() = lastIncidentRead != null && incidentProblem == null && !incidentWriting
     fun permits(incident: Incident, action: IncidentAction) = action.accepts(incident.status) &&
         (if (action == IncidentAction.Claim) !guardBusy else staffId != null && incident.assignedStaff?.id == staffId)
@@ -94,6 +95,7 @@ internal class ReaderController(
     private var api = address?.let(apiFor)
     private var session: StaffSession? = null
     private var operation: Job? = null
+    private var scanOperation: Job? = null
     private var expiry: Job? = null
     private var generation = 0L
     private var foreground = true
@@ -114,9 +116,20 @@ internal class ReaderController(
         get() = mutable.value
         set(value) { mutable.value = value }
 
+    val contextLocked: Boolean
+        get() {
+            val owner = ui.staffId
+            val event = ui.event?.id
+            return ui.incidentWriting || ui.triageWriting ||
+                (owner != null && event != null && pendingCommands.containsKey(owner to event)) ||
+                pendingReviews.keys.any { it.first == owner && it.second == event } ||
+                chatOutbox.pending.value.isNotEmpty()
+        }
+
     fun configure() {
+        if (contextLocked) return
         cancelWork()
-        ui = ui.copy(configuring = true, local = false, scan = ScanState.Ready, debug = NfcDebug(), notice = null,
+        ui = ui.copy(configuring = true, local = false, readingVisible = false, scan = ScanState.Ready, debug = NfcDebug(), notice = null,
             incidentsVisible = false, incidents = null, incidentProblem = null)
         checkExpiry()
     }
@@ -128,6 +141,7 @@ internal class ReaderController(
                 else "Ingresa una URL HTTPS con la dirección del servidor.")
             return
         }
+        if (contextLocked) return
         cancelWork()
         if (target != address) {
             clearSession()
@@ -152,14 +166,17 @@ internal class ReaderController(
                 current()
                 setupFailure(failure.problem)
             } finally {
-                if (isCurrent) ui = ui.copy(task = null)
+                if (isCurrent) {
+                    ui = ui.copy(task = null)
+                    refreshIncidents()
+                }
             }
         }
     }
 
     fun login(pin: String, account: StaffAccount = StaffAccount.First) {
         val remote = api ?: return
-        if (ui.task != null || ui.server != ServerState.Connected) return
+        if (contextLocked || ui.task != null || ui.server != ServerState.Connected) return
         if (pin.length !in 4..128) {
             ui = ui.copy(notice = "Ingresa el PIN de guardia configurado en el servidor.")
             return
@@ -201,7 +218,7 @@ internal class ReaderController(
 
     fun selectEvent(id: String) {
         val event = ui.events.firstOrNull { it.id == id } ?: return
-        if (ui.task != null || !checkExpiry()) return
+        if (contextLocked || ui.task != null || !checkExpiry() || ui.event?.id == event.id) return
         cancelWork()
         ui = ui.copy(event = event, scan = ScanState.Ready, debug = NfcDebug(), notice = null,
             incidents = null, incidentProblem = null, lastIncidentRead = null, pendingIncident = false, incidentNotice = null)
@@ -209,21 +226,32 @@ internal class ReaderController(
     }
 
     fun continueReading() {
-        if (!checkExpiry() || ui.task != null || ui.event == null || !ui.incidentsVisible && !ui.canContinue) return
-        if (ui.incidentsVisible) cancelWork()
-        ui = ui.copy(configuring = false, notice = null, incidentsVisible = false, incidents = null, incidentProblem = null)
+        if (ui.local) {
+            ui = ui.copy(readingVisible = true)
+            return
+        }
+        if (!checkExpiry() || ui.task != null || ui.event == null ||
+            !ui.incidentsVisible && !ui.canContinue) return
+        ui = ui.copy(configuring = false, notice = null, readingVisible = true)
     }
 
+    fun leaveReader() {
+        if (!ui.readingVisible) return
+        scanOperation?.cancel()
+        scanOperation = null
+        ui = ui.copy(readingVisible = false, scan = ScanState.Ready)
+    }
+
+    // Keep the incident context active across work destinations.
     fun openIncidents() {
+        leaveReader()
         if (ui.local || ui.task != null || ui.event == null || !checkExpiry() || ui.incidentsVisible) return
-        cancelWork()
-        ui = ui.copy(configuring = false, incidentsVisible = true, scan = ScanState.Ready, debug = NfcDebug(),
-            incidents = null, incidentProblem = null, lastIncidentRead = null, pendingIncident = false, incidentNotice = null)
+        ui = ui.copy(configuring = false, incidentsVisible = true)
         refreshIncidents()
     }
 
     fun refreshIncidents() {
-        if (!foreground || !ui.incidentsVisible || ui.incidentsLoading || ui.incidentWriting || !checkExpiry()) return
+        if (!foreground || !ui.incidentsVisible || ui.task != null || ui.incidentsLoading || ui.incidentWriting || !checkExpiry()) return
         val remote = api ?: return
         val active = session ?: return
         val event = ui.event ?: return
@@ -249,6 +277,8 @@ internal class ReaderController(
                         incidentProblem = failure.problem,
                         incidents = ui.incidents.takeUnless { failure.problem == ApiProblem.Forbidden },
                         lastIncidentRead = ui.lastIncidentRead.takeUnless { failure.problem == ApiProblem.Forbidden },
+                        activeIncident = ui.activeIncident.takeUnless { failure.problem == ApiProblem.Forbidden },
+                        guardBusy = failure.problem != ApiProblem.Forbidden && ui.guardBusy,
                         server = if (failure.problem.isConnectivityError()) ServerState.Unreachable else ServerState.Connected,
                     )
                 }
@@ -389,10 +419,15 @@ internal class ReaderController(
         if (!ui.incidentsVisible || ui.incidents?.none { it.id == id && it.eventId == event.id } != false) {
             throw CancellationException()
         }
-        return request(remote, active, event).also {
-            if (session !== active || api !== remote || !ui.incidentsVisible || ui.event?.id != event.id) {
-                throw CancellationException()
+        try {
+            return request(remote, active, event).also {
+                if (session !== active || api !== remote || !ui.incidentsVisible || ui.event?.id != event.id) {
+                    throw CancellationException()
+                }
             }
+        } catch (failure: ApiFailure) {
+            if (failure.problem == ApiProblem.Unauthorized && session === active) expire()
+            throw failure
         }
     }
 
@@ -495,19 +530,23 @@ internal class ReaderController(
     }
 
     fun useLocal() {
+        if (contextLocked) return
         cancelWork()
-        ui = ui.copy(local = true, configuring = false, notice = null, scan = ScanState.Ready, debug = NfcDebug(),
-            incidentsVisible = false, incidents = null, incidentProblem = null)
+        ui = ui.copy(local = true, configuring = false, readingVisible = true, notice = null, scan = ScanState.Ready, debug = NfcDebug(),
+            incidentsVisible = false, incidents = null, incidentProblem = null, activeIncident = null, guardBusy = false,
+            lastIncidentRead = null, incidentNotice = null)
     }
 
     fun logout() {
+        if (contextLocked) return
         cancelWork()
         clearSession()
         ui = ui.copy(configuring = true, local = false, notice = null, scan = ScanState.Ready, debug = NfcDebug())
     }
 
     fun newScan() {
-        cancelWork()
+        if (!ui.readingVisible) return
+        scanOperation?.cancel()
         ui = ui.copy(scan = ScanState.Ready, debug = NfcDebug())
         if (!ui.local) checkExpiry()
     }
@@ -524,15 +563,15 @@ internal class ReaderController(
     }
 
     fun scan(read: suspend () -> ReadResult) {
-        if (!ui.canScan || (!ui.local && !checkExpiry())) return
+        if (!foreground || !ui.canScan || (!ui.local && !checkExpiry())) return
         val local = ui.local
         val remote = api
         val active = session
         val event = ui.event
         ui = ui.copy(scan = ScanState.Reading, debug = NfcDebug(tagDetected = true))
-        work {
+        scanOperation = scope.launch {
             val result = read()
-            current()
+            coroutineContext.ensureActive()
             ui = ui.copy(debug = result.debug)
             when (val outcome = result.outcome) {
                 is NfcOutcome.Failure -> ui = ui.copy(scan = ScanState.NfcError(outcome.message))
@@ -545,11 +584,11 @@ internal class ReaderController(
                         try {
                             val profile = profiles.remote(requireNotNull(remote), requireNotNull(active),
                                 requireNotNull(event), outcome.id)
-                            current()
+                            coroutineContext.ensureActive()
                             if (checkExpiry()) ui = ui.copy(scan = ScanState.Found(profile, Source.Server),
                                 server = ServerState.Connected)
                         } catch (failure: ApiFailure) {
-                            current()
+                            coroutineContext.ensureActive()
                             val problem = failure.problem
                             if (problem == ApiProblem.Unauthorized) {
                                 ui = ui.copy(server = ServerState.Connected)
@@ -566,6 +605,8 @@ internal class ReaderController(
 
     private fun cancelWork(keepTriage: Boolean = false) {
         if (!keepTriage) closeTriage()
+        scanOperation?.cancel()
+        scanOperation = null
         generation++
         operation?.cancel()
         operation = null
@@ -604,12 +645,17 @@ internal class ReaderController(
     }
 
     private fun clearSession() {
+        scanOperation?.cancel()
+        scanOperation = null
+        incidentTimer?.cancel()
+        incidentTimer = null
         closeTriage()
         chatOutbox.clearSession()
         expiry?.cancel()
         expiry = null
         session = null
-        ui = ui.copy(signedIn = false, events = emptyList(), event = null,
+        ui = ui.copy(signedIn = false, events = emptyList(), event = null, readingVisible = false,
+            scan = ScanState.Ready, debug = NfcDebug(),
             incidentsVisible = false, incidents = null, incidentsLoading = false, incidentProblem = null,
             staffId = null, staffName = null, lastIncidentRead = null, pendingIncident = false, incidentNotice = null,
             guardBusy = false, activeIncident = null)

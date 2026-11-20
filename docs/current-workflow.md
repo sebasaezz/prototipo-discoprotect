@@ -2,7 +2,7 @@
 
 La [rama final](checkpoints/final-acceptance.md) contiene H8.2–H10. GestiónWeb permite seleccionar o crear el evento, configurar sus horarios, recinto y guardias, gestionar incidentes, consultar estadísticas y publicar promociones ficticias. En **Entradas** emite o revoca una entrada y puede validar un código de forma manual. En **Búsqueda** consulta incidentes, zonas, guardias autorizados y entradas por ID.
 
-En AppAsistente, **Servicios del evento** comparte la selección con SOS. Allí se presenta la entrada QR, se acepta o deshace un vínculo de acompañante y se consultan las promociones vigentes. En AppPersonal, desde **Incidentes → Recinto, control de entradas y búsqueda**, se puede abrir el catálogo operativo, capturar un QR o validar su código manual y buscar por ID, estado o nombre según el recurso. El guardia asignado puede consultar los nombres de acompañantes desde el detalle de su atención activa.
+En AppAsistente, **Servicios** comparte la selección con **Inicio**. Allí se presenta la entrada QR, se acepta o deshace un vínculo de acompañante y se consultan las promociones vigentes. En AppPersonal, **Inicio** muestra la atención asignada y las solicitudes prioritarias. **Incidentes** reúne la cola y el historial. **Herramientas** da acceso al lector NFC, al control de entradas, al recinto y a la búsqueda autorizada. **Perfil** reúne cuenta, conexión, evento y diagnósticos. El guardia asignado puede consultar los nombres de acompañantes desde el detalle de su atención activa.
 
 En un turno que contiene una referencia visual inequívoca, Fastify actualiza de inmediato la ubicación probable y la evidencia. El trabajador independiente prepara el diálogo y las propuestas analíticas. Una señal local crítica actualiza el despacho antes del proveedor y el guardia conserva la posibilidad de revisar peligro y ubicación. Consulta [el guion final](demo-final.md) para el recorrido completo.
 
@@ -22,7 +22,7 @@ Los tres clientes usan REST `/api/v1` con Bearer en memoria. El navegador usa el
 
 ## 2. Del SOS al cierre
 
-1. En **Chat de ayuda**, el asistente elige el evento autorizado y activa **SOS**. Puede mantener el botón durante 1,5 segundos o usar su acción accesible y confirmar en el diálogo.
+1. En **Inicio**, el asistente elige el evento autorizado y activa **Pedir ayuda · SOS**. Puede mantener el botón durante 1,5 segundos o usar su acción accesible y confirmar en el diálogo.
 2. AppAsistente envía `mode: "SOS"` con un UUID generado por el cliente para ese envío. Fastify guarda el incidente `OPEN` y su conversación en una transacción. Devuelve el ID y la fecha de emisión sin esperar a OpenAI. El ID aparece en las próximas consultas de AppPersonal y GestiónWeb.
 3. AppAsistente abre el chat del mismo incidente al confirmar el recibo. La conversación empieza vacía y muestra «Solicitud recibida. A la espera de información o atención del personal». Al pulsar **Enviar**, el texto se guarda como un mensaje del mismo chat. Un saludo como «hola» activa un turno de IA si el control sigue en `AUTO`.
 4. Fastify encola cada mensaje elegible del asistente en `AUTO`. Tras analizarlo, puede actualizar la prioridad y la ubicación sugerida y publicar una respuesta visible, identificada como **Asistente IA**.

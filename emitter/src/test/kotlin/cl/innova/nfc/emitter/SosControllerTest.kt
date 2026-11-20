@@ -230,6 +230,63 @@ class SosControllerTest {
         assertEquals(2L, app.state.value.sos.incidents?.single()?.version)
     }
 
+    @Test fun `home creates an SOS and only opens the confirmed conversation`() = runTest {
+        val backend = Server()
+        val app = ready(backend)
+        app.navigate(Section.Home)
+        app.sendHelp()
+        app.navigate(Section.Services)
+        assertEquals(Section.Home, app.state.value.section)
+        assertNull(app.state.value.conversationId)
+        runCurrent()
+        val confirmed = backend.saved.values.single().id
+        assertEquals(confirmed, app.state.value.conversationId)
+        assertEquals(Section.Sos, app.state.value.section)
+        app.navigate(Section.Sos)
+        assertNull(app.state.value.conversationId)
+        app.openConversation(confirmed)
+        assertEquals(confirmed, app.state.value.conversationId)
+    }
+
+    @Test fun `services keeps current SOS and drafts and refreshes the chosen event on return`() = runTest {
+        val backend = Server()
+        val app = ready(backend)
+        app.sendHelp()
+        runCurrent()
+        val id = requireNotNull(app.state.value.conversationId)
+        app.chatOutbox.updateEditor(id, "Sigo en la entrada")
+        app.navigate(Section.Services)
+        assertEquals(id, app.state.value.sos.incidents?.single()?.id)
+        val other = event.copy(id = "otro", name = "Otro festival")
+        app.selectServiceEvent(other)
+        assertNull(app.state.value.sos.incidents)
+        app.selectServiceEvent(event)
+        assertEquals(id, app.state.value.sos.incidents?.single()?.id)
+        app.navigate(Section.Home)
+        runCurrent()
+        assertTrue(app.state.value.sos.historyFresh)
+        app.openConversation(id)
+        assertEquals("Sigo en la entrada", app.chatOutbox.editorText(id))
+        app.logout()
+        assertEquals("", app.chatOutbox.editorText(id))
+        assertNull(app.state.value.conversationId)
+    }
+
+    @Test fun `services cannot replace the event of an uncertain SOS`() = runTest {
+        val backend = Server().apply { offline = true }
+        val app = ready(backend)
+        app.sendHelp()
+        runCurrent()
+        val pending = requireNotNull(app.state.value.sos.pending)
+        app.navigate(Section.Services)
+        app.selectServiceEvent(event.copy(id = "otro"))
+        assertEquals(event, app.state.value.sos.event)
+        assertEquals(pending, app.state.value.sos.pending)
+        app.navigate(Section.Home)
+        assertEquals(pending, app.state.value.sos.pending)
+    }
+
+
     private fun TestScope.open(backend: Server) = AttendeeController(
         backgroundScope, true, "http://192.168.1.10:3000", {}, { backend }, Clock.fixed(now, ZoneOffset.UTC),
     ).also {
@@ -299,7 +356,7 @@ class SosControllerTest {
 }
 
 internal abstract class H4AttendeeApi : AttendeeApi {
-    override suspend fun events(session: AttendeeSession): List<SosEvent> = error("unexpected SOS call")
+    override suspend fun events(session: AttendeeSession): List<SosEvent> = emptyList()
     override suspend fun zones(session: AttendeeSession, eventId: String): List<SosZone> = error("unexpected SOS call")
     override suspend fun incidents(session: AttendeeSession, eventId: String): List<Incident> = error("unexpected SOS call")
     override suspend fun createSos(session: AttendeeSession, attempt: SosAttempt.Create): Incident = error("unexpected SOS call")
