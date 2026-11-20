@@ -1,5 +1,9 @@
 # Modelo de datos
 
+## Mapa del recinto y coordenadas de incidentes
+
+`015_event_maps.sql` agrega el GeoJSON por evento, posiciones referenciadas al catálogo de zonas y puntos públicos, y la ubicación geográfica opcional de incidentes. La relación compuesta conserva el aislamiento por evento y la ubicación se guarda junto con el incidente. [Modelo y contrato del mapa](maps/lollapalooza-2027-map-plan.md#contrato-rest-y-persistencia)
+
 ## Migraciones de H10
 
 | Migración | Cambios |

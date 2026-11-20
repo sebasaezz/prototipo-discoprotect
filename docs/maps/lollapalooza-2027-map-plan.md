@@ -1,0 +1,32 @@
+# Mapa y ubicación SOS de Lollapalooza Chile 2027
+
+AppAsistente abre el mapa desde **Inicio** o **Ayuda → Tu ubicación en el evento**. La acción SOS, su pulsación de 1,5 segundos y la confirmación accesible conservan su acceso desde Inicio. Llevar una ubicación adjunta es opcional.
+
+## Cartografía, perímetro y catálogo
+
+Las bases nuevas de la demo usan `demo-festival` con el nombre **Lollapalooza Chile 2027**, Parque O’Higgins, Santiago de Chile. El intervalo del 12 al 14 de marzo de 2027 usa días de calendario local, hasta la medianoche del día 15. El estado administrativo de la demo sigue activo para probar durante 2026. [Fechas del festival](https://lollapaloozacl.com/preguntas-frecuentes/)
+
+- El [GeoJSON reproducible](../../backend/fixtures/parque-ohiggins-osm-14817188.geojson) contiene 175 posiciones de la vía OSM `14817188`, versión 63 del 7 de marzo de 2025. La lista de nodos se convirtió a pares WGS84 `[longitud, latitud]` y se orientó el anillo exterior en sentido antihorario sin cambiar sus segmentos. El contorno corresponde al parque completo. El perímetro operativo del festival puede configurarse por evento cuando exista evidencia verificada. [Vía del parque](https://www.openstreetmap.org/way/14817188) · [Respuesta de OpenStreetMap](https://api.openstreetmap.org/api/0.6/way/14817188/full.json) · [Atribución y licencia ODbL](https://www.openstreetmap.org/copyright)
+- Santander Arena, antes Movistar Arena, aparece como referencia geográfica. La posición representativa viene de OSM. Los accesos, el escenario, el área de comida y el puesto médico sembrados son puntos simulados. Entrada Perry's Stage conserva su descripción del letrero morado con forma de rayo. [Vía de la arena](https://www.openstreetmap.org/way/32864171) · [Historia de Santander Arena](https://www.santanderarena.cl/sobre-nosotros)
+- MapLibre Native Android 11.13.5 se integra con `AndroidView` y `MapView` con ciclo de vida Compose. La cámara calcula encuadre y zoom mínimo a partir de la geometría. Su objetivo se limita al rectángulo del parque, con zoom máximo 19. El contorno visible y la validación de puntos usan el polígono. Se incluyen los bordes y se excluye el interior de huecos. [MapView](https://maplibre.org/maplibre-native/android/api/-map-libre%20-native%20-android/org.maplibre.android.maps/-map-view/index.html) · [Artefacto Android](https://repo.maven.apache.org/maven2/org/maplibre/gl/android-sdk/11.13.5/)
+- El estilo vectorial Liberty de OpenFreeMap se carga por HTTPS. La instancia pública permite uso sin claves y solicita atribución. La vista muestra OpenStreetMap y conserva el diálogo de atribución del estilo. Si falla o excede el tiempo de carga, el mapa interactivo muestra el perímetro y los puntos recibidos de Fastify con un estilo local. En un dispositivo que solo ofrece ES 2, la vista básica del polígono admite los mismos gestos y selección. Esta versión carga teselas según el encuadre y carece de descargas masivas. [OpenFreeMap, atribución y condiciones](https://openfreemap.org/) · [Estilo Liberty](https://tiles.openfreemap.org/styles/liberty)
+
+Para cambiar el estilo, compila con `-PdiscoprotectMapStyle=https://proveedor.example/estilo.json`. El estilo debe ser compatible con MapLibre, tener fuentes públicas HTTPS y proporcionar su atribución. El GeoJSON y el catálogo se obtienen de Fastify con tu sesión del evento.
+
+## Contrato REST y persistencia
+
+`GET /api/v1/events/:eventId/map` requiere membresía. Devuelve `{eventId,map}` y usa `map: null` para un evento sin cartografía. Incluye recinto, ciudad, fechas, revisión del catálogo, GeoJSON, rectángulo y centro derivados, zonas activas y referencias geográficas. Cada zona tiene `position: null` hasta georreferenciarse. Solo se devuelven puntos operativos activos marcados explícitamente como públicos. Al reabrir el mapa se consulta el catálogo vigente, incluidos los cambios hechos en GestiónWeb.
+
+La creación del incidente admite `geoLocation` opcional. Contiene `latitude`, `longitude`, `accuracyMeters` nullable, `source` (`GPS`, `MANUAL` o `DEMO`) y `capturedAt` en ISO 8601, normalizado a UTC con precisión de milisegundos. `MANUAL` y `DEMO` requieren posición dentro del polígono. La API admite el GPS exterior con sus coordenadas originales. Solo el GPS puede adjuntar precisión. Las ubicaciones geográficas se entregan en las consultas autorizadas de incidentes y despacho. El campo de ubicación confirmada por el guardia conserva su significado.
+
+`015_event_maps.sql` agrega el mapa por evento, las coordenadas de las zonas, los puntos públicos y la tabla `incident_geo_locations`. La ubicación y el incidente se escriben en la misma transacción. Una clave foránea compuesta exige coincidencia de incidente y evento. El intento en memoria congela coordenadas, fuente y fecha con el `clientRequestId`. Repetir ese cuerpo recupera el recibo. Cambiar la ubicación para una clave ya confirmada devuelve `409 REQUEST_CONFLICT`. La IA y el triaje conservan el contexto textual; las coordenadas del SOS quedan en SQLite y en las respuestas autorizadas.
+
+## Ubicación en Android
+
+**Usar mi ubicación** solicita permisos precisos y aproximados bajo demanda. AppAsistente usa `LocationManagerCompat` una vez y puede aprovechar una lectura reciente. La consulta tiene un tiempo acotado y se cancela al salir de la pantalla o pasar a segundo plano. Tras un resultado, muestra la precisión disponible y avisa si la posición queda fuera del recinto. Puede confirmarse el GPS o corregirse con un punto manual. Cuando falla la localización, sigue disponible el SOS y se puede elegir un punto en el mapa.
+
+**Elegir punto** permite ajustar la posición con otro toque, confirmar o cancelar. **Simular ubicación en el recinto** aparece solo en APK debug con un mapa habilitado para demo. Usa el mismo selector y guarda `DEMO`. La simulación se limita a la aplicación. El punto permanece en memoria para la cuenta y el evento activos, y la pantalla permite quitarlo antes de enviar. El recibo de AppAsistente indica la procedencia registrada.
+
+## Prueba local
+
+En una instancia aislada, usa una ruta SQLite nueva explícita con `scripts/demo-final.ps1 -DatabasePath <ruta-nueva.sqlite> -Port 3015`. Para un emulador, configura `http://10.0.2.2:3015` si el backend escucha en loopback. En un teléfono usa una LAN privada y el modo debug. La [validación](lollapalooza-2027-validation.md) registra las pruebas y los límites observados.

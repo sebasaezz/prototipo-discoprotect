@@ -1,6 +1,6 @@
 # Demostración Discoprotect H10
 
-El recorrido usa la [versión integrada](checkpoints/integrado-v1.md) con el rediseño Android y la IA optimizada.
+El recorrido usa la [versión integrada](checkpoints/integrado-v1.md) con el rediseño Android y la IA optimizada. Las bases nuevas de la demo se identifican como **Lollapalooza Chile 2027**, conservan el ID `demo-festival` y ofrecen el [mapa y la ubicación SOS](maps/lollapalooza-2027-map-plan.md).
 
 ## Preparación en Windows
 
@@ -8,7 +8,7 @@ El recorrido usa la [versión integrada](checkpoints/integrado-v1.md) con el red
 2. Ejecuta `npm ci` en `backend` y `web`. Crea `backend/.env` a partir de `.env.example` solo cuando falte. Si el archivo local conserva límites de versiones anteriores, actualiza `CHAT_AI_TIMEOUT_MS` a `30000` y `CHAT_AI_MAX_ZONES` a `64` o elimina esas dos entradas para usar los valores actuales. Define PIN distintos para organizador y los dos guardias ficticios. Para chat remoto, configura `OPENAI_API_KEY` y `OPENAI_CHAT_MODEL` en el backend. El script de demo habilita chat remoto solo con `-EnableAI`.
 3. Desde la raíz ejecuta `./scripts/demo-final.ps1 -Lan` en una LAN privada. Para comprobar el proveedor real durante el recorrido, añade `-EnableAI`. Guarda la ruta de base que aparece en la consola. Deja esa terminal abierta y comprueba `curl.exe http://127.0.0.1:3000/api/v1/health`.
 4. Abre otra terminal en `web` y ejecuta `npm run dev`. Entra en `http://127.0.0.1:5173` con el PIN local del organizador. Si cambiaste el puerto de Fastify, ajusta `DISCOPROTECT_API_ORIGIN` antes de iniciar Vite.
-5. Ejecuta `./gradlew.bat :emitter:assembleDebug :reader:assembleDebug` en la raíz. Usa `adb devices -l` e instala con `adb -s <SERIAL> install -r <APK>`. En ambas apps introduce `http://<IPv4-LAN-del-PC>:3000` y selecciona **Festival Demo**.
+5. Ejecuta `./gradlew.bat :emitter:assembleDebug :reader:assembleDebug` en la raíz. Usa `adb devices -l` e instala con `adb -s <SERIAL> install -r <APK>`. En ambas apps introduce `http://<IPv4-LAN-del-PC>:3000` y selecciona **Lollapalooza Chile 2027**.
 
 | Cliente | Cuenta de demostración | Ruta del artefacto |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ El recorrido usa la [versión integrada](checkpoints/integrado-v1.md) con el red
 | AppPersonal en Galaxy S25 | Guardia Demo o Guardia Demo 2 | `reader/build/outputs/apk/debug/reader-debug.apk` |
 | GestiónWeb | Organizador Demo | `web/dist/index.html` y `web/dist/assets/` |
 
-El Festival Demo se siembra con seis zonas. Entrada principal tiene un toro mecánico y una puerta morada. Escenario tiene una estatua plateada y banderas turquesa. Entrada Perry's Stage tiene como referencia ficticia un letrero morado gigante con forma de rayo. El puesto médico está en Entrada principal. La base incluye tres incidentes históricos ficticios, dos resueltos y uno cancelado. Se distinguen por sus fechas anteriores y las notas de semilla en las resoluciones. Antonia tiene una entrada sin usar y el evento tiene una promoción activa. Los datos se generan para la duración de la sesión de demo.
+Lollapalooza Chile 2027 se siembra con seis zonas. Entrada principal tiene un toro mecánico y una puerta morada. Escenario tiene una estatua plateada y banderas turquesa. Entrada Perry's Stage tiene como referencia ficticia un letrero morado gigante con forma de rayo. El puesto médico está en Entrada principal. La base incluye tres incidentes históricos ficticios, dos resueltos y uno cancelado. Se distinguen por sus fechas anteriores y las notas de semilla en las resoluciones. Antonia tiene una entrada sin usar y el evento tiene una promoción activa. Los datos se generan para la duración de la sesión de demo.
 
 Para agregar Entrada Perry's Stage a una demo ya iniciada, ejecuta `node scripts/add-perrys-stage.mjs <ruta-sqlite>` desde `backend`. Usa la ruta de la base que tiene abierta Fastify. El script verifica un respaldo SQLite antes de guardar la zona y registra una revisión del catálogo solo si hay cambios.
 
@@ -26,7 +26,7 @@ Al escribir «Estoy al lado de un letrero morado gigante con forma de rayo. Hay 
 
 1. **Organizador.** Abre Dashboard y después Eventos y Recinto y zonas. Muestra el evento activo, las referencias y el punto médico. En Personal verifica a ambos guardias. En Estadísticas muestra los dos casos resueltos y el caso cancelado de la base semilla.
 2. **Asistente.** Verifica Antonia, edita una alergia ficticia en Mi ficha y revisa Contactos. Mantén activa la credencial NFC. En AppPersonal inicia como Guardia Demo, selecciona el evento y abre el lector NFC. Acerca las espaldas de los Samsung para comprobar que la ficha refleja la actualización. Cambia temporalmente a Martín y revisa que la nueva lectura corresponde a su cuenta. Vuelve a Antonia.
-3. **Asistente y personal.** En Inicio, selecciona Festival Demo, envía la solicitud SOS y verifica su ID en GestiónWeb y AppPersonal. Envía «Hay alguien desmayado al lado del toro mecánico». AppPersonal debe mostrar **Ubicación probable** en Entrada principal. El asistente pregunta por respiración. Responde «Parece que no está respirando». Comprueba prioridad crítica, cita y orientación de primeros auxilios en ambas vistas de despacho. En esta simulación conserva cualquier llamada real sin realizar.
+3. **Asistente y personal.** En Inicio, selecciona Lollapalooza Chile 2027, envía la solicitud SOS y verifica su ID en GestiónWeb y AppPersonal. Envía «Hay alguien desmayado al lado del toro mecánico». AppPersonal debe mostrar **Ubicación probable** en Entrada principal. El asistente pregunta por respiración. Responde «Parece que no está respirando». Comprueba prioridad crítica, cita y orientación de primeros auxilios en ambas vistas de despacho. En esta simulación conserva cualquier llamada real sin realizar.
 4. **Personal.** Asume, abre conversación, escribe un mensaje de prueba e inicia atención. Puedes verificar la ubicación desde el detalle y resolver con una nota ficticia. AppAsistente recibe el cierre y GestiónWeb muestra el nuevo recuento en Estadísticas.
 5. **Entradas.** En AppAsistente abre Servicios → Entrada QR. En AppPersonal ve a Herramientas → Control de entradas. Captura el QR y valida. Para repetir el caso, introduce el mismo código manualmente o escanea una captura ficticia conservada para la prueba. El segundo intento recibe «Entrada ya utilizada». GestiónWeb muestra el consumo.
 6. **Acompañantes.** Como Antonia genera una invitación en Servicios → Acompañantes. Copia el código temporal y cambia a Martín. Acepta el vínculo desde su cuenta. Vuelve a Antonia y verifica el nombre. Si hay una atención activa distinta, solo su guardia asignado puede consultar los nombres vinculados. Desvincula desde una cuenta y actualiza la otra.

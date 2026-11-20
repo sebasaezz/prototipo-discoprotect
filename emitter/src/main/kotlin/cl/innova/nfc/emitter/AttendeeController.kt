@@ -1,5 +1,7 @@
 package cl.innova.nfc.emitter
 
+import cl.discoprotect.ui.GeoLocation
+
 import cl.discoprotect.ui.Incident
 import cl.discoprotect.ui.ChatDraft
 import cl.discoprotect.ui.ChatOutbox
@@ -23,11 +25,12 @@ import okhttp3.HttpUrl
 internal enum class Section(val label: String) {
     Home("Inicio"), Sos("Ayuda"), Services("Servicios"), Profile("Perfil"),
     Identification("Identificación NFC"), Card("Mi ficha"), Contacts("Contactos de emergencia"),
-    Account("Cuenta"), Connection("Configuración"), Diagnostics("Diagnósticos NFC");
+    Account("Cuenta"), Connection("Configuración"), Diagnostics("Diagnósticos NFC"), Map("Tu ubicación en el evento");
 
     val usesSos get() = this == Home || this == Sos
     val main get() = when (this) {
         Home, Sos, Services, Profile -> this
+        Map -> Sos
         else -> Profile
     }
 }
@@ -283,7 +286,8 @@ internal class AttendeeController(
         val form = ui.sos
         val event = form.event ?: return
         if (!canEditSos() || text != null && (text.isBlank() || text.length > 500)) return
-        val body = SosRequest(UUID.randomUUID().toString(), zoneId = null, locationText = null)
+        val body = SosRequest(UUID.randomUUID().toString(), zoneId = null, locationText = null,
+            geoLocation = form.selectedLocation)
         val first = text?.let { ChatDraft.create(it) }
         submitSos(SosAttempt.Create(event.id, body, if (first == null) "SOS" else "CHAT", first))
     }
@@ -315,6 +319,17 @@ internal class AttendeeController(
     }
 
 
+    suspend fun venueMap(eventId: String) = eventService(eventId, Section.Map) { remote, active ->
+        remote.eventMap(active, eventId)
+    }
+
+    fun selectLocation(eventId: String, location: GeoLocation?): Boolean {
+        if (ui.section != Section.Map || ui.sos.event?.id != eventId || validSession() == null ||
+            ui.sos.pending != null || location?.valid() == false) return false
+        updateSos(ui.sos.copy(selectedLocation = location))
+        return true
+    }
+
     suspend fun ticket(eventId: String) = eventService(eventId) { remote, active -> remote.ticket(active, eventId).ticket }
     suspend fun promotions(eventId: String) = eventService(eventId) { remote, active -> remote.promotions(active, eventId).promotions }
     suspend fun companions(eventId: String) = eventService(eventId) { remote, active -> remote.companions(active, eventId).companions }
@@ -326,10 +341,10 @@ internal class AttendeeController(
         remote.unlinkCompanion(active, eventId, id)
     }
 
-    private suspend fun <T> eventService(eventId: String?, request: suspend (AttendeeApi, AttendeeSession) -> T): T {
+    private suspend fun <T> eventService(eventId: String?, section: Section = Section.Services, request: suspend (AttendeeApi, AttendeeSession) -> T): T {
         val remote = api ?: throw AttendeeFailure(FailureKind.Offline)
         val active = validSession() ?: throw AttendeeFailure(FailureKind.Expired)
-        fun current() = session === active && api === remote && ui.section == Section.Services &&
+        fun current() = session === active && api === remote && ui.section == section &&
             (eventId == null || ui.sos.event?.id == eventId)
         if (!current()) throw CancellationException()
         return request(remote, active).also { if (!current()) throw CancellationException() }

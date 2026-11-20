@@ -76,17 +76,27 @@ internal fun AttendeeHome(state: AttendeeState, actions: AttendeeController, ope
         }
     }
 
+    LocationLink(state, actions)
     HorizontalDivider()
     DestinationLink("Entrada QR") { openTicket() }
     DestinationLink("Mi ficha de emergencia") { actions.navigate(Section.Card) }
     event?.let { Text(it.venue, style = MaterialTheme.typography.bodyMedium) }
 
     if (confirmSend && canSend) {
-        SosConfirmation("¿Enviar SOS?", "Se enviará tu solicitud al personal de ${event.name}.",
+        SosConfirmation("¿Enviar SOS?", "Se enviará tu solicitud al personal de ${event.name}.${sos.selectedLocation?.let { "\nUbicación adjunta · ${it.source.label}" }.orEmpty()}",
             "Enviar SOS", dismiss = { confirmSend = false }, accept = {
                 confirmSend = false
                 actions.sendHelp()
             })
+    }
+}
+
+@Composable
+internal fun LocationLink(state: AttendeeState, actions: AttendeeController) {
+    if (state.sos.event != null && state.person != null) {
+        val location = (state.sos.pending as? SosAttempt.Create)?.body?.geoLocation ?: state.sos.selectedLocation
+        DestinationLink("Tu ubicación en el evento", location?.let { "Ubicación para el SOS · ${it.source.label}" }
+            ?: "Mapa del recinto") { actions.navigate(Section.Map) }
     }
 }
 
@@ -124,6 +134,7 @@ internal fun AttendeeHelp(state: AttendeeState, actions: AttendeeController) {
     }
 
 
+    LocationLink(state, actions)
     SosFeedback(state, actions)
     RefreshSos(state, actions)
     if (history.isNotEmpty()) {

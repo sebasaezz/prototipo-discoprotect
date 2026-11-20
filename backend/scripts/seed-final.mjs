@@ -6,6 +6,7 @@ import { seed } from '../dist/src/seed.js';
 import { issueTicket, savePromotion } from '../dist/src/event-services.js';
 import { initializeTriage } from '../dist/src/triage.js';
 import { savePerrysStage } from './perrys-stage.mjs';
+import { configureLollapaloozaMap } from './lollapalooza-map.mjs';
 
 const input = process.argv[2];
 if (!input || !input.endsWith('.sqlite')) throw new Error('Proporciona una ruta nueva con extensión .sqlite');
@@ -17,19 +18,18 @@ const event = 'demo-festival';
 const organizer = { personId: 'demo-organizador', role: 'ORGANIZER' };
 const minute = 60_000;
 const now = Date.now();
+const medicalPointId = randomUUID();
 const date = ms => new Date(ms).toISOString();
 try {
   migrate(db);
   seed(db);
   atomic(db, () => {
-    db.prepare('UPDATE events SET venue = ?, venue_description = ?, starts_at = ?, ends_at = ? WHERE id = ?')
-      .run('Parque Ficticio', 'Recinto de la demostración universitaria', date(now - 60 * minute), date(now + 480 * minute), event);
     const catalog = db.prepare('UPDATE zones SET name = ?, description = ?, kind = ? WHERE event_id = ? AND id = ?');
     catalog.run('Entrada principal', 'Junto al toro mecánico y la puerta morada.', 'ACCESS', event, 'acceso');
     catalog.run('Escenario', 'Frente a la estatua plateada y las banderas turquesa.', 'STAGE', event, 'escenario');
     catalog.run('Zona de comida', 'Mesas junto al letrero amarillo de comida.', 'SERVICES', event, 'comida');
     db.prepare(`INSERT INTO operational_points (id, event_id, zone_id, name, kind, reference, active)
-      VALUES (?, ?, 'acceso', 'Puesto médico demo', 'MEDICAL', 'Bajo el toldo morado', 1)`).run(randomUUID(), event);
+      VALUES (?, ?, 'acceso', 'Puesto médico demo', 'MEDICAL', 'Bajo el toldo morado', 1)`).run(medicalPointId, event);
     const insert = db.prepare(`INSERT INTO incidents (id, event_id, requester_person_id, zone_id, status, client_request_id,
       created_at, updated_at, version, assigned_staff_id, assigned_at, started_at, resolved_at, resolution_note, reason_code)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -59,9 +59,10 @@ try {
     }
   });
   savePerrysStage(db);
+  configureLollapaloozaMap(db, medicalPointId);
   issueTicket(db, organizer, event, { attendeeId: 'demo-antonia', expiresAt: date(now + 480 * minute) });
   savePromotion(db, organizer, event, { title: 'Agua en el sector de comida',
-    description: 'Promoción ficticia del Festival Demo. Disponible durante la demostración.',
+    description: 'Promoción ficticia de Lollapalooza Chile 2027. Disponible durante la demostración.',
     imageUrl: null, linkUrl: null, startsAt: date(now - minute), endsAt: date(now + 480 * minute), active: true });
   if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Fallo de integridad');
   console.log('Base de demostración creada en ' + path);

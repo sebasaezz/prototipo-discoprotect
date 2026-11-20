@@ -39,7 +39,7 @@ internal fun AttendeeScreen(
     fun back() {
         when {
             draft != null -> leaveEditor()
-            chat != null -> actions.navigate(Section.Sos)
+            chat != null || state.section == Section.Map -> actions.navigate(Section.Sos)
             state.section != state.section.main -> actions.navigate(Section.Profile)
             else -> actions.navigate(Section.Home)
         }
@@ -70,6 +70,7 @@ internal fun AttendeeScreen(
                         actions.navigate(Section.Services)
                     }
                     Section.Sos -> AttendeeHelp(state, actions)
+                    Section.Map -> state.sos.event?.let { EventMapScreen(it, state.sos, actions) }
                     Section.Services -> AttendeeServicesScreen(state, serviceState, actions)
                     Section.Profile -> AttendeeProfile(state, actions)
                     Section.Identification -> EmitterScreen(

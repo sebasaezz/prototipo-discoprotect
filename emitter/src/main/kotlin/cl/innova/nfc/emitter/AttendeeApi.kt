@@ -1,5 +1,7 @@
 package cl.innova.nfc.emitter
 
+import cl.discoprotect.ui.GeoLocation
+
 import cl.innova.nfc.protocol.NfcId
 import cl.discoprotect.ui.*
 import java.io.IOException
@@ -63,10 +65,12 @@ internal class AttendeeSession(val token: String, val expiresAt: Instant, val pe
 @Serializable private data class HelpBody(
     val clientRequestId: String, val zoneId: String?, val locationText: String?,
     val reasonCode: SosReason?, val mode: String, val firstMessage: ChatDraft? = null,
+    val geoLocation: GeoLocation? = null,
 )
 @Serializable private data class HelpReceipt(val incident: Incident, val conversation: ChatState, val message: ChatMessage?)
 
 internal interface AttendeeApi {
+    suspend fun eventMap(session: AttendeeSession, eventId: String): VenueMap? = null
     suspend fun health()
     suspend fun ticket(session: AttendeeSession, eventId: String): TicketReply =
         throw AttendeeFailure(FailureKind.Response)
@@ -190,6 +194,11 @@ internal class HttpAttendeeApi(
                 events.distinctBy { it.id }.size == events.size)
         }
 
+    override suspend fun eventMap(session: AttendeeSession, eventId: String): VenueMap? =
+        exchange<MapReply>(Request.Builder().url(sosEventEndpoint(eventId, "map")), session.token).also { reply ->
+            checkReply(reply.eventId == eventId && reply.map?.valid() != false)
+        }.map
+
     override suspend fun zones(session: AttendeeSession, eventId: String): List<SosZone> =
         exchange<SosZones>(Request.Builder().url(sosEventEndpoint(eventId, "zones")), session.token).zones.also { zones ->
             checkReply(zones.all { it.id.isNotBlank() && it.name.isNotBlank() } &&
@@ -208,7 +217,7 @@ internal class HttpAttendeeApi(
         val body = attempt.body
         val mode = attempt.mode
         val payload = if (mode == null) json.encodeToString(body) else json.encodeToString(HelpBody(
-            body.clientRequestId, body.zoneId, body.locationText, body.reasonCode, mode, attempt.firstMessage,
+            body.clientRequestId, body.zoneId, body.locationText, body.reasonCode, mode, attempt.firstMessage, body.geoLocation,
         ))
         val request = Request.Builder().url(sosEventEndpoint(attempt.eventId, "incidents")).post(payload.toRequestBody(jsonMedia))
         val incident = if (mode == null) exchange<Incident>(request, session.token) else {
