@@ -1,6 +1,6 @@
 # Flujo actual de Discoprotect
 
-La [rama final](checkpoints/final-acceptance.md) contiene H8.2–H10. GestiónWeb permite seleccionar o crear el evento, configurar sus horarios, recinto y guardias, gestionar incidentes, consultar estadísticas y publicar promociones ficticias. En **Entradas** emite o revoca una entrada y puede validar un código de forma manual. En **Búsqueda** consulta incidentes, zonas, guardias autorizados y entradas por ID.
+La [rama integrada](checkpoints/integrado-v1.md) combina H10, el rediseño de ambas apps Android y la IA optimizada. GestiónWeb permite seleccionar o crear el evento, configurar sus horarios, recinto y guardias, gestionar incidentes, consultar estadísticas y publicar promociones ficticias. En **Entradas** emite o revoca una entrada y puede validar un código de forma manual. En **Búsqueda** consulta incidentes, zonas, guardias autorizados y entradas por ID.
 
 En AppAsistente, **Servicios** comparte la selección con **Inicio**. Allí se presenta la entrada QR, se acepta o deshace un vínculo de acompañante y se consultan las promociones vigentes. En AppPersonal, **Inicio** muestra la atención asignada y las solicitudes prioritarias. **Incidentes** reúne la cola y el historial. **Herramientas** da acceso al lector NFC, al control de entradas, al recinto y a la búsqueda autorizada. **Perfil** reúne cuenta, conexión, evento y diagnósticos. El guardia asignado puede consultar los nombres de acompañantes desde el detalle de su atención activa.
 

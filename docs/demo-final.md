@@ -1,5 +1,7 @@
 # Demostración Discoprotect H10
 
+El recorrido usa la [versión integrada](checkpoints/integrado-v1.md) con el rediseño Android y la IA optimizada.
+
 ## Preparación en Windows
 
 1. Instala Node.js 22.16 o posterior, npm, JDK 21, Android SDK 36 y Platform Tools. Gradle Wrapper usa 8.13. En `local.properties` configura `sdk.dir` o define `ANDROID_HOME`. Ambas apps requieren Android con API 26 o posterior.
