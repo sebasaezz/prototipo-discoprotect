@@ -47,15 +47,15 @@ internal fun AttendeeLayout(
                             TextButton(onClick = onBack, enabled = !state.sosWriting,
                                 modifier = Modifier.heightIn(min = 48.dp)) { Text("‹ Volver") }
                         }
-                        Text(
-                            when {
-                                showConversation -> "Solicitud de ayuda"
-                                showNav -> "Discoprotect"
-                                else -> state.section.label
-                            },
-                            Modifier.semantics { heading() },
-                            style = MaterialTheme.typography.titleMedium, color = colors.primary,
-                        )
+                        if (showNav) {
+                            AttendeeBrand(Modifier.width(160.dp).height(48.dp).semantics { heading() })
+                        } else {
+                            Text(
+                                if (showConversation) "Solicitud de ayuda" else state.section.label,
+                                Modifier.semantics { heading() },
+                                style = MaterialTheme.typography.titleMedium, color = colors.primary,
+                            )
+                        }
                     }
                     HorizontalDivider()
                 }

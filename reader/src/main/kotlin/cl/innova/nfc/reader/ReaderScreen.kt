@@ -21,7 +21,9 @@ import kotlinx.coroutines.launch
 internal fun ReaderScreen(state: ReaderUiState, nfc: NfcAvailability, actions: ReaderController, onSettings: () -> Unit) {
     DiscoprotectTheme {
         key(state.configuring, state.incidentsVisible, state.scan is ScanState.Found) {
-            NfcPage("Personal") {
+            NfcPage("Personal", brand = {
+                StaffBrand(Modifier.width(160.dp).height(48.dp).semantics { heading() })
+            }) {
                 if (state.configuring) {
                     ConnectionSetup(state, actions)
                 } else if (state.incidentsVisible) {
