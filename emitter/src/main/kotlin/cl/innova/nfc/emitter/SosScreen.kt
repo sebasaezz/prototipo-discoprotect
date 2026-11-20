@@ -2,6 +2,8 @@ package cl.innova.nfc.emitter
 
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,67 +19,195 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
-    Heading("Chat de ayuda", "Pide ayuda al personal del evento.")
-    Text("Demostración académica. Usa solo casos ficticios.")
-    val person = state.person
-    if (person == null) {
-        Status("Verifica tu cuenta para enviar y consultar solicitudes.", Tone.Info)
-        OutlinedButton(onClick = { actions.navigate(Section.Connection) }, modifier = Modifier.heightIn(min = 48.dp)) {
-            Text("Ir a Conexión")
+internal fun AttendeeHome(state: AttendeeState, actions: AttendeeController, openTicket: () -> Unit) {
+    val sos = state.sos
+    val event = sos.event
+    val active = sos.incidents.orEmpty().firstOrNull { it.status.active }
+    val canSend = state.person != null && event != null && state.task == null && sos.pending == null
+    var additional by remember(state.sharingGeneration, event?.id, active?.id) { mutableStateOf(false) }
+    var confirmSend by remember(state.sharingGeneration, event?.id) { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+        Text(event?.name ?: "Sin evento seleccionado", style = MaterialTheme.typography.headlineSmall)
+        Text(sessionSummary(state), style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+        if (active != null && !additional) {
+            Field("Solicitud activa", active.status.label)
+            DestinationLink(
+                if (active.hasConversation) "Continuar conversación" else "Ver solicitud",
+                prominent = true,
+            ) {
+                if (active.hasConversation) actions.openConversation(active.id) else actions.navigate(Section.Sos)
+            }
+        } else {
+            key(state.sharingGeneration, event?.id) {
+                HoldSosButton(canSend, send = { actions.sendHelp() }, openConfirmation = { confirmSend = true })
+            }
+            when {
+                state.person == null -> {
+                    Text("Verifica tu cuenta para pedir ayuda al personal del evento.")
+                    Button(onClick = { actions.navigate(Section.Account) }) { Text("Verificar cuenta") }
+                }
+                event == null -> Text("Elige un evento autorizado para activar el SOS.")
+                sos.pending == null -> Text("El personal del evento recibirá tu solicitud.")
+            }
         }
+    }
+
+    if (state.person != null) {
+        EventPicker(sos.events, event, enabled = state.task == null && sos.pending == null) {
+            actions.selectSosEvent(it.id)
+        }
+        if (sos.events.isEmpty() && state.task == null) {
+            Text("Consulta el servidor para cargar tus eventos autorizados.")
+        }
+        SosFeedback(state, actions)
+        if (active != null) {
+            TextButton(onClick = { additional = !additional }, enabled = additional || canSend,
+                modifier = Modifier.heightIn(min = 48.dp)) {
+                Text(if (additional) "Volver a la solicitud activa" else "Pedir ayuda adicional")
+            }
+        }
+        if (sos.events.isEmpty() || sos.historyError != null) {
+            RefreshSos(state, actions)
+        }
+    }
+
+    HorizontalDivider()
+    DestinationLink("Entrada QR") { openTicket() }
+    DestinationLink("Mi ficha de emergencia") { actions.navigate(Section.Card) }
+    event?.let { Text(it.venue, style = MaterialTheme.typography.bodyMedium) }
+
+    if (confirmSend && canSend) {
+        SosConfirmation("¿Enviar SOS?", "Se enviará tu solicitud al personal de ${event.name}.",
+            "Enviar SOS", dismiss = { confirmSend = false }, accept = {
+                confirmSend = false
+                actions.sendHelp()
+            })
+    }
+}
+
+private fun sessionSummary(state: AttendeeState): String {
+    val connection = when (state.reachability) {
+        Reachability.Connected -> "Servidor conectado"
+        Reachability.Offline -> "Sin conexión"
+        Reachability.Unchecked -> "Conexión por comprobar"
+    }
+    return "${state.person?.name ?: "Sin sesión"} · $connection"
+}
+
+@Composable
+internal fun AttendeeHelp(state: AttendeeState, actions: AttendeeController) {
+    Text("Ayuda", style = MaterialTheme.typography.headlineMedium)
+    if (state.person == null) {
+        Text("Verifica tu cuenta para consultar tus solicitudes de ayuda.")
+        DestinationLink("Verificar cuenta") { actions.navigate(Section.Account) }
         return
     }
+
     val sos = state.sos
-    val idle = state.task == null
-    val editable = idle && sos.pending == null
-    val event = sos.event
-    var confirmSend by remember(person.id, event?.id) { mutableStateOf(false) }
-    var confirmCancel by remember(person.id, event?.id) { mutableStateOf<String?>(null) }
-    var chatId by remember(person.id, event?.id) { mutableStateOf<String?>(null) }
-    LaunchedEffect(sos.receipt) {
-        if (sos.incidents.orEmpty().any { it.id == sos.receipt && it.hasConversation }) {
-            chatId = sos.receipt
-        }
-    }
-    val currentChat = sos.incidents?.firstOrNull { it.id == chatId && it.hasConversation }
-    Field("Cuenta activa", person.name)
-
-    if (sos.events.isEmpty()) {
-        if (idle && sos.error == null) Text("Selecciona «Consultar servidor» para cargar tus eventos autorizados.")
+    sos.event?.let { Text(it.name, style = MaterialTheme.typography.bodyMedium) }
+    val (active, history) = sos.incidents.orEmpty().partition { it.status.active }
+    if (active.isEmpty()) {
+        Text(when {
+            sos.event == null -> "Selecciona un evento en Inicio para ver tus solicitudes."
+            sos.incidents == null -> "Consulta tus solicitudes del evento."
+            else -> "No tienes solicitudes activas."
+        })
+        DestinationLink("Ir al SOS", prominent = true) { actions.navigate(Section.Home) }
     } else {
-        SosMenu("Evento", event?.name ?: "Seleccionar evento", editable) { close ->
-            sos.events.forEach { item ->
-                DropdownMenuItem(text = { Text("${item.name} · ${item.venue}") }, onClick = {
-                    close()
-                    actions.selectSosEvent(item.id)
-                }, modifier = Modifier.heightIn(min = 48.dp))
+        Text("Solicitudes activas", style = MaterialTheme.typography.titleMedium)
+        active.forEach { HelpIncident(state, it, actions) }
+    }
+
+
+    SosFeedback(state, actions)
+    RefreshSos(state, actions)
+    if (history.isNotEmpty()) {
+        HorizontalDivider()
+        Text("Solicitudes anteriores", style = MaterialTheme.typography.titleMedium)
+        history.forEach { HelpIncident(state, it, actions) }
+    }
+    sos.lastConsultedAt?.let {
+        Text("Última consulta · ${incidentTime(it.toString())}", style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun HelpIncident(state: AttendeeState, incident: Incident, actions: AttendeeController) {
+    var details by remember(incident.id) { mutableStateOf(false) }
+    Surface(
+        Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(Modifier.padding(Space.md), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+            Status(incident.status.label, incident.status.tone)
+            Text(incidentTime(incident.createdAt), style = MaterialTheme.typography.bodyMedium)
+            if (incident.hasConversation) {
+                Button(onClick = { actions.openConversation(incident.id) },
+                    enabled = !state.sosWriting, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text(if (incident.status.active) "Continuar conversación" else "Ver conversación")
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+                TextButton(onClick = { details = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Ver detalles")
+                }
+                CancelRequest(state, incident, actions)
             }
         }
     }
+    if (details) IncidentDetails(incident, onDismiss = { details = false })
+}
 
-    if (event != null) {
-        if (currentChat != null) {
-            Field("Solicitud recibida", "${currentChat.id} · ${incidentTime(currentChat.createdAt)}")
-            Status(currentChat.status.label, currentChat.status.tone)
-            key(person.id, event.id, currentChat.id) {
-                IncidentChat(currentChat.id, attendee = true, outbox = actions.chatOutbox,
-                    load = { actions.conversation(currentChat.id, it) }, send = { actions.message(currentChat.id, it) },
-                    sendLabel = "Enviar",
-                    emptyConversationMessage = "Solicitud recibida. A la espera de información o atención del personal",
-                )
+@Composable
+internal fun IncidentDetails(
+    incident: Incident, onDismiss: () -> Unit, extra: @Composable () -> Unit = {},
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Detalles de la solicitud") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+                IncidentCard(incident)
+                extra()
             }
-            TextButton(onClick = { chatId = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Otra solicitud") }
-        } else if (editable) {
-            key(person.id, event.id) {
-                HoldSosButton({ actions.sendHelp() }) { confirmSend = true }
-            }
-        }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("Cerrar detalles") }
+        },
+    )
+}
+
+
+@Composable
+internal fun CancelRequest(state: AttendeeState, incident: Incident, actions: AttendeeController) {
+    if (!incident.status.active) return
+    var confirm by remember(incident.id) { mutableStateOf(false) }
+    val canCancel = state.task == null && state.sos.pending == null && state.sos.historyFresh
+    TextButton(onClick = { confirm = true }, enabled = canCancel,
+        modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancelar solicitud") }
+    if (confirm && canCancel) {
+        SosConfirmation("¿Cancelar esta solicitud?",
+            "Se cerrará la conversación y la solicitud quedará en el historial.",
+            "Cancelar solicitud", dismiss = { confirm = false }, accept = {
+                confirm = false
+                actions.cancelSos(incident.id)
+            })
     }
+}
 
+@Composable
+internal fun SosFeedback(state: AttendeeState, actions: AttendeeController) {
+    val sos = state.sos
     when (sos.outcome) {
         SosOutcome.Ready -> Unit
-        SosOutcome.Confirmed -> if (currentChat == null) Status("Solicitud recibida por el servidor", Tone.Success)
+        SosOutcome.Confirmed -> Unit
         SosOutcome.Cancelled -> Status("Solicitud cancelada en el servidor", Tone.Success)
         SosOutcome.Uncertain -> if (!state.sosWriting) Status(
             if (sos.pending is SosAttempt.Cancel) "No se pudo confirmar la cancelación"
@@ -89,94 +219,96 @@ internal fun SosScreen(state: AttendeeState, actions: AttendeeController) {
         SosOutcome.Unsent -> Status("No se inició el envío", Tone.Warning)
         SosOutcome.Rejected -> Status("El servidor rechazó la operación", Tone.Error)
     }
-    sos.receipt?.let { Field("ID confirmado", it) }
     sos.error?.let { Status(it, Tone.Warning) }
     sos.historyError?.let {
         Status(it, Tone.Warning)
         if (sos.incidents != null) Text("La última consulta puede estar desactualizada.")
     }
-    sos.lastConsultedAt?.let { Field("Última consulta", incidentTime(it.toString())) }
-    OutlinedButton(onClick = actions::refreshSos, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
-        Text("Consultar servidor")
-    }
-    if (sos.pending != null && event != null && !state.sosWriting) {
-        TextButton(onClick = actions::retrySos,
-            enabled = idle && (sos.pending !is SosAttempt.Cancel || sos.historyFresh),
+    if (!state.sosWriting && sos.pending != null && sos.event != null) {
+        OutlinedButton(onClick = actions::retrySos,
+            enabled = state.task == null && (sos.pending !is SosAttempt.Cancel || sos.historyFresh),
             modifier = Modifier.heightIn(min = 48.dp)) {
             Text(if (sos.pending is SosAttempt.Cancel) "Reintentar cancelación" else "Reintentar el mismo envío")
         }
     }
-
-    sos.incidents?.let { incidents ->
-        if (incidents.isEmpty()) Text("No tienes solicitudes registradas en este evento.")
-        val (active, history) = incidents.partition { it.status.active }
-        listOf("Solicitudes activas" to active, "Historial" to history).forEach { (title, items) ->
-            if (items.isNotEmpty()) Text(title, style = MaterialTheme.typography.titleMedium)
-            items.forEach { incident ->
-            IncidentCard(incident) {
-                if (incident.hasConversation && incident.id != chatId) {
-                    TextButton(onClick = { chatId = incident.id },
-                        modifier = Modifier.heightIn(min = 48.dp)) { Text("Abrir conversación") }
-                }
-                if (incident.status.active) {
-                    TextButton(onClick = { confirmCancel = incident.id }, enabled = editable && sos.historyFresh,
-                        modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancelar solicitud") }
-                }
-            }
-            }
-        }
-    }
-
-    if (confirmSend && editable && event != null && currentChat == null) {
-        SosConfirmation("¿Enviar SOS?", "Se enviará tu solicitud al personal de ${event.name}.",
-            "Enviar SOS", dismiss = { confirmSend = false }, accept = {
-                confirmSend = false
-                actions.sendHelp()
-            })
-    }
-    confirmCancel?.takeIf { id ->
-        editable && sos.historyFresh && sos.incidents?.any { it.id == id && it.status.active } == true
-    }?.let { id ->
-        SosConfirmation("¿Cancelar esta solicitud?", "Se cerrará la conversación y la solicitud quedará en el historial.",
-            "Cancelar solicitud", dismiss = { confirmCancel = null }, accept = {
-                confirmCancel = null
-                actions.cancelSos(id)
-            })
-    }
 }
 
 @Composable
-private fun SosMenu(label: String, selected: String, enabled: Boolean, options: @Composable (() -> Unit) -> Unit) {
+private fun RefreshSos(state: AttendeeState, actions: AttendeeController) {
+    TextButton(onClick = actions::refreshSos, enabled = state.task == null,
+        modifier = Modifier.heightIn(min = 48.dp)) { Text("Consultar servidor") }
+}
+
+@Composable
+internal fun EventPicker(
+    events: List<SosEvent>, selected: SosEvent?, enabled: Boolean,
+    compact: Boolean = false, select: (SosEvent) -> Unit,
+) {
+    if (events.isEmpty()) return
     var expanded by remember { mutableStateOf(false) }
-    Column {
-        Text(label, style = MaterialTheme.typography.labelLarge)
-        Box {
-            OutlinedButton(onClick = { expanded = true }, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text(selected)
-            }
-            DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
-                options { expanded = false }
+    Box {
+        val label = if (selected == null) "Elegir evento" else "Cambiar evento"
+        if (compact) {
+            TextButton(onClick = { expanded = true }, enabled = enabled,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
+        } else {
+            OutlinedButton(onClick = { expanded = true }, enabled = enabled,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
+        }
+        DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
+            events.forEach { item ->
+                DropdownMenuItem(text = { Text("${item.name} · ${item.venue}") }, onClick = {
+                    expanded = false
+                    select(item)
+                }, modifier = Modifier.heightIn(min = 48.dp))
             }
         }
     }
 }
 
 @Composable
-private fun HoldSosButton(send: () -> Unit, openConfirmation: () -> Unit) {
+private fun HoldSosButton(enabled: Boolean, send: () -> Unit, openConfirmation: () -> Unit) {
     var progress by remember { mutableFloatStateOf(0f) }
     var pressing by remember { mutableStateOf(false) }
     val sendCurrent by rememberUpdatedState(send)
+    val confirmCurrent by rememberUpdatedState(openConfirmation)
+    val shape = MaterialTheme.shapes.large
+    val bounds = Modifier.fillMaxWidth().heightIn(min = 124.dp)
+    val content: @Composable () -> Unit = {
+        Column(Modifier.padding(Space.md), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center) {
+            Text("Pedir ayuda · SOS", style = MaterialTheme.typography.headlineSmall)
+            Text(when {
+                !enabled -> "SOS no disponible"
+                pressing -> "Mantén pulsado…"
+                else -> "Mantén pulsado 1,5 s"
+            }, style = MaterialTheme.typography.bodyMedium)
+            if (pressing) LinearProgressIndicator(progress = { progress },
+                modifier = Modifier.fillMaxWidth().padding(top = Space.sm),
+                color = MaterialTheme.colorScheme.onError,
+                trackColor = MaterialTheme.colorScheme.onError.copy(alpha = 0.35f))
+        }
+    }
+    if (!enabled) {
+        Surface(bounds, shape, color = MaterialTheme.colorScheme.surfaceVariant, content = content)
+        return
+    }
     Surface(
-        color = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).semantics(mergeDescendants = true) {
+        modifier = bounds.semantics(mergeDescendants = true) {
             role = Role.Button
             onClick("Activar SOS con confirmación") { openConfirmation(); true }
         }.pointerInput(Unit) {
-            detectTapGestures(onTap = {}, onPress = {
+            var holdCompleted = false
+            detectTapGestures(onTap = { if (!holdCompleted) confirmCurrent() }, onPress = {
                 coroutineScope {
+                    holdCompleted = false
                     pressing = true
-                    val timer = launch { holdSos({ progress = it }, sendCurrent) }
+                    val timer = launch {
+                        holdSos({ progress = it }) {
+                            holdCompleted = true
+                            sendCurrent()
+                        }
+                    }
                     try {
                         tryAwaitRelease()
                     } finally {
@@ -187,13 +319,9 @@ private fun HoldSosButton(send: () -> Unit, openConfirmation: () -> Unit) {
                 }
             })
         },
-    ) {
-        Column(Modifier.padding(Space.md), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("SOS", style = MaterialTheme.typography.titleMedium)
-            Text(if (pressing) "Mantén pulsado…" else "Mantén pulsado 1,5 s")
-        }
-    }
-    if (pressing) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+        color = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError,
+        shape = shape, content = content,
+    )
 }
 
 @Composable

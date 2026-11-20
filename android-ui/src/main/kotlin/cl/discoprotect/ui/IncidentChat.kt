@@ -61,6 +61,13 @@ internal class ChatRejected : Exception()
 internal class ChatOutbox {
     private val drafts = MutableStateFlow<Map<String, ChatDraft>>(emptyMap())
     val pending = drafts.asStateFlow()
+    private val editorTexts = mutableMapOf<String, String>()
+
+    fun editorText(incidentId: String): String = editorTexts[incidentId].orEmpty()
+
+    fun updateEditor(incidentId: String, text: String) {
+        if (text.isEmpty()) editorTexts.remove(incidentId) else editorTexts[incidentId] = text
+    }
 
     operator fun get(incidentId: String) = drafts.value[incidentId]
 
@@ -72,8 +79,25 @@ internal class ChatOutbox {
         if (this[incidentId] == attempt) drafts.value = drafts.value - incidentId
     }
 
-    fun clearSession() { drafts.value = emptyMap() }
+    fun clearSession() {
+        drafts.value = emptyMap()
+        editorTexts.clear()
+    }
 }
+
+internal data class AttendeeChatContent(
+    val state: ChatState?,
+    val messages: List<ChatMessage>,
+    val draft: String,
+    val sending: Boolean,
+    val pending: Boolean,
+    val disconnected: Boolean,
+    val rejected: Boolean,
+    val allowed: Boolean,
+    val canSend: Boolean,
+    val edit: (String) -> Unit,
+    val send: () -> Unit,
+)
 
 @Composable
 internal fun IncidentChat(
@@ -85,6 +109,7 @@ internal fun IncidentChat(
     send: suspend (ChatDraft) -> ChatWrite,
     sendLabel: String = "Enviar mensaje",
     emptyConversationMessage: String? = null,
+    attendeeLayout: (@Composable (AttendeeChatContent) -> Unit)? = null,
 ) {
     val owner = LocalLifecycleOwner.current
     val loader by rememberUpdatedState(load)
@@ -93,12 +118,18 @@ internal fun IncidentChat(
     var cursor by remember(incidentId) { mutableLongStateOf(0L) }
     var chat by remember(incidentId) { mutableStateOf<ChatState?>(null) }
     var messages by remember(incidentId) { mutableStateOf(emptyList<ChatMessage>()) }
-    var draft by remember(incidentId) { mutableStateOf(outbox[incidentId]?.text.orEmpty()) }
+    var draft by remember(incidentId) { mutableStateOf(outbox[incidentId]?.text ?: outbox.editorText(incidentId)) }
     val outbound by outbox.pending.collectAsState()
     val pending = outbound[incidentId]
     var sending by remember(incidentId) { mutableStateOf(false) }
     var disconnected by remember(incidentId) { mutableStateOf(false) }
     var rejected by remember(incidentId) { mutableStateOf(false) }
+
+    fun updateDraft(text: String) {
+        if (text.length > 500) return
+        draft = text
+        if (attendeeLayout != null) outbox.updateEditor(incidentId, text)
+    }
 
     LaunchedEffect(owner, incidentId) {
         owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -114,7 +145,7 @@ internal fun IncidentChat(
                         val attempted = outbox[incidentId]
                         if (attempted != null && page.messages.any { it.clientMessageId == attempted.clientMessageId }) {
                             outbox.clear(incidentId, attempted)
-                            draft = ""
+                            updateDraft("")
                         }
                         cursor = page.nextAfterSeq
                         more = page.hasMore
@@ -131,6 +162,43 @@ internal fun IncidentChat(
             }
         }
     }
+
+    val current = chat
+    val allowed = current != null && current.control != ChatControl.CLOSED &&
+        (attendee || current.control == ChatControl.STAFF && current.guard?.id == staffId)
+    val canSend = !sending && (pending != null || allowed && !disconnected && draft.isNotBlank())
+    fun submit() {
+        // Double taps can arrive before Compose renders the disabled button.
+        if (sending || outbox[incidentId] == null && (!allowed || disconnected || draft.isBlank())) return
+        val attempt = outbox.reserve(incidentId, draft)
+        sending = true
+        rejected = false
+        scope.launch {
+            try {
+                val reply = sender(attempt)
+                messages = (messages + reply.message).distinctBy { it.seq }.sortedBy { it.seq }
+                if ((chat?.controlVersion ?: 0) <= reply.conversation.controlVersion &&
+                    (chat?.lastSeq ?: 0) <= reply.conversation.lastSeq) chat = reply.conversation
+                outbox.clear(incidentId, attempt)
+                updateDraft("")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: ChatRejected) {
+                outbox.clear(incidentId, attempt)
+                rejected = true
+            } catch (_: Exception) {
+                disconnected = true
+            } finally {
+                sending = false
+            }
+        }
+    }
+    if (attendeeLayout != null) {
+        attendeeLayout(AttendeeChatContent(chat, messages, draft, sending, pending != null, disconnected,
+            rejected, allowed, canSend, ::updateDraft, ::submit))
+        return
+    }
+
 
     Text("Conversación", style = MaterialTheme.typography.titleMedium)
     if (attendee) Text("Prototipo académico. Ante una emergencia médica en Chile, llama al 131.")
@@ -163,38 +231,14 @@ internal fun IncidentChat(
         Text("$author · ${incidentTime(message.createdAt)}", style = MaterialTheme.typography.labelLarge)
         Text(message.text)
     }
-    val allowed = state != null && state.control != ChatControl.CLOSED &&
-        (attendee || state.control == ChatControl.STAFF && state.guard?.id == staffId)
     if (allowed || pending != null) {
-        OutlinedTextField(draft, { if (it.length <= 500) draft = it },
+        OutlinedTextField(draft, ::updateDraft,
             enabled = !sending && pending == null, label = { Text("Mensaje") }, maxLines = 4,
             modifier = Modifier.fillMaxWidth())
         if (rejected) Status("El servidor rechazó el mensaje.", Tone.Warning)
         if (pending != null && !sending) Status("Envío sin confirmar", Tone.Warning)
-        Button(enabled = !sending && (pending != null || allowed && !disconnected && draft.isNotBlank()),
-            modifier = Modifier.heightIn(min = 48.dp), onClick = {
-                val attempt = outbox.reserve(incidentId, draft)
-                sending = true
-                rejected = false
-                scope.launch {
-                    try {
-                        val reply = sender(attempt)
-                        messages = (messages + reply.message).distinctBy { it.seq }.sortedBy { it.seq }
-                        if ((chat?.controlVersion ?: 0) <= reply.conversation.controlVersion &&
-                            (chat?.lastSeq ?: 0) <= reply.conversation.lastSeq) chat = reply.conversation
-                        outbox.clear(incidentId, attempt)
-                        draft = ""
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: ChatRejected) {
-                        outbox.clear(incidentId, attempt)
-                        rejected = true
-                    } catch (_: Exception) {
-                        disconnected = true
-                    } finally {
-                        sending = false
-                    }
-                }
-            }) { Text(if (sending) "Enviando…" else if (pending != null) "Reintentar envío" else sendLabel) }
+        Button(enabled = canSend, modifier = Modifier.heightIn(min = 48.dp), onClick = ::submit) {
+            Text(if (sending) "Enviando…" else if (pending != null) "Reintentar envío" else sendLabel)
+        }
     }
 }

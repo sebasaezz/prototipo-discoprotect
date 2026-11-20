@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -23,58 +24,80 @@ import java.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class ServiceTab(val label: String) {
-    Ticket("Entrada"), Companions("Acompañantes"), Promotions("Promociones")
+internal enum class ServiceTab(val label: String) {
+    Ticket("Entrada QR"), Companions("Acompañantes"), Promotions("Promociones")
+}
+
+internal class ServiceUiState {
+    var events by mutableStateOf<List<SosEvent>?>(null)
+    var tab by mutableStateOf(ServiceTab.Ticket)
+    val eventPanels = mutableMapOf<String, ServiceEventUi>()
+}
+
+internal class ServiceEventUi {
+    var ticket by mutableStateOf<DemoTicket?>(null)
+    var promotions by mutableStateOf<List<EventPromotion>?>(null)
+    var companions by mutableStateOf<List<EventCompanion>?>(null)
+    var invite by mutableStateOf<Invitation?>(null)
+    var inviteInput by mutableStateOf("")
 }
 
 @Composable
-internal fun AttendeeServicesScreen(state: AttendeeState, actions: AttendeeController) {
-    Heading("Servicios del evento", "Entrada ficticia, acompañantes y promociones.")
-    val person = state.person
-    if (person == null) {
-        Text("Verifica tu cuenta en Conexión para consultar los servicios.")
+internal fun AttendeeServicesScreen(state: AttendeeState, ui: ServiceUiState, actions: AttendeeController) {
+    Text("Servicios", style = MaterialTheme.typography.headlineSmall)
+    if (state.person == null) {
+        Text("Verifica tu cuenta para consultar la entrada y los servicios del evento.")
+        DestinationLink("Verificar cuenta") { actions.navigate(Section.Account) }
         return
     }
-    key(person.id, state.address) {
-        var events by remember { mutableStateOf<List<SosEvent>?>(null) }
-        var error by remember { mutableStateOf<String?>(null) }
-        var refresh by remember { mutableIntStateOf(0) }
-        var tab by remember { mutableStateOf(ServiceTab.Ticket) }
-        val selected = state.sos.event?.takeIf { candidate -> events?.any { it.id == candidate.id } == true }
-        LaunchedEffect(refresh) {
-            error = null
-            try {
-                events = actions.serviceEvents()
-            } catch (failure: AttendeeFailure) {
-                events = null
-                error = failure.kind.message
-            }
-        }
-        error?.let { Status(it, Tone.Warning) }
-        if (events == null && error == null) Text("Consultando eventos…")
-        if (events?.isEmpty() == true) Text("Tu cuenta no tiene eventos disponibles.")
-        events?.forEach { event ->
-            FilterChip(selected?.id == event.id, { actions.selectServiceEvent(event) }, { Text(event.name) },
-                enabled = state.sos.pending == null, modifier = Modifier.heightIn(min = 48.dp))
-        }
-        if (state.sos.pending != null) Text("Hay un envío pendiente. Puedes revisarlo desde SOS.")
-        OutlinedButton(onClick = { refresh++ }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Actualizar servicios") }
-        if (selected != null) key(selected.id) {
-            ServiceTab.entries.forEach {
-                FilterChip(it == tab, { tab = it }, { Text(it.label) }, modifier = Modifier.heightIn(min = 48.dp))
-            }
-            when (tab) {
-                ServiceTab.Ticket -> TicketPanel(selected.id, refresh, actions)
-                ServiceTab.Promotions -> PromotionsPanel(selected.id, refresh, actions)
-                ServiceTab.Companions -> CompanionsPanel(selected.id, refresh, actions)
-            }
+
+    var error by remember { mutableStateOf<String?>(null) }
+    var refresh by remember { mutableIntStateOf(0) }
+    val selected = state.sos.event?.takeIf { candidate -> ui.events?.any { it.id == candidate.id } == true }
+    LaunchedEffect(ui, refresh) {
+        error = null
+        try {
+            ui.events = actions.serviceEvents()
+        } catch (failure: AttendeeFailure) {
+            ui.events = null
+            error = failure.kind.message
         }
     }
+    error?.let { Status(it, Tone.Warning) }
+    if (ui.events == null && error == null) Text("Consultando eventos…")
+    if (ui.events?.isEmpty() == true) Text("Tu cuenta no tiene eventos disponibles.")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+        selected?.let {
+            Text(it.name, Modifier.align(Alignment.CenterVertically), style = MaterialTheme.typography.titleMedium)
+        }
+        EventPicker(ui.events.orEmpty(), selected, state.sos.pending == null && state.task == null,
+            compact = selected != null, select = actions::selectServiceEvent)
+    }
+    if (state.sos.pending != null) {
+        Text("Hay una solicitud pendiente de confirmar.")
+        TextButton(onClick = { actions.navigate(Section.Home) }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("Revisar en Inicio")
+        }
+    }
+    if (selected != null) key(selected.id) {
+        val panels = remember(ui, selected.id) { ui.eventPanels.getOrPut(selected.id) { ServiceEventUi() } }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            ServiceTab.entries.forEach {
+                FilterChip(it == ui.tab, { ui.tab = it }, { Text(it.label, style = MaterialTheme.typography.labelMedium) }, modifier = Modifier.heightIn(min = 48.dp))
+            }
+        }
+        when (ui.tab) {
+            ServiceTab.Ticket -> TicketPanel(selected.id, refresh, panels, actions)
+            ServiceTab.Promotions -> PromotionsPanel(selected.id, refresh, panels, actions)
+            ServiceTab.Companions -> CompanionsPanel(selected.id, refresh, panels, actions)
+        }
+    }
+    TextButton(onClick = { refresh++ }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Actualizar servicios") }
 }
 
+
 @Composable
-private fun TicketPanel(eventId: String, refresh: Int, actions: AttendeeController) {
-    var ticket by remember { mutableStateOf<DemoTicket?>(null) }
+private fun TicketPanel(eventId: String, refresh: Int, ui: ServiceEventUi, actions: AttendeeController) {
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var now by remember { mutableStateOf(Instant.now()) }
@@ -87,12 +110,12 @@ private fun TicketPanel(eventId: String, refresh: Int, actions: AttendeeControll
     LaunchedEffect(eventId, refresh) {
         loading = true
         error = null
-        try { ticket = actions.ticket(eventId) }
+        try { ui.ticket = actions.ticket(eventId) }
         catch (failure: AttendeeFailure) { error = failure.kind.message }
         finally { loading = false }
     }
-    val entry = ticket
-    Heading("Entrada ficticia", "Presenta el QR al control de ingreso.")
+    val entry = ui.ticket
+    Text("Presenta el QR ficticio al control de ingreso.", style = MaterialTheme.typography.bodyMedium)
     when {
         loading -> Text("Consultando entrada…")
         error != null -> Status(error!!, Tone.Warning)
@@ -101,14 +124,10 @@ private fun TicketPanel(eventId: String, refresh: Int, actions: AttendeeControll
         entry.usedAt != null -> Status("Entrada utilizada", Tone.Info)
         entry.expiresAt.toInstantOrNull()?.isAfter(now) != true -> Status("Entrada vencida", Tone.Warning)
         entry.code.matches(Regex("DP1_[A-Za-z0-9_-]{32}")) -> {
+            Status("Entrada válida", Tone.Success)
             val matrix = remember(entry.code) { QRCodeWriter().encode(entry.code, BarcodeFormat.QR_CODE, 0, 0) }
-            Canvas(Modifier.size(228.dp).semantics { contentDescription = "QR de la entrada ficticia" }) {
-                drawRect(Color.White)
-                val module = kotlin.math.floor(size.width / matrix.width)
-                val border = kotlin.math.floor((size.width - module * matrix.width) / 2)
-                for (y in 0 until matrix.height) for (x in 0 until matrix.width) {
-                    if (matrix[x, y]) drawRect(Color.Black, Offset(border + x * module, border + y * module), Size(module, module))
-                }
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                TicketQr(matrix)
             }
             Text("Código para ingreso manual")
             SelectionContainer { Text(entry.code) }
@@ -117,21 +136,34 @@ private fun TicketPanel(eventId: String, refresh: Int, actions: AttendeeControll
     }
 }
 
+@Composable
+private fun TicketQr(matrix: com.google.zxing.common.BitMatrix) {
+    Canvas(Modifier.size(200.dp).semantics { contentDescription = "QR de la entrada ficticia" }) {
+        drawRect(Color.White)
+        val module = kotlin.math.floor(size.width / matrix.width)
+        val border = kotlin.math.floor((size.width - module * matrix.width) / 2)
+        for (y in 0 until matrix.height) for (x in 0 until matrix.width) {
+            if (matrix[x, y]) {
+                drawRect(Color.Black, Offset(border + x * module, border + y * module), Size(module, module))
+            }
+        }
+    }
+}
+
 private fun String.toInstantOrNull() = runCatching { Instant.parse(this) }.getOrNull()
 
 @Composable
-private fun PromotionsPanel(eventId: String, refresh: Int, actions: AttendeeController) {
+private fun PromotionsPanel(eventId: String, refresh: Int, ui: ServiceEventUi, actions: AttendeeController) {
     val context = LocalContext.current
-    var items by remember { mutableStateOf<List<EventPromotion>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var now by remember { mutableStateOf(Instant.now()) }
     LaunchedEffect(eventId, refresh) {
         do {
             try {
-                items = actions.promotions(eventId)
+                ui.promotions = actions.promotions(eventId)
                 error = null
             } catch (failure: AttendeeFailure) {
-                items = null
+                ui.promotions = null
                 error = failure.kind.message
             }
             delay(30_000)
@@ -145,8 +177,8 @@ private fun PromotionsPanel(eventId: String, refresh: Int, actions: AttendeeCont
     }
     Heading("Promociones", "Contenido del organizador.")
     error?.let { Status(it, Tone.Warning) }
-    if (items == null && error == null) Text("Consultando promociones…")
-    val live = items?.filter { it.endsAt.toInstantOrNull()?.isAfter(now) == true }
+    if (ui.promotions == null && error == null) Text("Consultando promociones…")
+    val live = ui.promotions?.filter { it.endsAt.toInstantOrNull()?.isAfter(now) == true }
     if (live?.isEmpty() == true) Text("No hay promociones vigentes.")
     live?.forEach { promotion ->
         Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
@@ -168,15 +200,12 @@ private fun PromotionsPanel(eventId: String, refresh: Int, actions: AttendeeCont
 }
 
 @Composable
-private fun CompanionsPanel(eventId: String, refresh: Int, actions: AttendeeController) {
+private fun CompanionsPanel(eventId: String, refresh: Int, ui: ServiceEventUi, actions: AttendeeController) {
     val scope = rememberCoroutineScope()
-    var list by remember { mutableStateOf<List<EventCompanion>?>(null) }
-    var invite by remember { mutableStateOf<Invitation?>(null) }
-    var input by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var unlink by remember { mutableStateOf<EventCompanion?>(null) }
-    suspend fun load() { list = actions.companions(eventId) }
+    suspend fun load() { ui.companions = actions.companions(eventId) }
     LaunchedEffect(eventId, refresh) {
         try { load() }
         catch (failure: AttendeeFailure) { error = failure.kind.message }
@@ -193,22 +222,22 @@ private fun CompanionsPanel(eventId: String, refresh: Int, actions: AttendeeCont
     }
     Heading("Acompañantes", "El vínculo requiere que otra cuenta del mismo evento acepte tu invitación. El guardia asignado a tu SOS puede consultar los nombres asociados durante la atención.")
     error?.let { Status(it, Tone.Warning) }
-    if (list == null && error == null) Text("Consultando vínculos…")
-    if (list?.isEmpty() == true) Text("Sin acompañantes vinculados.")
-    list?.forEach { companion ->
+    if (ui.companions == null && error == null) Text("Consultando vínculos…")
+    if (ui.companions?.isEmpty() == true) Text("Sin acompañantes vinculados.")
+    ui.companions?.forEach { companion ->
         Field("Acompañante", companion.name)
         TextButton({ unlink = companion }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Desvincular") }
     }
-    Button({ run { invite = actions.invite(eventId) } }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) {
+    Button({ run { ui.invite = actions.invite(eventId) } }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) {
         Text("Generar invitación")
     }
-    invite?.let {
+    ui.invite?.let {
         Text("Comparte este código con la persona que deseas vincular. Tiene 15 minutos para aceptarlo.")
         SelectionContainer { Text(it.code) }
     }
-    OutlinedTextField(input, { input = it.take(36) }, label = { Text("Código de invitación") }, singleLine = true)
-    Button({ run { actions.acceptInvite(eventId, input.trim()); input = ""; load() } },
-        enabled = !busy && input.trim().matches(Regex("DPC_[A-Za-z0-9_-]{32}")),
+    OutlinedTextField(ui.inviteInput, { ui.inviteInput = it.take(36) }, label = { Text("Código de invitación") }, singleLine = true)
+    Button({ run { actions.acceptInvite(eventId, ui.inviteInput.trim()); ui.inviteInput = ""; load() } },
+        enabled = !busy && ui.inviteInput.trim().matches(Regex("DPC_[A-Za-z0-9_-]{32}")),
         modifier = Modifier.heightIn(min = 48.dp)) { Text("Aceptar vínculo y compartir mi nombre") }
     unlink?.let { companion ->
         AlertDialog(onDismissRequest = { unlink = null }, title = { Text("¿Desvincular a ${companion.name}?") },
