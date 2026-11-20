@@ -5,6 +5,7 @@ import { migrate, openDb, atomic } from '../dist/src/db.js';
 import { seed } from '../dist/src/seed.js';
 import { issueTicket, savePromotion } from '../dist/src/event-services.js';
 import { initializeTriage } from '../dist/src/triage.js';
+import { savePerrysStage } from './perrys-stage.mjs';
 
 const input = process.argv[2];
 if (!input || !input.endsWith('.sqlite')) throw new Error('Proporciona una ruta nueva con extensión .sqlite');
@@ -57,6 +58,7 @@ try {
       transition.run(id, 4, assignee, 'IN_PROGRESS', 'RESOLVED', end, randomUUID(), 'semilla-demo');
     }
   });
+  savePerrysStage(db);
   issueTicket(db, organizer, event, { attendeeId: 'demo-antonia', expiresAt: date(now + 480 * minute) });
   savePromotion(db, organizer, event, { title: 'Agua en el sector de comida',
     description: 'Promoción ficticia del Festival Demo. Disponible durante la demostración.',

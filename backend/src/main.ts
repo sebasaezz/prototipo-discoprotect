@@ -14,7 +14,7 @@ try {
   const provider = key ? openAi(options.model, key) : null;
   const app = createApp(db, config.pins, true, provider !== null, config.dispatchThresholds, config.demoPurgeEnabled, config.firstAid);
   const { key: chatKey, ...chatOptions } = readChatConfig(process.env);
-  const chatWorker = createChatWorker(db, { ...chatOptions, provider: chatKey ? openAiChat(chatOptions.model, chatKey) : null },
+  const chatWorker = createChatWorker(db, { ...chatOptions, provider: chatKey ? openAiChat(chatOptions.model, chatKey, fetch, chatOptions.maxOutputTokens) : null },
     event => app.log.info(event, 'Interpretación del chat'));
   const worker = createTriageWorker(db, { ...options, provider }, event => app.log.info(event, 'Triaje SOS'), chatWorker.tick);
   worker.recover();

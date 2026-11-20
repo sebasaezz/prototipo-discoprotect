@@ -3,7 +3,7 @@
 ## Preparación en Windows
 
 1. Instala Node.js 22.16 o posterior, npm, JDK 21, Android SDK 36 y Platform Tools. Gradle Wrapper usa 8.13. En `local.properties` configura `sdk.dir` o define `ANDROID_HOME`. Ambas apps requieren Android con API 26 o posterior.
-2. Ejecuta `npm ci` en `backend` y `web`. Crea `backend/.env` a partir de `.env.example` solo cuando falte. Define PIN distintos para organizador y los dos guardias ficticios. Para chat remoto, configura `OPENAI_API_KEY` y `OPENAI_CHAT_MODEL` en el backend. El script de demo habilita chat remoto solo con `-EnableAI`.
+2. Ejecuta `npm ci` en `backend` y `web`. Crea `backend/.env` a partir de `.env.example` solo cuando falte. Si el archivo local conserva límites de versiones anteriores, actualiza `CHAT_AI_TIMEOUT_MS` a `30000` y `CHAT_AI_MAX_ZONES` a `64` o elimina esas dos entradas para usar los valores actuales. Define PIN distintos para organizador y los dos guardias ficticios. Para chat remoto, configura `OPENAI_API_KEY` y `OPENAI_CHAT_MODEL` en el backend. El script de demo habilita chat remoto solo con `-EnableAI`.
 3. Desde la raíz ejecuta `./scripts/demo-final.ps1 -Lan` en una LAN privada. Para comprobar el proveedor real durante el recorrido, añade `-EnableAI`. Guarda la ruta de base que aparece en la consola. Deja esa terminal abierta y comprueba `curl.exe http://127.0.0.1:3000/api/v1/health`.
 4. Abre otra terminal en `web` y ejecuta `npm run dev`. Entra en `http://127.0.0.1:5173` con el PIN local del organizador. Si cambiaste el puerto de Fastify, ajusta `DISCOPROTECT_API_ORIGIN` antes de iniciar Vite.
 5. Ejecuta `./gradlew.bat :emitter:assembleDebug :reader:assembleDebug` en la raíz. Usa `adb devices -l` e instala con `adb -s <SERIAL> install -r <APK>`. En ambas apps introduce `http://<IPv4-LAN-del-PC>:3000` y selecciona **Festival Demo**.
@@ -14,7 +14,11 @@
 | AppPersonal en Galaxy S25 | Guardia Demo o Guardia Demo 2 | `reader/build/outputs/apk/debug/reader-debug.apk` |
 | GestiónWeb | Organizador Demo | `web/dist/index.html` y `web/dist/assets/` |
 
-El Festival Demo se siembra con cinco zonas. Entrada principal tiene un toro mecánico y una puerta morada. Escenario tiene una estatua plateada y banderas turquesa. El puesto médico está en Entrada principal. La base incluye tres incidentes históricos ficticios, dos resueltos y uno cancelado. Se distinguen por sus fechas anteriores y las notas de semilla en las resoluciones. Antonia tiene una entrada sin usar y el evento tiene una promoción activa. Los datos se generan para la duración de la sesión de demo.
+El Festival Demo se siembra con seis zonas. Entrada principal tiene un toro mecánico y una puerta morada. Escenario tiene una estatua plateada y banderas turquesa. Entrada Perry's Stage tiene como referencia ficticia un letrero morado gigante con forma de rayo. El puesto médico está en Entrada principal. La base incluye tres incidentes históricos ficticios, dos resueltos y uno cancelado. Se distinguen por sus fechas anteriores y las notas de semilla en las resoluciones. Antonia tiene una entrada sin usar y el evento tiene una promoción activa. Los datos se generan para la duración de la sesión de demo.
+
+Para agregar Entrada Perry's Stage a una demo ya iniciada, ejecuta `node scripts/add-perrys-stage.mjs <ruta-sqlite>` desde `backend`. Usa la ruta de la base que tiene abierta Fastify. El script verifica un respaldo SQLite antes de guardar la zona y registra una revisión del catálogo solo si hay cambios.
+
+Al escribir «Estoy al lado de un letrero morado gigante con forma de rayo. Hay una persona que necesita ayuda.», la descripción de 215 caracteres entra completa en el contexto y se compara de inmediato. El despacho y el chat muestran **Entrada Perry's Stage** como ubicación probable. Para ver cómo se eligió, inicia Fastify con `CHAT_AI_DIAGNOSTICS=true` y busca los registros de revisión, zonas incluidas con descripción, propuesta del proveedor y zona final de despacho.
 
 ## Recorrido
 
@@ -37,6 +41,7 @@ $env:HOST = '0.0.0.0'
 $env:TRIAGE_ENABLED = 'false'
 $env:CHAT_AI_ENABLED = 'false'
 $env:DEMO_PURGE_ENABLED = 'false'
+npm run build
 npm start
 ```
 
@@ -44,4 +49,4 @@ Para empezar de cero, detén Fastify y vuelve a ejecutar `./scripts/demo-final.p
 
 ## Validación reproducible
 
-`./scripts/validate-final.ps1` ejecuta las suites y genera el build web y ambos APK. `-Install` reinstala dependencias desde los lockfiles de npm. `-HealthPort 3000` consulta una instancia de Fastify ya iniciada. `-OpenAI` habilita la batería opcional con datos ficticios, timeout configurable, cero reintentos, máximo 20 llamadas, hasta 768 tokens de salida por llamada y tope estimado de USD 3. El valor estimado puede diferir de la facturación. [Precios de OpenAI API](https://developers.openai.com/api/docs/pricing)
+`./scripts/validate-final.ps1` ejecuta las suites y genera el build web y ambos APK. `-Install` reinstala dependencias desde los lockfiles de npm. `-HealthPort 3000` consulta una instancia de Fastify ya iniciada. `-OpenAI` habilita la batería opcional con datos ficticios, timeout configurable, cero reintentos, máximo 20 llamadas, 2.560 tokens de salida por llamada con la configuración predeterminada y tope estimado de USD 3. El valor estimado puede diferir de la facturación. [Precios de OpenAI API](https://developers.openai.com/api/docs/pricing)

@@ -6,6 +6,7 @@ import { createChatWorker } from '../dist/src/chat-worker.js';
 import { readChatConfig } from '../dist/src/config.js';
 import { migrate, openDb } from '../dist/src/db.js';
 import { seed } from '../dist/src/seed.js';
+import { savePerrysStage } from './perrys-stage.mjs';
 
 const { key, ...config } = readChatConfig({ ...process.env, CHAT_AI_ENABLED: 'true' });
 const rates = { 'gpt-6.1-sol': [2, 10], 'gpt-5.4-mini': [0.75, 4.5] };
@@ -29,10 +30,17 @@ let transport;
 let current = 'setup';
 const provider = openAiChat(config.model, key, async (url, options) => {
   const payload = JSON.parse(options.body);
+  if (current === 'perrys-stage') {
+    const input = JSON.parse(payload.input[0].content);
+    const configured = db.prepare('SELECT description FROM zones WHERE event_id = ? AND id = ?')
+      .get('demo-festival', 'entrada-perrys-stage').description;
+    assert.equal(configured.length, 215);
+    assert.equal(input.venueContext.zoneDetails.find(zone => zone.id === 'entrada-perrys-stage').description, configured);
+  }
   const inputBound = Buffer.byteLength(options.body, 'utf8') + 1000;
   const maxCharge = (inputBound * inputRate + payload.max_output_tokens * outputRate) / 1_000_000;
   assert.equal(url, 'https://api.openai.com/v1/responses');
-  assert.ok(payload.max_output_tokens <= 768 && !payload.store && !payload.tools);
+  assert.ok(payload.max_output_tokens === config.maxOutputTokens && !payload.store && !payload.tools);
   if (calls >= 20 || estimatedUsd + maxCharge > 3) throw new Error('TEST_BUDGET');
   calls++;
   estimatedUsd += maxCharge;
@@ -57,7 +65,7 @@ const provider = openAiChat(config.model, key, async (url, options) => {
     transport = { status: null, code: typeof code === 'string' && /^[A-Za-z0-9_]{1,64}$/u.test(code) ? code : 'NETWORK' };
     throw error;
   }
-});
+}, config.maxOutputTokens);
 
 const worker = createChatWorker(db, { ...config, dailyLimit: 20, separateBudget: true, provider });
 let staff;
@@ -123,6 +131,16 @@ try {
     assert.ok(dispatch.operational?.risks.length);
   };
   const start = (label, text, before, after) => turn(label, text, before, after, true);
+  savePerrysStage(db);
+  const perrysStage = () => {
+    assert.equal(dispatch.inferredLocation?.zoneId, 'entrada-perrys-stage');
+    assert.equal(dispatch.confirmedLocation, null);
+  };
+  await start('perrys-stage', 'Estoy al lado de un letrero morado gigante con forma de rayo. Hay una persona que necesita ayuda.',
+    perrysStage, last => {
+      perrysStage();
+      assert.match(last, /ubicación probable es «Entrada Perry's Stage»/u);
+    });
   await start('desmayo-cerca-del-toro', medical, location, last => {
     location();
     assert.match(last, /respira normalmente/iu);
