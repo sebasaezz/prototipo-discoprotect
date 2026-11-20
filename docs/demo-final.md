@@ -14,7 +14,11 @@
 | AppPersonal en Galaxy S25 | Guardia Demo o Guardia Demo 2 | `reader/build/outputs/apk/debug/reader-debug.apk` |
 | GestiónWeb | Organizador Demo | `web/dist/index.html` y `web/dist/assets/` |
 
-El Festival Demo se siembra con cinco zonas. Entrada principal tiene un toro mecánico y una puerta morada. Escenario tiene una estatua plateada y banderas turquesa. El puesto médico está en Entrada principal. La base incluye tres incidentes históricos ficticios, dos resueltos y uno cancelado. Se distinguen por sus fechas anteriores y las notas de semilla en las resoluciones. Antonia tiene una entrada sin usar y el evento tiene una promoción activa. Los datos se generan para la duración de la sesión de demo.
+El Festival Demo se siembra con seis zonas. Entrada principal tiene un toro mecánico y una puerta morada. Escenario tiene una estatua plateada y banderas turquesa. Entrada Perry's Stage tiene como referencia ficticia un letrero morado gigante con forma de rayo. El puesto médico está en Entrada principal. La base incluye tres incidentes históricos ficticios, dos resueltos y uno cancelado. Se distinguen por sus fechas anteriores y las notas de semilla en las resoluciones. Antonia tiene una entrada sin usar y el evento tiene una promoción activa. Los datos se generan para la duración de la sesión de demo.
+
+Para agregar Entrada Perry's Stage a una demo ya iniciada, ejecuta `node scripts/add-perrys-stage.mjs <ruta-sqlite>` desde `backend`. Usa la ruta de la base que tiene abierta Fastify. El script verifica un respaldo SQLite antes de guardar la zona y registra una revisión del catálogo solo si hay cambios.
+
+Con el mensaje «Estoy al lado de un letrero morado gigante con forma de rayo. Hay alguien que necesita ayuda.», la API del catálogo devuelve la zona activa y `venueZones()` recupera su descripción y referencia. El filtro de datos personales de `chatInput()` interpreta «Entrada Perry» como un nombre personal y excluye la zona del contexto remoto. La inferencia local también omite la descripción, que tiene 215 caracteres frente a su límite de 160. La comprobación se hizo con una base desechable y sin llamar a OpenAI.
 
 ## Recorrido
 
