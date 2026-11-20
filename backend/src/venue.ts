@@ -14,8 +14,9 @@ export const venueEdit = z.union([
   version.extend({ name, venue: name, description: notes(600), accessNotes: notes(300), responseNotes: notes(300) }),
   eventEdit,
 ]);
+export const maxZoneDescription = 240;
 export const zoneEdit = version.extend({
-  name, description: notes(240), active: z.boolean(),
+  name, description: notes(maxZoneDescription), active: z.boolean(),
   kind: zoneKind.optional(), reference: notes(160).optional(),
 });
 export const pointEdit = version.extend({ name, kind: pointKind, zoneId: name.max(128), reference: name, active: z.boolean() });

@@ -19,6 +19,10 @@ El [checkpoint H3](checkpoints/h3-2026-11-15.md) conserva la evidencia de cierre
 | H9 · Implementado en la rama final | Entradas QR ficticias, promociones, acompañantes y búsqueda. | SDK Android y web conectados a los servicios del evento. | Vigencia y permisos automatizados. Cámara pendiente de comprobación física. |
 | H10 · En revisión | Guion, bases desechables, scripts, artefactos y verificación integral. | [Guion final](demo-final.md) y [aceptación](checkpoints/final-acceptance.md). | El cierre físico depende de los Samsung autorizados y la prueba LAN. |
 
+## Base para el mapa y la geolocalización SOS
+
+El desarrollo del mapa interactivo del Parque O’Higgins y la geolocalización SOS de Lollapalooza Chile 2027 debe partir de `codex/discoprotect-integrado-v1` o del commit de `main` que la incorpore tras la revisión. La rama reúne H10, el rediseño de ambas apps y la IA de ubicación con Entrada Perry's Stage. [Checkpoint de integración](checkpoints/integrado-v1.md)
+
 ## Plan de ejecución H6–H10 · Visión integral
 
 ### H6–H7.3 · Gestión operativa integrada

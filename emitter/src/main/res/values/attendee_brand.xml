@@ -1,0 +1,11 @@
+<resources>
+    <string name="attendee_brand_name">DiscoProtect</string>
+    <color name="attendee_icon_background">#330463</color>
+
+    <style name="AttendeeTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+    <style name="AttendeeLaunchTheme" parent="AttendeeTheme">
+        <item name="android:windowBackground">@drawable/attendee_launch_background</item>
+    </style>
+</resources>

@@ -1,6 +1,5 @@
 package cl.innova.nfc.reader
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,185 +16,108 @@ import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-@Composable
-internal fun ReaderScreen(state: ReaderUiState, nfc: NfcAvailability, actions: ReaderController, onSettings: () -> Unit) {
-    DiscoprotectTheme {
-        key(state.configuring, state.incidentsVisible, state.scan is ScanState.Found) {
-            NfcPage("Personal") {
-                if (state.configuring) {
-                    ConnectionSetup(state, actions)
-                } else if (state.incidentsVisible) {
-                    IncidentsPage(state, actions)
-                } else {
-                    ReadingPage(state, nfc, actions, onSettings)
-                }
-            }
-        }
-    }
+internal class DispatchEditor {
+    var editing by mutableStateOf(false)
+    var pending by mutableStateOf<DispatchReviewBody?>(null)
+    var busy by mutableStateOf(false)
+    var notice by mutableStateOf<String?>(null)
+    var detail by mutableStateOf<DispatchDetail?>(null)
 }
 
 @Composable
-private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
-    var confirmation by remember(state.event?.id, state.staffId) { mutableStateOf<Pair<Incident, IncidentAction>?>(null) }
-    var selectedId by remember(state.event?.id, state.staffId) { mutableStateOf<String?>(null) }
-    var services by remember(state.event?.id, state.staffId) { mutableStateOf(false) }
-    var chatVisible by remember(selectedId) { mutableStateOf(false) }
-    val selected = state.incidents?.firstOrNull { it.id == selectedId }
-    BackHandler(selected != null) {
-        if (chatVisible) chatVisible = false else selectedId = null
-    }
+internal fun StaffIncidentDetail(
+    state: ReaderUiState, incident: Incident, actions: ReaderController,
+    editor: DispatchEditor, onChat: () -> Unit,
+) {
+    var confirmation by remember(incident.id) { mutableStateOf<Pair<Long, IncidentAction>?>(null) }
     var note by remember(confirmation) { mutableStateOf("") }
-    if (services && state.event != null) {
-        BackHandler { services = false }
-        TextButton(onClick = { services = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a incidentes") }
-        StaffServicesScreen(actions) { id -> services = false; selectedId = id }
-        return
-    }
-    if (selected != null && chatVisible) {
-        Heading("Conversación", selected.requesterName)
-        TextButton(onClick = { chatVisible = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a los detalles") }
-        key(state.staffId, state.event?.id, selected.id) {
-            IncidentChat(selected.id, attendee = false, outbox = actions.chatOutbox, staffId = state.staffId,
-                load = { actions.conversation(selected.id, it) }, send = { actions.message(selected.id, it) })
-        }
-        return
-    }
-    if (selected == null) {
-        Heading("Incidentes", "Solicitudes SOS registradas en el evento.")
-        state.staffName?.let { Field("Cuenta activa", it) }
-        EventSelector(state, actions::selectEvent)
-        Heading("Mi atención activa", if (state.guardBusy) "Tienes una solicitud asignada." else "Sin solicitudes asignadas.")
-        state.activeIncident?.let { own ->
-            QueueCard(own, if (own.eventId == state.event?.id) "Abrir mi atención" else "Ir al evento de mi atención") {
-                if (own.eventId == state.event?.id) selectedId = own.id else actions.selectEvent(own.eventId)
-            }
-        }
-    } else {
-        TextButton(onClick = { selectedId = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a incidentes") }
-        Heading("Detalle de la solicitud", selected.requesterName)
-        if (selected.status.active && selected.assignedStaff?.id == state.staffId && state.staffId != null) {
-            key(selected.id, state.staffId) { StaffCompanions(selected.id, actions) }
+    var extra by remember(incident.id) { mutableStateOf(false) }
+
+    Text(incident.requesterName, style = MaterialTheme.typography.headlineSmall)
+    StaffCaseSignals(incident)
+    staffSummary(incident)?.let { Field("Situación reportada", it) }
+    incident.dangerAlert?.alert?.let { Status(it, Tone.Warning) }
+    incident.assignedStaff?.let { Field("Guardia responsable", it.name) }
+
+    StaffQueueFeedback(state, actions)
+    val primary = listOf(IncidentAction.Claim, IncidentAction.Start).firstOrNull { state.permits(incident, it) }
+    if (primary != null) {
+        Button(onClick = {
+            if (primary == IncidentAction.Start) actions.operateIncident(incident.id, incident.version, primary)
+            else confirmation = incident.version to primary
+        }, enabled = state.incidentsCurrent && !state.pendingIncident,
+            modifier = Modifier.heightIn(min = 48.dp)) {
+            Text(if (primary == IncidentAction.Claim && incident.hasConversation) "Asumir conversación" else primary.label)
         }
     }
-    OutlinedButton(onClick = actions::refreshIncidents, enabled = !state.incidentsLoading && !state.incidentWriting,
-        modifier = Modifier.heightIn(min = 48.dp)) {
-        Text("Actualizar incidentes")
+    if (incident.hasConversation) {
+        OutlinedButton(onClick = onChat, modifier = Modifier.heightIn(min = 48.dp)) { Text("Abrir conversación") }
     }
-    if (state.incidentsLoading && state.incidents == null) {
-        Status("Consultando incidentes", Tone.Info)
-        LinearProgressIndicator(Modifier.fillMaxWidth())
+    if (state.permits(incident, IncidentAction.Close)) {
+        TextButton(onClick = { confirmation = incident.version to IncidentAction.Close },
+            enabled = state.incidentsCurrent && !state.pendingIncident,
+            modifier = Modifier.heightIn(min = 48.dp)) { Text("Cerrar solicitud") }
     }
-    state.lastIncidentRead?.let { Field("Última consulta", incidentTime(it.toString())) }
-    if (state.incidentWriting) Status("Enviando operación", Tone.Info)
-    state.incidentNotice?.let { Text(it) }
-    if (state.pendingIncident && !state.incidentWriting) {
-        Status("Resultado sin confirmar", Tone.Warning)
-        OutlinedButton(onClick = actions::retryIncident, enabled = state.incidentsCurrent,
-            modifier = Modifier.heightIn(min = 48.dp)) { Text("Reintentar la misma operación") }
+    if (incident.status == IncidentStatus.IN_PROGRESS && state.permits(incident, IncidentAction.Resolve)) {
+        TextButton(onClick = { confirmation = incident.version to IncidentAction.Resolve },
+            enabled = state.incidentsCurrent && !state.pendingIncident,
+            modifier = Modifier.heightIn(min = 48.dp)) { Text("Resolver solicitud") }
     }
-    state.incidentProblem?.let { problem ->
-        val message = if (problem == ApiProblem.NotFound) "La consulta de incidentes no está disponible para este evento."
-            else problem.description()
-        Status(message, Tone.Warning)
-        if (state.incidents != null) Text("Se muestra la última consulta disponible.")
+
+    incident.dispatch?.let {
+        if (it.operational != null || it.analysis != null || state.canReview(incident)) HorizontalDivider()
+        DispatchPanel(it, incident, actions, state.staffId, editor)
     }
-    if (selected == null) {
-        TextButton(onClick = actions::continueReading, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ir al lector NFC") }
-        if (state.event != null) TextButton(onClick = { services = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-            Text("Recinto, control de entradas y búsqueda")
-        }
-        TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) { Text("Configuración y evento") }
-        state.incidents?.let { incidents ->
-            val (active, history) = incidents.partition { it.status.active }
-            Heading("Cola del evento", if (state.guardBusy) "Puedes consultar otros casos mientras estás ocupado." else "Solicitudes activas.")
-            val others = active.filterNot { it.id == state.activeIncident?.id }
-            if (others.isEmpty()) Text("No hay otras solicitudes activas.")
-            others.forEach { incident -> QueueCard(incident, "Ver detalles") { selectedId = incident.id } }
-            if (history.isNotEmpty()) {
-                Heading("Historial", "Solicitudes terminadas de este evento.")
-                history.forEach { incident -> QueueCard(incident, "Ver detalles") { selectedId = incident.id } }
-            }
-        }
-    } else {
-        IncidentCard(selected) {
-            selected.dispatch?.let { DispatchBadge(it) }
-            selected.dangerAlert?.alert?.let { Status(it, Tone.Warning) }
-            if (selected.hasConversation) {
-                Button(onClick = { chatVisible = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text("Abrir conversación")
-                }
-            }
-            listOf(IncidentAction.Claim, IncidentAction.Start, IncidentAction.Close).filter { state.permits(selected, it) }.forEach { action ->
-                Button(onClick = {
-                    if (action == IncidentAction.Start) actions.operateIncident(selected.id, selected.version, action)
-                    else confirmation = selected to action
-                }, enabled = state.incidentsCurrent && !state.pendingIncident,
-                    modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text(if (action == IncidentAction.Claim && selected.hasConversation) "Asumir conversación" else action.label)
-                }
-            }
-        }
-        selected.dispatch?.let { DispatchPanel(it, selected, actions, state.staffId) }
-        key(state.staffId, state.event?.id, selected.id) {
-            VenuePanel(selected.id, actions)
-        }
-        if (selected.triage != null && !selected.hasConversation) {
-            if (state.triageId == selected.id) TriagePanel(state, selected, actions)
-            else TextButton(onClick = { actions.openTriage(selected.id) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text("Ver triaje")
-            }
+    if (incident.status.active && state.staffId != null && incident.assignedStaff?.id == state.staffId) {
+        StaffCompanions(incident.id, actions)
+    }
+    if (incident.triage != null && !incident.hasConversation) {
+        if (state.triageId == incident.id) TriagePanel(state, incident, actions)
+        else TextButton(onClick = { actions.openTriage(incident.id) }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("Ver triaje")
         }
     }
-    confirmation?.let { (incident, action) ->
-        val valid = state.incidentsCurrent && !state.pendingIncident &&
-            state.incidents?.any { it.id == incident.id && it.version == incident.version && state.permits(it, action) } == true
-        AlertDialog(onDismissRequest = { confirmation = null },
+    VenuePanel(incident.id, actions)
+    TextButton(onClick = { extra = !extra }, modifier = Modifier.heightIn(min = 48.dp)) {
+        Text(if (extra) "Ocultar datos del incidente" else "Ver datos del incidente")
+    }
+    if (extra) {
+        IncidentCard(incident)
+        state.lastIncidentRead?.let { Field("Última consulta", incidentTime(it.toString())) }
+    }
+    confirmation?.let { (version, action) ->
+        val valid = state.incidentsCurrent && !state.pendingIncident && incident.version == version &&
+            state.permits(incident, action)
+        AlertDialog(
+            onDismissRequest = { confirmation = null },
             title = { Text(when (action) {
                 IncidentAction.Claim -> "¿Asumir esta solicitud?"
                 IncidentAction.Close -> "¿Cerrar esta solicitud?"
                 else -> "¿Resolver esta solicitud?"
             }) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
-                    if (!valid) Text("La solicitud cambió o requiere una consulta vigente.")
-                    else if (action == IncidentAction.Claim) Text(
-                        if (incident.hasConversation) "El caso quedará asignado a tu cuenta y podrás responder en el chat."
-                        else "Quedarás a cargo de la atención de este SOS.")
-                    else OutlinedTextField(note, { if (it.length <= 240) note = it },
-                        label = { Text("Motivo de cierre") }, supportingText = { Text("${note.length}/240") })
-                }
+                if (!valid) Text("La solicitud cambió. Consulta el estado vigente.")
+                else if (action == IncidentAction.Claim) Text("Quedarás a cargo de la atención de este SOS.")
+                else OutlinedTextField(note, { if (it.length <= 240) note = it },
+                    label = { Text(if (action == IncidentAction.Close) "Motivo de cierre" else "Nota de resolución") })
             },
             confirmButton = {
                 Button(onClick = {
-                    actions.operateIncident(incident.id, incident.version, action, note)
+                    actions.operateIncident(incident.id, version, action, note)
                     confirmation = null
                 }, enabled = valid && (action != IncidentAction.Close || note.isNotBlank()),
                     modifier = Modifier.heightIn(min = 48.dp)) { Text(action.label) }
             },
-            dismissButton = { TextButton(onClick = { confirmation = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver") } })
+            dismissButton = {
+                TextButton(onClick = { confirmation = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver") }
+            },
+        )
     }
 }
 
 @Composable
-private fun QueueCard(incident: Incident, label: String, open: () -> Unit) {
-    Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.padding(Space.sm), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-            Text(incident.requesterName, style = MaterialTheme.typography.titleMedium)
-            Status(incident.status.label, incident.status.tone)
-            incident.dispatch?.let {
-                DispatchBadge(it)
-                Text(it.displayedLocation())
-                if (incident.status.active) Text("${it.elapsedSeconds / 60} min ${it.elapsedSeconds % 60} s desde la emisión")
-            }
-            TextButton(onClick = open, modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
-        }
-    }
-}
-
-@Composable
-private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, actions: ReaderController, staffId: String?) {
+private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, actions: ReaderController, staffId: String?, editor: DispatchEditor) {
     dispatch.operational?.let { report ->
-        Field("Situación reportada", report.situation)
         Field("Por verificar", report.pending.joinToString(" · "))
         if (report.guidance != null) Text("Orientación de emergencia registrada")
         report.risks.forEach { risk ->
@@ -226,30 +148,25 @@ private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, action
 
     if (incident.assignedStaff?.id == null || incident.assignedStaff.id != staffId ||
         incident.status !in setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS)) return
-    var editing by remember { mutableStateOf(false) }
-    var pending by remember { mutableStateOf<DispatchReviewBody?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var notice by remember { mutableStateOf<String?>(null) }
-    var detail by remember { mutableStateOf<DispatchDetail?>(null) }
     val scope = rememberCoroutineScope()
-    notice?.let { Text(it) }
+    editor.notice?.let { Text(it) }
     TextButton(onClick = {
-        if (editing) editing = false
+        if (editor.editing) editor.editing = false
         else {
-            editing = true
-            if (detail == null) {
+            editor.editing = true
+            if (editor.detail == null) {
                 scope.launch {
-                    try { detail = actions.dispatch(incident.id) }
+                    try { editor.detail = actions.dispatch(incident.id) }
                     catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { notice = "No se pudo consultar el catálogo. Cierra y vuelve a abrir la corrección." }
+                    catch (_: Exception) { editor.notice = "No se pudo consultar el catálogo. Cierra y vuelve a abrir la corrección." }
                 }
             }
         }
-    }, enabled = pending == null && !busy, modifier = Modifier.heightIn(min = 48.dp)) {
-        Text(if (editing) "Cerrar corrección" else "Corregir prioridad y ubicación")
+    }, enabled = editor.pending == null && !editor.busy, modifier = Modifier.heightIn(min = 48.dp)) {
+        Text(if (editor.editing) "Cerrar corrección" else "Corregir prioridad y ubicación")
     }
-    if (!editing) return
-    val loaded = detail ?: return
+    if (!editor.editing) return
+    val loaded = editor.detail ?: return
     val current = if (dispatch.revision >= loaded.dispatch.revision) dispatch else loaded.dispatch
     key(current.revision) {
         var priority by remember { mutableStateOf(current.humanPriority) }
@@ -257,7 +174,7 @@ private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, action
         var reference by remember { mutableStateOf(current.confirmedLocation?.text.orEmpty()) }
         var danger by remember { mutableStateOf(DangerAssessment.UNCHANGED) }
         var reason by remember { mutableStateOf("") }
-        val editable = pending == null && !busy
+        val editable = editor.pending == null && !editor.busy
         DispatchChoice(priority?.label ?: "Sin prioridad humana", editable, listOf(null) + DispatchPriority.entries,
             { it?.label ?: "Sin prioridad humana" }) { priority = it }
         val zoneName = loaded.zones.firstOrNull { it.id == zone }?.name
@@ -271,33 +188,33 @@ private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, action
             label = { Text("Motivo de la revisión") }, modifier = Modifier.fillMaxWidth())
         Button(onClick = {
             val location = if (zone != null || reference.isNotBlank()) DispatchLocationInput(zone, reference.trim().ifEmpty { null }) else null
-            val command = pending ?: DispatchReviewBody(current.revision, UUID.randomUUID().toString(), priority, location, danger, reason.trim())
-            pending = command
-            busy = true
-            notice = null
+            val command = editor.pending ?: DispatchReviewBody(current.revision, UUID.randomUUID().toString(), priority, location, danger, reason.trim())
+            editor.pending = command
+            editor.busy = true
+            editor.notice = null
             scope.launch {
                 try {
                     val reply = actions.reviewDispatch(incident.id, command)
-                    detail = loaded.copy(dispatch = reply.dispatch)
-                    pending = null
-                    editing = false
-                    notice = "Corrección registrada."
+                    editor.detail = loaded.copy(dispatch = reply.dispatch)
+                    editor.pending = null
+                    editor.editing = false
+                    editor.notice = "Corrección registrada."
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: ApiFailure) {
                     if (failure.problem in setOf(ApiProblem.Conflict, ApiProblem.Forbidden, ApiProblem.InvalidInput, ApiProblem.NotFound)) {
-                        pending = null
-                        detail = null
-                        editing = false
+                        editor.pending = null
+                        editor.detail = null
+                        editor.editing = false
                         actions.refreshIncidents()
-                        notice = "La revisión requiere consultar el despacho vigente."
-                    } else notice = "Revisión sin confirmar. Reintenta la misma operación."
+                        editor.notice = "La revisión requiere consultar el despacho vigente."
+                    } else editor.notice = "Revisión sin confirmar. Reintenta la misma operación."
                 } finally {
-                    busy = false
+                    editor.busy = false
                 }
             }
-        }, enabled = !busy && (pending != null || reason.isNotBlank()), modifier = Modifier.heightIn(min = 48.dp)) {
-            Text(if (pending != null && !busy) "Reintentar revisión" else "Guardar revisión")
+        }, enabled = !editor.busy && (editor.pending != null || reason.isNotBlank()), modifier = Modifier.heightIn(min = 48.dp)) {
+            Text(if (editor.pending != null && !editor.busy) "Reintentar revisión" else "Guardar revisión")
         }
     }
 }
@@ -430,7 +347,7 @@ private fun <T> TriageMenu(label: String, selected: T, options: List<T>, text: (
 }
 
 @Composable
-private fun ReadingPage(state: ReaderUiState, nfc: NfcAvailability, actions: ReaderController, onSettings: () -> Unit) {
+internal fun ReadingPage(state: ReaderUiState, nfc: NfcAvailability, actions: ReaderController, onSettings: () -> Unit) {
     val scan = state.scan
     if (state.local) {
         Status("DEMO LOCAL — DATOS NO SINCRONIZADOS", Tone.Warning)
@@ -447,7 +364,7 @@ private fun ReadingPage(state: ReaderUiState, nfc: NfcAvailability, actions: Rea
         EmergencyProfile(scan.profile, scan.source)
     } else {
         NfcMark()
-        Heading("Lector NFC", "Identifica a un asistente para consultar su ficha de emergencia.")
+        Text("Acerca la credencial del asistente para consultar su ficha de emergencia.")
         ScanFeedback(scan, nfc, onSettings, state.server == ServerState.Unreachable)
         if (state.local && scan == ScanState.Ready) {
             Text("Los perfiles ficticios de este teléfono pueden diferir de los del servidor.",
@@ -467,13 +384,11 @@ private fun ReadingPage(state: ReaderUiState, nfc: NfcAvailability, actions: Rea
         }
     }
 
-    TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) {
-        Text(if (state.local) "Volver al modo conectado" else "Configuración y evento")
-    }
-    if (!state.local) {
-        TextButton(onClick = actions::openIncidents, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ver incidentes") }
-    }
+}
 
+@Composable
+internal fun StaffNfcDiagnostics(state: ReaderUiState) {
+    val scan = state.scan
     DiagnosticsPanel {
         val debug = state.debug
         Text("Etiqueta detectada: ${if (debug.tagDetected) "Sí" else "No"}")
@@ -547,7 +462,6 @@ private fun EmergencyProfile(profile: HealthProfile, source: Source) {
     val sourceLabel = if (source == Source.Server) "Fuente: servidor" else "Fuente: demo local"
     val subtitle = profile.age?.let { "$it años · $sourceLabel" } ?: "Edad sin registro · $sourceLabel"
     Heading(profile.name, subtitle)
-    Field("Grupo sanguíneo autodeclarado", profile.bloodType ?: "Sin registro")
     Surface(
         Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -561,11 +475,12 @@ private fun EmergencyProfile(profile: HealthProfile, source: Source) {
     }
     Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
         Field("Condiciones relevantes", profile.conditions.recorded())
-        Field("Medicamentos", profile.medications.recorded())
         HorizontalDivider()
         Text("Contactos de emergencia", Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium)
         if (profile.contacts.isEmpty()) Text("Sin contactos registrados")
         profile.contacts.forEach { Field(it.name, "${it.relationship}\n${it.phone}") }
+        Field("Medicamentos", profile.medications.recorded())
+        Field("Grupo sanguíneo autodeclarado", profile.bloodType ?: "Sin registro")
         profile.updatedAt?.let {
             val time = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
                 .withLocale(Locale.getDefault()).withZone(ZoneId.systemDefault()).format(it)

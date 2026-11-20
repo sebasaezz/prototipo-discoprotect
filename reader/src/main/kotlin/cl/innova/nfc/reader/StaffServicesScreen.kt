@@ -19,25 +19,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class StaffService(val label: String) {
-    Venue("Recinto"), Tickets("Control de entradas"), Search("Búsqueda autorizada")
+internal class StaffTicketState {
+    var code by mutableStateOf("")
+    var pending by mutableStateOf<TicketCheck?>(null)
+    var result by mutableStateOf<TicketResult?>(null)
+    var error by mutableStateOf<String?>(null)
+    var busy by mutableStateOf(false)
 }
 
 @Composable
-internal fun StaffServicesScreen(actions: ReaderController, openIncident: (String) -> Unit) {
-    var service by remember { mutableStateOf(StaffService.Venue) }
-    StaffService.entries.forEach { option ->
-        FilterChip(service == option, { service = option }, { Text(option.label) }, modifier = Modifier.heightIn(min = 48.dp))
-    }
-    when (service) {
-        StaffService.Venue -> StaffVenuePanel(actions)
-        StaffService.Tickets -> StaffTicketsPanel(actions)
-        StaffService.Search -> StaffSearchPanel(actions, openIncident)
-    }
-}
-
-@Composable
-private fun StaffVenuePanel(actions: ReaderController) {
+internal fun StaffVenuePanel(actions: ReaderController) {
     var venue by remember { mutableStateOf<StaffVenue?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var revision by remember { mutableIntStateOf(0) }
@@ -60,16 +51,11 @@ private fun StaffVenuePanel(actions: ReaderController) {
 }
 
 @Composable
-private fun StaffTicketsPanel(actions: ReaderController) {
+internal fun StaffTicketsPanel(actions: ReaderController, ui: StaffTicketState) {
     val scope = rememberCoroutineScope()
-    var code by remember { mutableStateOf("") }
-    var pending by remember { mutableStateOf<TicketCheck?>(null) }
-    var result by remember { mutableStateOf<TicketResult?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { photo ->
         if (photo == null) return@rememberLauncherForActivityResult
-        busy = true
+        ui.busy = true
         scope.launch {
             try {
                 val scanned = withContext(Dispatchers.Default) {
@@ -79,40 +65,40 @@ private fun StaffTicketsPanel(actions: ReaderController) {
                     try { QRCodeReader().decode(BinaryBitmap(HybridBinarizer(source))).text }
                     catch (_: ReaderException) { null }
                 }
-                if (scanned == null) error = "No se pudo leer el QR. Acércalo a la cámara o ingresa el código."
-                else { code = scanned.take(120); error = null; result = null }
-            } finally { busy = false }
+                if (scanned == null) ui.error = "No se pudo leer el QR. Acércalo a la cámara o ingresa el código."
+                else { ui.code = scanned.take(120); ui.error = null; ui.result = null }
+            } finally { ui.busy = false }
         }
     }
     Heading("Control de entradas", "Captura el QR de la entrada o escribe el código. Al validar, el servidor registra el ingreso.")
     OutlinedButton(onClick = {
         try { camera.launch(null) }
-        catch (_: ActivityNotFoundException) { error = "No hay una cámara disponible. Ingresa el código manualmente." }
-    }, enabled = !busy && pending == null, modifier = Modifier.heightIn(min = 48.dp)) { Text("Capturar QR") }
-    OutlinedTextField(code, { code = it.take(120); result = null }, enabled = !busy && pending == null,
+        catch (_: ActivityNotFoundException) { ui.error = "No hay una cámara disponible. Ingresa el código manualmente." }
+    }, enabled = !ui.busy && ui.pending == null, modifier = Modifier.heightIn(min = 48.dp)) { Text("Capturar QR") }
+    OutlinedTextField(ui.code, { ui.code = it.take(120); ui.result = null }, enabled = !ui.busy && ui.pending == null,
         label = { Text("Código de entrada") }, singleLine = true)
     Button(onClick = {
-        val attempt = pending ?: TicketCheck(code.trim(), UUID.randomUUID().toString())
-        pending = attempt
-        result = null
-        error = null
-        busy = true
+        val attempt = ui.pending ?: TicketCheck(ui.code.trim(), UUID.randomUUID().toString())
+        ui.pending = attempt
+        ui.result = null
+        ui.error = null
+        ui.busy = true
         scope.launch {
             try {
-                result = actions.validateTicket(attempt).result
-                pending = null
-                code = ""
-            } catch (failure: ApiFailure) { error = failure.problem.description() }
-            finally { busy = false }
+                ui.result = actions.validateTicket(attempt).result
+                ui.pending = null
+                ui.code = ""
+            } catch (failure: ApiFailure) { ui.error = failure.problem.description() }
+            finally { ui.busy = false }
         }
-    }, enabled = code.isNotBlank() && !busy, modifier = Modifier.heightIn(min = 48.dp)) {
-        Text(if (pending != null && !busy) "Reintentar la misma validación" else "Validar ingreso")
+    }, enabled = ui.code.isNotBlank() && !ui.busy, modifier = Modifier.heightIn(min = 48.dp)) {
+        Text(if (ui.pending != null && !ui.busy) "Reintentar la misma validación" else "Validar ingreso")
     }
-    if (pending != null && !busy) TextButton(onClick = { pending = null; code = ""; error = null },
+    if (ui.pending != null && !ui.busy) TextButton(onClick = { ui.pending = null; ui.code = ""; ui.error = null },
         modifier = Modifier.heightIn(min = 48.dp)) { Text("Descartar intento sin confirmar") }
-    if (busy) Text("Procesando entrada…")
-    result?.let { Status(it.label, if (it == TicketResult.VALID) Tone.Success else Tone.Warning) }
-    error?.let { Status(it, Tone.Warning) }
+    if (ui.busy) Text("Procesando entrada…")
+    ui.result?.let { Status(it.label, if (it == TicketResult.VALID) Tone.Success else Tone.Warning) }
+    ui.error?.let { Status(it, Tone.Warning) }
 }
 
 private enum class SearchType(val api: String, val label: String) {
@@ -120,7 +106,7 @@ private enum class SearchType(val api: String, val label: String) {
 }
 
 @Composable
-private fun StaffSearchPanel(actions: ReaderController, openIncident: (String) -> Unit) {
+internal fun StaffSearchPanel(actions: ReaderController, openIncident: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var type by remember { mutableStateOf(SearchType.Incidents) }
     var term by remember { mutableStateOf("") }

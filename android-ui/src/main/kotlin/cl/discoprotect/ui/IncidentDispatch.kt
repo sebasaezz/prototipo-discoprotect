@@ -82,11 +82,11 @@ internal enum class DispatchPriority(val label: String, val icon: String, val ba
 }
 
 @Composable
-internal fun DispatchBadge(dispatch: IncidentDispatch) {
+internal fun DispatchBadge(dispatch: IncidentDispatch, compact: Boolean = false) {
     val priority = dispatch.effectivePriority
     Surface(color = Color(priority.background), contentColor = Color(priority.foreground),
         shape = MaterialTheme.shapes.small) {
-        Text("${priority.icon}  ${dispatch.priorityLabel()}", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        Text("${priority.icon}  ${if (compact) priority.label else dispatch.priorityLabel()}", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             style = MaterialTheme.typography.labelLarge)
     }
 }

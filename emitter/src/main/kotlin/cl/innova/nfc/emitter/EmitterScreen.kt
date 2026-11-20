@@ -12,7 +12,7 @@ import cl.discoprotect.ui.*
 @Composable
 internal fun EmitterScreen(
     diagnostics: Diagnostics, identity: ShareableIdentity?, reachability: Reachability,
-    onRefresh: () -> Unit, onSettings: () -> Unit, onChoose: () -> Unit,
+    onSettings: () -> Unit, onChoose: () -> Unit,
 ) {
     NfcMark()
     Heading("Identificación NFC", "Permite que el personal de seguridad identifique tu ficha de demostración.")
@@ -26,7 +26,7 @@ internal fun EmitterScreen(
     val ready = identity != null && diagnostics.available && diagnostics.enabled && diagnostics.hce
     if (identity == null) {
         Status("Emisión deshabilitada · Sin credencial verificada", Tone.Warning)
-        Button(onClick = onChoose, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ir a Conexión") }
+        Button(onClick = onChoose, modifier = Modifier.heightIn(min = 48.dp)) { Text("Verificar cuenta") }
     } else {
         Field("Cuenta activa", identity.person.name)
         Status(if (ready) "Listo para compartir" else "Credencial verificada · NFC del teléfono no disponible",
@@ -49,6 +49,11 @@ internal fun EmitterScreen(
         }
     }
 
+}
+
+@Composable
+internal fun NfcDiagnostics(diagnostics: Diagnostics, identity: ShareableIdentity?, onRefresh: () -> Unit) {
+    Heading("Estado técnico", "Consulta la compatibilidad y la emisión del teléfono.")
     if (identity != null) Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
         Text("Identificador de demostración", style = MaterialTheme.typography.titleMedium)
         SelectionContainer {

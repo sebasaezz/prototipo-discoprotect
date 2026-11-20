@@ -1,0 +1,12 @@
+<resources>
+    <string name="staff_brand_name">DiscoProtect</string>
+    <string name="staff_launcher_name">Personal</string>
+    <color name="staff_icon_background">#330463</color>
+
+    <style name="StaffTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+    <style name="StaffLaunchTheme" parent="StaffTheme">
+        <item name="android:windowBackground">@drawable/staff_launch_background</item>
+    </style>
+</resources>

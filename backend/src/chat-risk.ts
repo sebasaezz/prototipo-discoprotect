@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Db } from './db.js';
-import { safeDescription } from './triage-provider.js';
+import { messageText } from './chat-text.js';
 import { normalizeText } from './visual-location.js';
 
 export const questionId = z.enum(['BREATHING', 'RESPONSIVENESS', 'SCENE', 'AFFECTED', 'LANDMARK', 'HELP']);
@@ -59,7 +59,7 @@ function asserted(pattern: RegExp, clause: string) {
 }
 
 export function observeAttendee(db: Db, id: string, seq: number, original: string) {
-  const safe = safeDescription(original, 500, false);
+  const safe = messageText(original);
   const facts: Observation[] = [];
   if (safe) {
     const text = normalizeText(safe).replace(/^[¡!¿?]+|[.!?¡¿]+$/gu, '').trim();

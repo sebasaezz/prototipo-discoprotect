@@ -87,18 +87,26 @@ fun DiscoprotectTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-fun NfcPage(role: String, content: @Composable ColumnScope.() -> Unit) {
+fun NfcPage(
+    role: String,
+    brand: (@Composable () -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     val colors = MaterialTheme.colorScheme
     Scaffold(containerColor = colors.background, contentColor = colors.onBackground) { insets ->
         Column(Modifier.fillMaxSize().padding(insets)) {
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Row(
-                    Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.md),
+                    Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(
+                        horizontal = Space.lg, vertical = if (brand == null) Space.md else Space.xs,
+                    ),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Discoprotect", Modifier.weight(1f).padding(end = Space.sm),
-                        style = MaterialTheme.typography.titleMedium, color = colors.primary)
+                    Box(Modifier.weight(1f).padding(end = Space.sm), contentAlignment = Alignment.CenterStart) {
+                        if (brand != null) brand()
+                        else Text("Discoprotect", style = MaterialTheme.typography.titleMedium, color = colors.primary)
+                    }
                     Text(role, style = MaterialTheme.typography.labelLarge, color = colors.onSurfaceVariant)
                 }
             }

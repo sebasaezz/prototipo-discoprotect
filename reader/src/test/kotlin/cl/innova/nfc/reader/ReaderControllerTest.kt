@@ -322,6 +322,31 @@ class ReaderControllerTest {
         assertEquals(ScanState.Ready, screen.state.value.scan)
     }
 
+    @Test fun `leaving NFC discards the read without resetting the operational queue`() = runTest {
+        val api = FakeApi()
+        val item = incident(eventA)
+        api.onIncidents = { _, _ -> listOf(item) }
+        val screen = controller(api)
+        authenticate(screen)
+        screen.openIncidents()
+        runCurrent()
+        screen.continueReading()
+        assertTrue(screen.state.value.canScan)
+        screen.scan {
+            kotlinx.coroutines.delay(1000)
+            readIdentity()
+        }
+        runCurrent()
+        screen.leaveReader()
+        advanceTimeBy(2000)
+        runCurrent()
+        assertFalse(screen.state.value.canScan)
+        assertEquals(listOf(item), screen.state.value.incidents)
+        assertEquals(ScanState.Ready, screen.state.value.scan)
+        assertEquals(0, api.resolveCount)
+        assertEquals(eventA, screen.state.value.event)
+    }
+
     private fun TestScope.ready(api: FakeApi): ReaderController = controller(api).also {
         authenticate(it)
         it.continueReading()

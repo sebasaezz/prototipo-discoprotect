@@ -22,14 +22,14 @@ import cl.discoprotect.ui.Status
 import cl.discoprotect.ui.Tone
 
 @Composable
-internal fun ConnectionSetup(state: ReaderUiState, actions: ReaderController) {
+internal fun ConnectionSetup(state: ReaderUiState, actions: ReaderController, contextLocked: Boolean, openDemo: () -> Unit) {
     var address by remember(state.address) { mutableStateOf(state.address) }
     val validated = serverAddress(address, BuildConfig.DEBUG)?.toString()
     val sameAddress = validated == state.address
-    val idle = state.task == null
+    val idle = state.task == null && !contextLocked
     val focus = LocalFocusManager.current
 
-    Heading("Conexión del lector", "Conecta AppPersonal al servidor del evento para consultar fichas por NFC.")
+    if (contextLocked) Status("Confirma la operación pendiente antes de cambiar la conexión o la cuenta.", Tone.Warning)
     Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large) {
         Column(Modifier.padding(Space.md), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
             Text("Servidor", style = MaterialTheme.typography.titleMedium)
@@ -70,24 +70,14 @@ internal fun ConnectionSetup(state: ReaderUiState, actions: ReaderController) {
     }
     if (sameAddress && state.signedIn) {
         Status(state.staffName ?: "Guardia autenticado", Tone.Success)
-        EventSelector(state, actions::selectEvent)
-        if (state.event != null) {
-            Button(onClick = actions::openIncidents, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text("Ver incidentes")
-            }
-        }
-        if (state.canContinue) {
-            Button(onClick = actions::continueReading, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text("Ir al lector NFC")
-            }
-        }
+        if (state.event == null) EventSelector(state, actions::selectEvent, enabled = idle)
         TextButton(onClick = actions::logout, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
             Text("Cerrar sesión")
         }
     }
 
     HorizontalDivider()
-    TextButton(onClick = actions::useLocal, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
+    TextButton(onClick = openDemo, enabled = idle, modifier = Modifier.heightIn(min = 48.dp)) {
         Text("Usar modo demo local")
     }
 }
@@ -133,7 +123,7 @@ private fun GuardLogin(idle: Boolean, signIn: (String, StaffAccount) -> Unit) {
 }
 
 @Composable
-internal fun EventSelector(state: ReaderUiState, select: (String) -> Unit) {
+internal fun EventSelector(state: ReaderUiState, select: (String) -> Unit, enabled: Boolean = true) {
     Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
         if (state.events.size == 1) {
             state.event?.let { Field("Evento autorizado", "${it.name} · ${it.venue}") }
@@ -143,10 +133,10 @@ internal fun EventSelector(state: ReaderUiState, select: (String) -> Unit) {
                 state.events.forEach { event ->
                     val selected = event.id == state.event?.id
                     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                        .selectable(selected, enabled = state.task == null, role = Role.RadioButton) { select(event.id) }
+                        .selectable(selected, enabled = enabled && state.task == null, role = Role.RadioButton) { select(event.id) }
                         .padding(vertical = Space.sm),
                         verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = selected, onClick = null, enabled = state.task == null)
+                        RadioButton(selected = selected, onClick = null, enabled = enabled && state.task == null)
                         Column(Modifier.padding(start = Space.sm)) {
                             Text(event.name, style = MaterialTheme.typography.labelLarge)
                             Text(event.venue, style = MaterialTheme.typography.bodyMedium)

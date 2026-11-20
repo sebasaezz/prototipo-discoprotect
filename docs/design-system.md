@@ -1,8 +1,8 @@
 # Design System
 
-Discoprotect usa una interfaz clara, plana y centrada en la tarea. La marca y el rol encabezan ambas pantallas. Asistente prioriza disponibilidad e instrucciones de NFC. Personal prioriza estado de lectura, identidad y alergias. Los diagnósticos se muestran a petición. Usa bordes discretos y espacio entre bloques para mantener una jerarquía clara.
+Discoprotect usa una interfaz clara, plana y centrada en la tarea. La marca y el rol encabezan ambas pantallas. Asistente prioriza pedir ayuda y continuar la atención. Personal prioriza estado de lectura, identidad y alergias. Los diagnósticos se muestran a petición. Usa bordes discretos y espacio entre bloques para mantener una jerarquía clara.
 
-En AppAsistente, la navegación separa identificación NFC, ficha, contactos y conexión. El formulario presenta errores junto a cada entrada, y la revisión de conflictos muestra los datos vigentes antes de habilitar otro guardado.
+En AppAsistente, la barra inferior organiza Inicio, Ayuda, Servicios y Perfil. Perfil agrupa datos de emergencia, credencial NFC, cuenta, conexión y diagnósticos. El formulario presenta errores junto a cada entrada, y la revisión de conflictos muestra los datos vigentes antes de habilitar otro guardado.
 
 En H4, Identificación separa el estado del hardware del estado de emisión. El nombre activo es el confirmado por el servidor. Conexión y edición usan un diálogo Material 3 para elegir cuenta, confirmar el cambio y advertir si hay un borrador.
 
@@ -34,4 +34,4 @@ El contraste calculado de los pares principales es 12.38:1 para blanco sobre mor
 
 Android define colores, tipografía, formas, espaciado y componentes compartidos en `android-ui/src/main/kotlin/cl/discoprotect/ui/Design.kt`. Las apps usan Material 3 en modo claro con los colores de marca. La web de incidentes reutiliza los valores en CSS, con fuente Roboto o del sistema, controles con foco visible y estados con texto.
 
-SOS tiene su propio destino. La pulsación de 1,5 segundos muestra progreso y la acción accesible abre un diálogo de confirmación. Los estados de envío, incertidumbre, recepción y cancelación tienen etiquetas. Las tarjetas Android y la tabla web exponen el mismo ID del incidente, zona o ubicación desconocida y estado textual.
+Inicio presenta el SOS y prioriza continuar cuando existe una solicitud activa. Ayuda reúne conversación e historial. La pulsación de 1,5 segundos muestra progreso y la acción accesible abre un diálogo de confirmación. Los estados de envío, incertidumbre, recepción y cancelación tienen etiquetas. Los detalles de Ayuda conservan el identificador, la ubicación y las transiciones del incidente.
