@@ -28,7 +28,7 @@ internal fun StaffConversation(
 private fun ChatLayout(incident: Incident, chat: IncidentChatContent, modifier: Modifier, onDetails: () -> Unit) {
     val keyboard = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val list = rememberLazyListState()
-    val closed = chat.state?.control == ChatControl.CLOSED
+    val closed = !incident.status.active || chat.state?.control == ChatControl.CLOSED
     val empty = chat.messages.isEmpty() && !closed
     val parts = chat.messages.size + (if (closed || empty) 1 else 0)
     val followLatest = !list.canScrollForward
@@ -67,7 +67,7 @@ private fun ChatLayout(incident: Incident, chat: IncidentChatContent, modifier: 
             items(chat.messages, key = { it.seq }) { SharedChatBubble(it, attendee = false) }
             if (closed) item(key = "closed") { ChatSystemNote("Conversación cerrada · Solo lectura") }
         }
-        if (chat.allowed || chat.pending) SharedChatComposer(chat)
+        if (chat.allowed && !closed || chat.pending) SharedChatComposer(chat)
         else if (!closed && chat.state != null) {
             ChatSystemNote("Solo el guardia asignado puede responder.")
         }

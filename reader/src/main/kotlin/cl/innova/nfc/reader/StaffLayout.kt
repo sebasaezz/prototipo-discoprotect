@@ -8,9 +8,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import cl.discoprotect.ui.*
 
@@ -69,13 +71,22 @@ internal fun StaffLayout(
             }
         },
         bottomBar = {
-            if (page.main) NavigationBar(containerColor = colors.surface) {
-                StaffPage.entries.filter { it.main }.forEach { destination ->
-                    NavigationBarItem(
-                        selected = page == destination, onClick = { open(destination) },
-                        icon = { WorkspaceIcon(requireNotNull(destination.icon)) },
-                        label = { Text(destination.title, maxLines = 2, softWrap = true) },
-                    )
+            if (page.main) BoxWithConstraints {
+                val wideLabels = maxWidth < 380.dp && LocalDensity.current.fontScale > 1.15f
+                NavigationBar(containerColor = colors.surface) {
+                    StaffPage.entries.filter { it.main }.forEach { destination ->
+                        val width = if (!wideLabels) 1f else when (destination) {
+                            StaffPage.Incidents -> 1.12f
+                            StaffPage.Tools -> 1.36f
+                            else -> .76f
+                        }
+                        NavigationBarItem(
+                            selected = page == destination, onClick = { open(destination) },
+                            modifier = Modifier.weight(width),
+                            icon = { WorkspaceIcon(requireNotNull(destination.icon)) },
+                            label = { Text(destination.title, maxLines = 2, textAlign = TextAlign.Center) },
+                        )
+                    }
                 }
             }
         },
