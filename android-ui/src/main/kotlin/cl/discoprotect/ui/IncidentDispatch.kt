@@ -29,6 +29,24 @@ internal enum class DispatchPriority(val label: String, val icon: String, val ba
     val uncertainty: List<String>,
     val observedAt: String,
     val inputSeq: Long,
+    val locationEvidence: DispatchLocationEvidence? = null,
+)
+
+@Serializable internal data class DispatchLocationEvidence(val messageSeq: Long, val quote: String, val feature: String?)
+
+@Serializable internal data class DispatchRisk(val kind: String, val messageSeq: Long, val quote: String, val uncertain: Boolean)
+
+@Serializable internal data class DispatchOperational(
+    val situation: String, val pending: List<String>, val guidance: String?, val risks: List<DispatchRisk>,
+)
+
+@Serializable internal enum class AttendeeLocationSource(val label: String) {
+    CONFIRMED_AI("Confirmada por el asistente"), INDICATED("Indicada por el asistente"),
+}
+
+@Serializable internal data class AttendeeDispatchLocation(
+    val zoneId: String, val zoneName: String, val source: AttendeeLocationSource, val messageSeq: Long,
+    val evidence: DispatchLocationEvidence,
 )
 
 @Serializable internal enum class DangerAssessment(val label: String) {
@@ -40,18 +58,25 @@ internal enum class DispatchPriority(val label: String, val icon: String, val ba
     val humanPriority: DispatchPriority?, val elapsedSeconds: Long, val revision: Long, val evaluatedAt: String,
     val confirmedLocation: DispatchLocation?, val declaredLocation: DispatchLocation?, val inferredLocation: DispatchLocation?,
     val analysis: DispatchAnalysis?,
+    val attendeeLocation: AttendeeDispatchLocation? = null,
+    val operational: DispatchOperational? = null,
+    val locationEvidence: DispatchLocationEvidence? = null,
 ) {
     fun priorityLabel() = effectivePriority.label + when (prioritySource) {
         "AI_PROVISIONAL" -> " · Provisional IA"
         "HUMAN" -> " · Guardia"
         "DECLARED_DANGER" -> " · Peligro declarado"
+        "LOCAL_RISK" -> " · Señal crítica del chat"
+        "LOCAL_URGENT" -> " · Señal urgente del chat"
         else -> ""
     }
 
     fun displayedLocation(): String = when {
         confirmedLocation != null -> "Confirmada · ${confirmedLocation.label()}"
-        declaredLocation != null -> "Declarada · ${declaredLocation.label()}"
+        attendeeLocation != null -> "${attendeeLocation.source.label} · ${attendeeLocation.zoneName}"
+        declaredLocation?.zoneName != null -> "Indicada por el asistente · ${declaredLocation.label()}"
         inferredLocation != null -> "Inferida por IA · ${inferredLocation.label()}"
+        declaredLocation != null -> "Declarada · ${declaredLocation.label()}"
         else -> "Ubicación desconocida"
     }
 }

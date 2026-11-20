@@ -49,7 +49,8 @@ async function fixture(t: TestContext, disk = false, enabled = disk) {
 
 test('H7.3 one guard across events, exact replays, cancellation and closure release the guard', async t => {
   const f = await fixture(t);
-  f.db.exec(`INSERT INTO events SELECT 'otro', name, venue, starts_at, ends_at, status FROM events WHERE id = 'demo-festival';
+  f.db.exec(`INSERT INTO events (id, name, venue, starts_at, ends_at, status)
+    SELECT 'otro', name, venue, starts_at, ends_at, status FROM events WHERE id = 'demo-festival';
     INSERT INTO event_memberships VALUES ('other-attendee', 'otro', 'demo-antonia', 'ATTENDEE'),
       ('other-guard', 'otro', 'demo-guardia', 'STAFF');`);
   const incidents = [await f.create(), await f.create('otro')];

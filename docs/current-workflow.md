@@ -1,6 +1,12 @@
 # Flujo actual de Discoprotect
 
-Discoprotect es un prototipo universitario de gestión de incidentes en eventos masivos. H7–H7.3 se integraron a `main` en el merge `8f5439e` con 6/6 comprobaciones físicas del flujo principal aprobadas. H8.1 amplía GestiónWeb en `codex/discoprotect-h8`. [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7)
+La [rama final](checkpoints/final-acceptance.md) contiene H8.2–H10. GestiónWeb permite seleccionar o crear el evento, configurar sus horarios, recinto y guardias, gestionar incidentes, consultar estadísticas y publicar promociones ficticias. En **Entradas** emite o revoca una entrada y puede validar un código de forma manual. En **Búsqueda** consulta incidentes, zonas, guardias autorizados y entradas por ID.
+
+En AppAsistente, **Servicios del evento** comparte la selección con SOS. Allí se presenta la entrada QR, se acepta o deshace un vínculo de acompañante y se consultan las promociones vigentes. En AppPersonal, desde **Incidentes → Recinto, control de entradas y búsqueda**, se puede abrir el catálogo operativo, capturar un QR o validar su código manual y buscar por ID, estado o nombre según el recurso. El guardia asignado puede consultar los nombres de acompañantes desde el detalle de su atención activa.
+
+En un turno que contiene una referencia visual inequívoca, Fastify actualiza de inmediato la ubicación probable y la evidencia. El trabajador independiente prepara el diálogo y las propuestas analíticas. Una señal local crítica actualiza el despacho antes del proveedor y el guardia conserva la posibilidad de revisar peligro y ubicación. Consulta [el guion final](demo-final.md) para el recorrido completo.
+
+Discoprotect es un prototipo universitario de gestión de incidentes en eventos masivos. H7–H7.3 se integraron a `main` en el merge `8f5439e` con 6/6 comprobaciones físicas del flujo principal aprobadas. H8.1 se integró en `72774a7`. [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7) · [PR #8](https://github.com/sebasaezz/prototipo-discoprotect/pull/8)
 
 ## 1. Componentes y acceso a datos
 
@@ -63,9 +69,19 @@ El estado `CLOSED` del chat indica solo lectura para cualquier resultado termina
 
 ## 3. Turnos de IA, prioridad y ubicación
 
-El trabajador reserva en SQLite un trabajo por secuencia del asistente y llama a Responses API fuera de la transacción. Procesa un trabajo de chat por vez y conserva los turnos en ráfaga. Envía contexto reciente filtrado, zonas candidatas y alias del evento. El modelo devuelve citas de mensajes, categoría, prioridad, ubicación, incertidumbre, resumen y una respuesta contextual de hasta 220 caracteres. Un turno elegible puede responder con un saludo, un reconocimiento o una pregunta breve.
+Fastify registra las señales locales al guardar el mensaje. Si el turno requiere análisis semántico, el trabajador reserva en SQLite un trabajo por secuencia y llama a Responses API fuera de la transacción. Envía contexto reciente filtrado, hechos acumulados y referencias del evento. El modelo devuelve citas, categoría, prioridad, ubicación, incertidumbre, resumen y propuestas de reconocimiento y tema de pregunta. El servidor decide si el turno necesita orientación, un reconocimiento breve o una sola pregunta pertinente.
 
-El chat admite hasta 20 llamadas reservadas por incidente. El triaje histórico y el chat comparten la cuota de `TRIAGE_DAILY_LIMIT` por día UTC. Los trabajos en espera vencen según `TRIAGE_MAX_QUEUE_AGE_MS` y la llamada conversacional usa `CHAT_AI_TIMEOUT_MS`. Ante timeout, error, entrada filtrada, respuesta inválida o cuota agotada, Fastify conserva el incidente y registra el resultado del trabajo. AppAsistente muestra «IA temporalmente no disponible. Tu solicitud sigue visible para el personal» cuando el último turno en `AUTO` queda sin respuesta publicada. Los intentos reservados e interrumpidos pasan a atención manual al reiniciar. Un trabajo pendiente vigente puede continuar tras el reinicio.
+El chat admite hasta 20 llamadas reservadas por incidente. `CHAT_AI_DAILY_LIMIT` permite un presupuesto UTC independiente. Una instalación que omite ese ajuste conserva la cuota compartida anterior. Ante timeout, proveedor desactivado, error, entrada filtrada, respuesta inválida o cuota agotada, Fastify conserva el incidente, registra el motivo y usa una respuesta local en `AUTO`. Si ya publicó orientación urgente para el turno, conserva esa respuesta. Las actualizaciones del modelo requieren que el incidente siga abierto con la misma versión.
+
+Las señales locales de falta de respuesta, respiración anormal, sangrado grave, convulsiones en curso, incendio, violencia, aplastamiento o peligro explícito para varias personas pueden elevar a P0 al guardar el mensaje. El desmayo sin otra señal recibe atención provisional P1. Un mensaje trivial deja vigente la evidencia crítica. Las revisiones humanas pueden resolver el peligro observado y una señal crítica posterior abre una nueva evaluación. El sistema registra las contradicciones como asuntos por verificar.
+
+### Orientación de emergencia
+
+`CL-PRIMERA-RESPUESTA-2025-v1` prioriza la seguridad de la escena y pedir ayuda. En una emergencia médica aconseja llamar al SAMU al 131. Cuando el relato indica respiración ausente o anormal, la pauta de RCP se aplica si es seguro acercarse y la persona tampoco responde. Incluye seguir al operador y usar un DEA disponible. Para niños y lactantes reconoce el papel de las ventilaciones y remite al operador para adaptar la técnica. Cuando la edad es desconocida, pide informarla al operador. Para sangrado externo grave ofrece presión directa si es seguro. Para convulsiones y otros peligros activa la orientación de ayuda correspondiente. El texto del protocolo se genera en el servidor y su identificador queda registrado.
+
+Fuentes de la pauta. [AHA BLS adultos 2025](https://cpr.heart.org/en/resuscitation-science/cpr-and-ecc-guidelines/adult-basic-life-support/) · [AHA/AAP BLS pediátrico 2025](https://cpr.heart.org/en/resuscitation-science/cpr-and-ecc-guidelines/pediatric-basic-life-support) · [AHA y American Red Cross primeros auxilios 2024](https://cpr.heart.org/en/resuscitation-science/2024-first-aid-guidelines) · [SAMU 131, Gobierno de Chile](https://www.gob.cl/noticias/estas-fiestas-patrias-no-olvides-numeros-emergencia/)
+
+Las reglas locales son heurísticas sobre texto en español y pueden abstenerse ante relatos ambiguos o filtrados. La pauta es breve, orientada a una persona que solicita ayuda en un recinto. Los síntomas, la edad y el entorno requieren verificación. El operador adapta la orientación. El prototipo académico carece de integración de despacho externo.
 
 Al confirmar una respuesta, Fastify vuelve a comprobar en SQLite que el incidente siga `OPEN` y que su versión operativa coincida con la reservada. Asumir o terminar el incidente invalida los trabajos pendientes y descarta el resultado que todavía esté en vuelo. Un mensaje nuevo del asistente antes del traspaso conserva su propio turno.
 
@@ -76,7 +92,7 @@ La **prioridad sugerida** procede del análisis. La **evidencia corroborada** ex
 - El guardia puede confirmar peligro (`CONFIRMED`) o registrar que fue descartado o superado (`CLEARED`). Retirar el piso permite aplicar la prioridad humana guardada o la sugerida vigente. La referencia a la evidencia queda en la auditoría.
 - En `OPEN`, a los 120 s por defecto `P2` y `PENDING` pasan a `P1`, y `P3` pasa a `P2`. A los 300 s, `P3` pasa a `P1`. La escalada por espera termina al asignar y tiene techo `P1`.
 
-La ubicación distingue lo declarado por el asistente, la zona inferida por IA y la corrección confirmada por el guardia. Los filtros y la corroboración son heurísticos. Usa datos ficticios y supervisión humana. La respuesta conversacional debe limitarse a orientación del diálogo y hechos declarados, evitando diagnósticos, tratamientos o promesas de llegada del personal.
+La ubicación distingue lo declarado por el asistente, la zona probable sustentada por el catálogo y la corrección verificada por el guardia. La última hipótesis vigente conserva su cita y fecha. Los filtros y la corroboración son heurísticos. Usa datos ficticios y supervisión humana. Las respuestas se limitan a hechos del relato, preguntas pertinentes y las pautas de seguridad autorizadas.
 
 ## 4. Identificación NFC
 
@@ -92,7 +108,18 @@ Al iniciar sesión con el PIN de organizador, GestiónWeb abre el **Dashboard** 
 
 El Dashboard cuenta solicitudes **Activas**, **Sin asignar**, **Asignadas** y **En atención**. Hasta cinco solicitudes activas siguen el orden de despacho que entrega Fastify. El resumen comparte la consulta con **Incidentes** e indica la hora de la última respuesta correcta. Si falla la conexión, los datos disponibles se marcan como la última consulta. Si el servidor rechaza el acceso al evento, la vista descarta sus solicitudes.
 
-**Recinto y zonas**, **Personal**, **Estadísticas** y **Anuncios y promociones** se muestran en desarrollo. Las seis secciones usan el mismo contexto de sesión y evento. Al cambiar de contexto se cancelan las lecturas y se limpia el estado local de los comandos. Cambiar de sección dentro del mismo evento permite volver a una confirmación o reintentar una operación incierta con el mismo comando.
+**Personal**, **Estadísticas**, **Anuncios y promociones**, **Entradas** y **Búsqueda** usan el mismo contexto de sesión y evento. Al cambiar de contexto se cancelan las lecturas y se limpia el estado local de los comandos. Cambiar de sección dentro del mismo evento permite volver a una confirmación de incidentes o reintentar una operación incierta con el mismo comando.
+
+### Recinto y zonas H8.2
+
+1. En GestiónWeb abre **Recinto y zonas**. Edita el evento y el recinto, completa las referencias físicas de acceso y atención y guarda. Comprueba el mensaje de confirmación y recarga para verificar persistencia.
+2. Crea la zona **Entrada principal** y escribe «Hay un stand de mote con huesillo junto a un letrero amarillo». Guarda y recarga. Puedes asociar un punto médico con referencia «Sector norte».
+3. En AppAsistente, selecciona el mismo evento, envía un SOS y escribe «Estoy al lado del estand de mote con huesillo». En una demo ficticia con el chat IA habilitado, consulta la ubicación probable. Para una revisión sin llamadas externas, configura `TRIAGE_ENABLED=false` y `CHAT_AI_ENABLED=false`. Ejecuta `npm test` desde `backend/` para reproducir la inferencia con el proveedor simulado.
+4. En AppPersonal, abre la solicitud y comprueba **Ubicación declarada**, **Ubicación probable**, **Motivo** y **Estado de la inferencia**. Asume la solicitud y registra una ubicación verificada. La ubicación confirmada prevalece en el despacho. Puedes desactivar la zona en GestiónWeb y abrir otra vez **Ver recinto y puntos operativos** para comprobar que desaparece del catálogo activo y se conserva en el análisis anterior.
+
+Los filtros heurísticos pueden omitir textos que parezcan contener datos personales o instrucciones. El reconocimiento se abstiene con señas genéricas, dos zonas con respaldo parecido o una paráfrasis que carece de coincidencias suficientes. GestiónWeb y AppPersonal muestran la ubicación probable desde que se acepta la evidencia. La ubicación se refina con nuevas señas y la verificación en terreno del guardia prevalece. [Contrato de configuración](api-contract.md#recinto-y-zonas)
+
+**Una comprobación integrada.** En la demo ficticia, registra **Entrada principal** con la seña «toro mecánico junto al portón». En el S22 envía un SOS y escribe «Hay alguien desmayado al lado del toro mecánico». Verifica en GestiónWeb y en el S25 la ubicación probable y en el S22 una pregunta sobre respiración. Responde «No» y luego «Aló». Verifica la orientación local, P0, la evidencia y la ausencia de preguntas repetidas. En el S25 asume y registra una ubicación verificada. Comprueba que prevalece en ambas vistas y que el guardia controla el chat.
 
 ### Cola, historial y acciones
 
@@ -118,7 +145,7 @@ npm run db:seed
 npm start
 ```
 
-`db:seed` compila, aplica las migraciones 001–008 y agrega la demo. Arrancar Fastify también aplica las migraciones pendientes. Sobre una base anterior, trabaja primero en una copia consistente con Fastify detenido. La 008 detiene el arranque si un mismo guardia tiene varias asignaciones activas. Conserva los registros originales y requiere regularizarlas antes de reintentar. [Migraciones y persistencia](data-model.md)
+`db:seed` compila, aplica las migraciones 001–011 y agrega la demo. Arrancar Fastify también aplica las migraciones pendientes. Sobre una base anterior, trabaja primero en una copia consistente con Fastify detenido. La 008 detiene el arranque si un mismo guardia tiene varias asignaciones activas. Conserva los registros originales y requiere regularizarlas antes de reintentar. [Migraciones y persistencia](data-model.md)
 
 En otra terminal, desde `web/`, ejecuta `npm ci` y `npm run dev`. Abre `http://127.0.0.1:5173`. Vite reenvía `/api/v1` al backend `http://127.0.0.1:3000`. Ajusta `DISCOPROTECT_API_ORIGIN` en el proceso de Vite si cambias el origen de Fastify.
 
@@ -127,9 +154,10 @@ Desde la raíz, ejecuta `./gradlew.bat :emitter:assembleDebug :reader:assembleDe
 | Configuración | Uso |
 | --- | --- |
 | `HOST`, `PORT`, `DATABASE_PATH` | Por defecto `127.0.0.1:3000` y `data/demo.sqlite` desde `backend/`. Para los teléfonos en la LAN controlada usa `HOST=0.0.0.0`, autoriza el puerto en la red privada y configura en ambos la URL con la IP LAN del PC. HTTP queda reservado a debug y datos ficticios. |
-| `TRIAGE_ENABLED`, `OPENAI_API_KEY` | IA desactivada por defecto. Para activarla en una demo ficticia usa `true` y una clave local. Desactívala con `false` y reinicia Fastify para verificar el flujo manual. |
+| `TRIAGE_ENABLED`, `CHAT_AI_ENABLED`, `OPENAI_API_KEY` | Controlan el triaje de solicitudes antiguas, el asistente del chat y la clave local. La plantilla desactiva ambos proveedores. Si una instalación antigua omite `CHAT_AI_ENABLED`, el chat hereda `TRIAGE_ENABLED`. |
 | `OPENAI_CHAT_MODEL`, `OPENAI_MODEL` | Por defecto `gpt-6.1-sol` en el chat y `gpt-5.4-mini` en triaje histórico. El adaptador conversacional envía esfuerzo `low`. |
-| `TRIAGE_DAILY_LIMIT`, `TRIAGE_MAX_QUEUE_AGE_MS`, `TRIAGE_TIMEOUT_MS`, `CHAT_AI_TIMEOUT_MS`, `CHAT_AI_MAX_ZONES` | Valores iniciales de 100 llamadas UTC, espera máxima de 30000 ms, timeout H7 de 5000 ms, timeout del chat de 15000 ms y catálogo conversacional de hasta 16 zonas. |
+| `TRIAGE_DAILY_LIMIT`, `TRIAGE_MAX_QUEUE_AGE_MS`, `TRIAGE_TIMEOUT_MS`, `CHAT_AI_DAILY_LIMIT`, `CHAT_AI_MAX_QUEUE_AGE_MS`, `CHAT_AI_TIMEOUT_MS`, `CHAT_AI_MAX_ZONES` | Plantilla de 100 llamadas UTC para cada flujo, espera máxima de 30000 ms, timeout H7 de 5000 ms, timeout del chat de 15000 ms y catálogo de hasta 16 zonas. |
+| `FIRST_AID_ENABLED` | Activa las pautas de comprobación de respiración, RCP y DEA, o presión directa según el caso. El valor inicial es `true`. La detección y el aviso básico de emergencia funcionan con cualquier valor. |
 | `DISPATCH_EARLY_SECONDS`, `DISPATCH_LATE_SECONDS` | Umbrales de despacho iniciales de 120 y 300 segundos. |
 | `DEMO_PURGE_ENABLED`, `ALLOW_DEMO_RESET` | Ambas opciones empiezan en `false`. Habilita la purga solo para una base descartable y vuelve a desactivarla tras verificarla. El reset es una operación independiente de CLI que restaura las entidades de la demo. |
 

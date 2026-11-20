@@ -4,12 +4,23 @@ import { alertLabels, categoryLabels, missingLabels, reasonLabels, triageLabels,
 
 const date = new Intl.DateTimeFormat('es-CL', { dateStyle: 'short', timeStyle: 'medium' });
 const priorityIcons = { P0: '!', P1: '▲', P2: '◆', P3: '●', PENDING: '?' };
-const sourceLabels: Record<string, string> = { HUMAN: 'Guardia', AI_PROVISIONAL: 'Provisional IA', DECLARED_DANGER: 'Peligro declarado' };
+const sourceLabels: Record<string, string> = {
+  HUMAN: 'Guardia', AI_PROVISIONAL: 'Provisional IA', DECLARED_DANGER: 'Peligro declarado', LOCAL_RISK: 'Señal crítica del chat',
+  LOCAL_URGENT: 'Señal urgente del chat',
+};
 
 function displayLocation(dispatch: Dispatch) {
+  if (dispatch.confirmedLocation) {
+    const { zoneName, text } = dispatch.confirmedLocation;
+    return ['Confirmada por el guardia', zoneName, text].filter(Boolean).join(' · ');
+  }
+  if (dispatch.attendeeLocation) {
+    const { source, zoneName } = dispatch.attendeeLocation;
+    return `${source === 'CONFIRMED_AI' ? 'Confirmada por el asistente' : 'Indicada por el asistente'} · ${zoneName}`;
+  }
   for (const [source, location] of [
-    ['Confirmada', dispatch.confirmedLocation], ['Declarada', dispatch.declaredLocation],
-    ['Inferida por IA', dispatch.inferredLocation],
+    ['Indicada por el asistente', dispatch.declaredLocation?.zoneName ? dispatch.declaredLocation : null],
+    ['Inferida por IA', dispatch.inferredLocation], ['Declarada', dispatch.declaredLocation],
   ] as const) {
     if (location) return [source, location.zoneName, location.text].filter(Boolean).join(' · ');
   }
@@ -37,7 +48,8 @@ export function IncidentTable({ items, session, onExpiry, onAccessLost, actions,
           {items.map(item => (
             <tr key={item.id}>
               <th scope="row">{item.requesterName}<code>{item.id}</code></th>
-              <td>{item.dispatch ? displayLocation(item.dispatch)
+              <td>{item.dispatch ? <>{displayLocation(item.dispatch)}
+                {item.dispatch.attendeeLocation && !item.dispatch.confirmedLocation && <small>Pendiente de verificación en terreno</small>}</>
                 : <>{item.zoneName ?? 'Ubicación desconocida'}{item.locationText && <small>{item.locationText}</small>}</>}</td>
               <td><span className={`status ${item.status.toLowerCase()}`}>{incidentLabels[item.status]}</span>
                 {item.resolutionNote && <small>{item.resolutionNote}</small>}</td>
@@ -87,14 +99,31 @@ function DispatchCell({ item, dispatch, session, onExpiry, onAccessLost }: {
   }, [open, session, eventId, id, version, dispatch.revision, retry, onExpiry, onAccessLost]);
   const priority = dispatch.effectivePriority;
   const source = sourceLabels[dispatch.prioritySource];
+  const locationEvidence = dispatch.locationEvidence ?? dispatch.analysis?.locationEvidence;
   return <>
     <span className={`status priority-${priority.toLowerCase()}`}>
       <span aria-hidden="true">{priorityIcons[priority]} </span>{priorityLabels[priority]}{source && ` · ${source}`}
     </span>
     <small>{dispatch.priorityReasons.join(' · ')}</small>
+    {dispatch.operational && <small>{dispatch.operational.situation}</small>}
     <small>{Math.floor(dispatch.elapsedSeconds / 60)} min {dispatch.elapsedSeconds % 60} s desde la emisión</small>
     <details className="triage-detail" onToggle={event => setOpen(event.currentTarget.open)}>
       <summary>Despacho y auditoría</summary>
+      {dispatch.operational && <>
+        <small>Por verificar · {dispatch.operational.pending.join(' · ')}</small>
+        {dispatch.operational.guidance && <small>Orientación de emergencia registrada</small>}
+        {dispatch.operational.risks.map(risk => <small key={`${risk.kind}-${risk.messageSeq}`}>
+          Mensaje {risk.messageSeq} · «{risk.quote}»{risk.uncertain ? ' · Reporte incierto' : ''}
+        </small>)}
+      </>}
+      {dispatch.inferredLocation && locationEvidence && <>
+        <small>Seña del lugar probable · «{locationEvidence.quote}»</small>
+        {locationEvidence.feature && <small>En el catálogo · «{locationEvidence.feature}»</small>}
+      </>}
+      {dispatch.attendeeLocation && <>
+        <small>Zona indicada por el asistente · {dispatch.attendeeLocation.zoneName} · {dispatch.attendeeLocation.zoneId}</small>
+        <small>Evidencia original · «{dispatch.attendeeLocation.evidence.quote}»</small>
+      </>}
       {dispatch.analysis && <>
         <small>Resumen sugerido por IA · {dispatch.analysis.summary}</small>
         {dispatch.analysis.uncertainty.length > 0 && <small>Por verificar · {dispatch.analysis.uncertainty.join(' · ')}</small>}

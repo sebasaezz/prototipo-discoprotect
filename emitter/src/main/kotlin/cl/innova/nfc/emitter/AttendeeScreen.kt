@@ -78,6 +78,7 @@ internal fun AttendeeScreen(
                         Section.Sos -> SosScreen(state, actions)
                         Section.Card -> CardScreen(state, actions)
                         Section.Contacts -> ContactsScreen(state, actions)
+                        Section.Services -> AttendeeServicesScreen(state, actions)
                         Section.Connection -> ConnectionScreen(state, identity, actions, chooseAccount)
                     }
                 }

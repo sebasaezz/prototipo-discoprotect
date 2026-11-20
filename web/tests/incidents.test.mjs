@@ -102,6 +102,38 @@ test('dispatch audit rejects a leaked conversation', async t => {
   await assert.rejects(incidentDispatch(session, incident.eventId, incident.id, new AbortController().signal), { status: 502 });
 });
 
+test('catalog location and its provenance take precedence over a raw chat quote', () => {
+  const dispatch = {
+    effectivePriority: 'P0', prioritySource: 'AI_PROVISIONAL', priorityReasons: [], elapsedSeconds: 10, revision: 0,
+    declaredLocation: { zoneId: null, zoneName: null, text: 'en el toro mecánico' },
+    inferredLocation: { zoneId: 'acceso', zoneName: 'Acceso principal', text: null },
+    confirmedLocation: null, analysis: null,
+    attendeeLocation: { zoneId: 'acceso', zoneName: 'Acceso principal', source: 'CONFIRMED_AI',
+      messageSeq: 3, evidence: { messageSeq: 1, quote: 'en el toro mecánico', feature: null } },
+  };
+  const html = renderToStaticMarkup(createElement(IncidentTable, { items: [{ ...incident, dispatch }] }));
+  assert.match(html, /Confirmada por el asistente · Acceso principal/);
+  assert.match(html, /Pendiente de verificación en terreno/);
+  assert.match(html, /Evidencia original · «en el toro mecánico»/);
+  const reviewed = { ...dispatch, confirmedLocation: { zoneId: 'escenario', zoneName: 'Escenario', text: null } };
+  const reviewedHtml = renderToStaticMarkup(createElement(IncidentTable, { items: [{ ...incident, dispatch: reviewed }] }));
+  assert.match(reviewedHtml, /Confirmada por el guardia · Escenario/);
+  assert.doesNotMatch(reviewedHtml, /Pendiente de verificación en terreno/);
+});
+
+test('dispatch lists local urgency, evidence and pending verification before a model result', () => {
+  const dispatch = {
+    effectivePriority: 'P0', prioritySource: 'LOCAL_RISK', priorityReasons: [], elapsedSeconds: 1, revision: 0,
+    operational: { situation: 'Se reporta posible ausencia de respiración normal', pending: ['Verificación en terreno'],
+      guidance: 'CL-PRIMERA-RESPUESTA-2025-v1/BLS_AGE_UNKNOWN',
+      risks: [{ kind: 'BREATHING', messageSeq: 3, quote: 'No', uncertain: false }] },
+    confirmedLocation: null, declaredLocation: null, inferredLocation: null, analysis: null,
+  };
+  const html = renderToStaticMarkup(createElement(IncidentTable, { items: [{ ...incident, dispatch }] }));
+  for (const label of ['Señal crítica del chat', 'Se reporta posible ausencia de respiración normal',
+    'Verificación en terreno', 'Orientación de emergencia registrada', 'Mensaje 3']) assert.ok(html.includes(label));
+});
+
 test('API uses organizer PIN, accepts only its events and sends the Bearer to the same origin', async t => {
   const signal = new AbortController().signal;
   const session = { token: 'a'.repeat(43), expiresAt: new Date(Date.now() + 60000).toISOString() };

@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { DashboardOverview } from '../.test-build/DashboardOverview.js';
 import { IncidentSync } from '../.test-build/IncidentSync.js';
 import { OrganizerLayout } from '../.test-build/OrganizerLayout.js';
-import { PendingSection } from '../.test-build/PendingSection.js';
+import { StatisticsPage } from '../.test-build/StatisticsPage.js';
 import { incidentPolling } from '../.test-build/incidentPolling.js';
 import { historyHref, queueHref, sectionForHash } from '../.test-build/organizerNavigation.js';
 
@@ -49,23 +49,20 @@ test('dashboard distinguishes a verified empty queue from loading and unavailabl
   assert.match(sync(lastRead), /2026-11-17T22:00:00\.000Z/);
 });
 
-test('navigation labels the current section and integrates future destinations without controls', () => {
+test('navigation labels the current section and exposes event-scoped statistics controls', () => {
   const event = { id: 'authorized', name: 'Festival', venue: 'Recinto', status: 'ACTIVE' };
   const html = renderToStaticMarkup(createElement(OrganizerLayout, {
     event, section: 'estadisticas', hash: '#estadisticas', available: [event],
-  }, createElement(PendingSection, { section: 'estadisticas' })));
+  }, createElement(StatisticsPage, { eventId: event.id, session: { token: 'test', expiresAt: '2026-11-18T14:00:00Z' } })));
   assert.match(html, /href="#estadisticas" aria-current="page"/);
   for (const label of ['Dashboard', 'Incidentes', 'Recinto y zonas', 'Personal', 'Anuncios y promociones']) {
     assert.ok(html.includes(label));
   }
   assert.match(html, /Festival/);
   assert.match(html, /Activo/);
-  assert.doesNotMatch(html, /<select/);
-  for (const section of ['recinto', 'personal', 'estadisticas', 'anuncios']) {
-    const placeholder = renderToStaticMarkup(createElement(PendingSection, { section }));
-    assert.match(placeholder, /En desarrollo/);
-    assert.doesNotMatch(placeholder, /<(a |button|input|select)/);
-  }
+  assert.doesNotMatch(html, /id="event"/);
+  assert.match(html, /name="status"/);
+  assert.match(html, /Consultar estadísticas/);
   assert.equal(sectionForHash(queueHref), 'incidentes');
   assert.equal(sectionForHash(historyHref), 'incidentes');
   assert.equal(sectionForHash('#otro-evento'), 'dashboard');

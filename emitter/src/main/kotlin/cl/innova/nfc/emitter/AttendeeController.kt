@@ -21,7 +21,7 @@ import kotlinx.coroutines.launch
 import okhttp3.HttpUrl
 
 internal enum class Section(val label: String) {
-    Identification("Identificación"), Sos("SOS"), Card("Mi ficha"), Contacts("Contactos"), Connection("Conexión"),
+    Identification("Identificación"), Sos("SOS"), Card("Mi ficha"), Contacts("Contactos"), Services("Servicios del evento"), Connection("Conexión"),
 }
 internal enum class Task(val label: String) {
     Checking("Comprobando el servidor"), SigningIn("Verificando sesión"),
@@ -273,6 +273,33 @@ internal class AttendeeController(
 
     suspend fun message(id: String, draft: ChatDraft) = chatRequest(id) { remote, active ->
         remote.message(active, id, draft)
+    }
+
+    suspend fun serviceEvents() = eventService(null) { remote, active -> remote.events(active) }
+
+    fun selectServiceEvent(event: SosEvent) {
+        if (ui.section != Section.Services || ui.sos.pending != null || ui.sos.event?.id == event.id) return
+        updateSos(SosState(events = (ui.sos.events + event).distinctBy { it.id }, event = event))
+    }
+
+    suspend fun ticket(eventId: String) = eventService(eventId) { remote, active -> remote.ticket(active, eventId).ticket }
+    suspend fun promotions(eventId: String) = eventService(eventId) { remote, active -> remote.promotions(active, eventId).promotions }
+    suspend fun companions(eventId: String) = eventService(eventId) { remote, active -> remote.companions(active, eventId).companions }
+    suspend fun invite(eventId: String) = eventService(eventId) { remote, active -> remote.invite(active, eventId) }
+    suspend fun acceptInvite(eventId: String, code: String) = eventService(eventId) { remote, active ->
+        remote.acceptInvite(active, eventId, code)
+    }
+    suspend fun unlinkCompanion(eventId: String, id: String) = eventService(eventId) { remote, active ->
+        remote.unlinkCompanion(active, eventId, id)
+    }
+
+    private suspend fun <T> eventService(eventId: String?, request: suspend (AttendeeApi, AttendeeSession) -> T): T {
+        val remote = api ?: throw AttendeeFailure(FailureKind.Offline)
+        val active = validSession() ?: throw AttendeeFailure(FailureKind.Expired)
+        fun current() = session === active && api === remote && ui.section == Section.Services &&
+            (eventId == null || ui.sos.event?.id == eventId)
+        if (!current()) throw CancellationException()
+        return request(remote, active).also { if (!current()) throw CancellationException() }
     }
 
     private suspend fun <T> chatRequest(id: String, request: suspend (AttendeeApi, AttendeeSession) -> T): T {

@@ -1,6 +1,41 @@
 # API REST v1
 
-Contrato vigente hasta H7.3. Para el recorrido por pantallas, consulta el [flujo actual](current-workflow.md).
+Contrato de la rama H10. Para el recorrido por pantallas, consulta el [flujo actual](current-workflow.md).
+
+## Servicios de evento H8.3–H9
+
+Las rutas siguientes se exponen bajo `/api/v1`. Todas requieren una sesión vigente. Las rutas con `:eventId` verifican el rol y la membresía de ese evento.
+
+| Método y ruta | Rol | Datos y comportamiento |
+| --- | --- | --- |
+| `POST /events` | Organizador | `id` UUID, `name`, `venue`, `startsAt`, `endsAt`, `status` y `demoAttendees`. Crea el evento y la membresía de su organizador. La opción de demo incorpora las tres cuentas ficticias. |
+| `GET/PATCH /events/:eventId/schedule` | Organizador | Consulta fechas UTC, estado y versión. PATCH recibe `version` y los tres campos. La versión se comparte con el recinto. |
+| `GET /events/:eventId/statistics` | Organizador | `from`, `through` inclusivos en formato `AAAA-MM-DD`, `status`, `priority` y `zoneId` opcionales. Devuelve agregados y catálogo de zonas, sin filas de ficha ni chat. |
+| `GET/PATCH /events/:eventId/staff` | Organizador | Lista las cuentas de guardia de la demo, su acceso y asignación activa del evento. PATCH recibe `personId`, `active`, `operationId` y `replacementId` opcional. Se exige reemplazo autorizado y libre si hay una atención activa. |
+| `GET/POST /events/:eventId/tickets` | Organizador | GET pagina asistentes del evento y refleja emisión, uso y revocación. POST recibe `attendeeId` y `expiresAt`. Hay una entrada por cuenta y evento. |
+| `POST /events/:eventId/tickets/:id/revoke` | Organizador | Invalida la entrada del evento y conserva el historial. |
+| `GET /events/:eventId/tickets/mine` | Asistente | Devuelve solo la entrada propia o `ticket: null`. El código opaco `DP1_` se presenta como QR y como texto de ingreso manual. |
+| `POST /events/:eventId/tickets/validate` | Guardia u organizador | Recibe `code` y `operationId` UUID. `result` puede ser `VALID`, `USED`, `REVOKED`, `EXPIRED`, `OTHER_EVENT` o `INVALID`. El primer resultado se conserva para reintentos exactos del mismo operador. |
+| `GET /events/:eventId/promotions` | Organizador o asistente | Pagina campañas. El asistente recibe únicamente campañas habilitadas con inicio ocurrido y término futuro. |
+| `POST /events/:eventId/promotions` y `PATCH /events/:eventId/promotions/:id` | Organizador | `title`, `description`, `imageUrl`, `linkUrl`, `startsAt`, `endsAt`, `active`. Las URL son HTTPS o nulas. Edición exige `version`. El título se deduplica normalizado en el evento. |
+| `GET /events/:eventId/companions` | Asistente | Lista paginada de vínculos propios activos con ID del vínculo y nombre de la otra persona. |
+| `POST /events/:eventId/companions/invite` | Asistente | Genera un código aleatorio de un uso, vigente 15 minutos. |
+| `POST /events/:eventId/companions/accept` | Asistente | Recibe `code`. Una sesión distinta del mismo evento acepta el vínculo. La misma cuenta puede recuperar el recibo por reintento. |
+| `POST /events/:eventId/companions/:id/unlink` | Asistente | Cualquier parte retira el consentimiento. |
+| `GET /events/:eventId/incidents/:id/companions` | Guardia asignado | Consulta los nombres consentidos solo durante una atención activa. La consulta queda auditada. |
+| `GET /events/:eventId/search` | Guardia u organizador | `type` admite `incidents` con ID exacto y estado opcionales, `zones` y `staff` con `text` opcional, y `tickets` con ID exacto solo para organizador. El recurso de personas permanece en la resolución NFC autorizada. |
+
+Los listados paginados usan `offset` no negativo y páginas de hasta 25. Las fechas de formularios con hora se envían como ISO 8601 con offset y se guardan en UTC. Los filtros de estadísticas usan la fecha civil de creación en `America/Santiago`, con ajuste por horario de verano.
+
+### Métricas
+
+- Total incluye todas las solicitudes que pasan los filtros. Activas suma `OPEN`, `ASSIGNED` e `IN_PROGRESS`. Resueltas cuenta `RESOLVED`. La serie diaria atribuye cada solicitud a su fecha de creación.
+- La prioridad usa el despacho efectivo al consultar. La dimensión zona toma primero la verificación del guardia, luego la indicación explícita del asistente, la zona manual y finalmente la ubicación probable. Sin zona catalogada se agrupa como «Sin zona». Motivo usa el código de origen. Categoría toma revisión humana, análisis del chat o triaje anterior, en ese orden.
+- Los tiempos suman segundos desde creación hasta asignación, inicio de atención y resolución o cierre administrativo. Cada indicador incluye cantidad, media, mediana y p90 por rango más próximo. Una muestra se incluye solo con la marca correspondiente. Sin muestras el resultado es nulo.
+
+### Despacho inmediato
+
+`dispatch.locationEvidence` puede incluir `messageSeq`, `quote` y `feature` aunque el proveedor esté pendiente o inaccesible. El catálogo local exige coincidencia visual suficiente y se abstiene ante candidatos ambiguos. Los clientes muestran el resultado como probable y dan precedencia a la ubicación confirmada.
 
 Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token>`. Envía `Content-Type: application/json` para cuerpos JSON. Los nombres de campos son estables y los tiempos son ISO 8601 UTC.
 
@@ -17,7 +52,12 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 | `DELETE /me/contacts/:id` | `{version}` | 200 `{cardVersion}`. Asistente y contacto propio. |
 | `GET /me/nfc-credential` | — | 200 `{id,token,active,createdAt}`. Asistente. |
 | `GET /events` | — | 200 `{events}`. Devuelve las membresías de la cuenta. |
-| `GET /events/:eventId/zones` | — | 200 `{zones:[{id,name}]}`. Membresía en el evento. |
+| `GET /events/:eventId/zones` | — | 200 `{zones:[{id,name}]}` de zonas activas. Membresía en el evento. |
+| `GET /events/:eventId/venue` | — | 200 configuración del recinto. Guardia u organizador miembro. |
+| `POST /events/:eventId/zones` | Campos y versión según Recinto y zonas. | 201 `{zone,version}`. Organizador miembro. |
+| `PATCH /events/:eventId/zones/:zoneId` | Mismos campos que POST. | 200 `{zone,version}`. Organizador miembro. |
+| `POST /events/:eventId/operational-points` | Campos y versión según Recinto y zonas. | 201 `{point,version}`. Organizador miembro. |
+| `PATCH /events/:eventId/operational-points/:pointId` | Mismos campos que POST. | 200 `{point,version}`. Organizador miembro. |
 | `POST /events/:eventId/incidents` | UUID de cliente y modalidad según [creación y conversación](#creación-y-conversación). | 201 creado o 200 en reenvío equivalente. Asistente miembro. |
 | `GET /me/incidents?eventId=…` | — | 200 `{incidents}`. Solicitudes propias del asistente miembro. |
 | `GET /me/incidents/:id` | — | 200 incidente propio. Asistente titular y miembro. |
@@ -31,7 +71,7 @@ Base `/api/v1`. Las operaciones de datos requieren `Authorization: Bearer <token
 | `POST /events/:eventId/incidents/:id/resolve` | `{version,operationId,resolutionNote?}` | 200 `{operation,incident}`. Guardia asignado con membresía. `IN_PROGRESS → RESOLVED`. |
 | `POST /events/:eventId/incidents/:id/close` | `{version,operationId,resolutionNote}` | 200 `{operation,incident}`. Guardia asignado con membresía. `ASSIGNED` o `IN_PROGRESS → CLOSED`. |
 | `POST /events/:eventId/incidents/:id/withdraw` | `{version,operationId,resolutionNote}` | 200 `{operation,incident}`. Organizador miembro. Cualquier activo pasa a `WITHDRAWN`. |
-| `PATCH /events/:eventId` | `{name,venue}` | 200 evento modificado. Organizador miembro del evento. |
+| `PATCH /events/:eventId` | `{name,venue,version,description,accessNotes,responseNotes}` o cuerpo histórico `{name,venue}`. | 200 evento modificado. La forma versionada agrega `version`. Organizador miembro del evento. |
 | `POST /nfc/resolve` | `{token,eventId}` | 200 `{person,card,contacts}`. Rol `STAFF` con membresía de guardia en el evento solicitado. La credencial corresponde a un `ATTENDEE` de ese evento. |
 
 - Persona `{id,account,name,age,createdAt,updatedAt}`. Edad en años o `null`.
@@ -93,6 +133,11 @@ Fastify normaliza los UUID a minúsculas y recorta `locationText` a un máximo d
 - `GET /events/:eventId/incidents?order=dispatch` entrega la cola ordenada por Fastify. La consulta histórica sin el parámetro conserva su orden por creación. Cada elemento de la cola incluye `dispatch` con prioridad efectiva, fuentes de IA y humana, razones, política, revisión, ubicaciones, análisis y tiempo transcurrido.
 - Para incidentes con conversación, las respuestas de `claim`, `start`, `resolve`, `close` y `withdraw` incluyen el despacho recalculado. AppPersonal refresca el orden de la cola tras la operación. Las apps conservan en memoria la clave y el cuerpo de cada mensaje incierto al cerrar y reabrir una conversación de la misma sesión.
 - El despacho expone prioridad efectiva, fuente, razones, sugerencias inicial y reciente, prioridad humana, tiempo transcurrido, revisión y versión de política. Incluye `declaredLocation`, `inferredLocation`, `confirmedLocation`, resumen y `criticalEvidence` con las secuencias del mensaje y del análisis corroborado. El historial se entrega después de la cola activa, ordenado por última transición descendente. Las [reglas de prioridad y escalada](current-workflow.md#3-turnos-de-ia-prioridad-y-ubicación) describen el orden activo y el piso crítico.
+- Cuando hay una inferencia nueva respaldada, `analysis.locationEvidence` contiene `{messageSeq,quote,feature}`. `quote` cita el relato filtrado del asistente y `feature` cita la descripción usada en el análisis o es `null` si la correspondencia se basó en el nombre, un alias o una referencia antigua. La ubicación sigue siendo inferida aunque el chat pida confirmarla. Las respuestas anteriores pueden omitir el campo.
+- `attendeeLocation` es nulo o contiene `{zoneId,zoneName,source,messageSeq,evidence}`. `source` es `CONFIRMED_AI` si el asistente confirma la propuesta pendiente o `INDICATED` si indica un nombre canónico inequívoco del catálogo activo. `messageSeq` identifica la respuesta o indicación y `evidence` conserva la cita original con su secuencia y referencia visual cuando corresponda. La vista de despacho da precedencia a `confirmedLocation` del guardia.
+- En `AUTO`, la primera respuesta posterior a una pregunta publicada puede resolverla localmente. Un «sí» inequívoco requiere que el catálogo siga vigente y la zona siga activa. Un «no» descarta la propuesta y pide otra seña. Un turno local publica su respuesta en la misma transacción y deja el chat `READY`. El reenvío del mensaje conserva su recibo sin generar otra respuesta.
+- Las preguntas nuevas guardan el tema y la secuencia del mensaje de salida. «Sí» y «no» se interpretan solo como respuesta a la pregunta inmediatamente anterior. El chat proyecta una zona probable sin pedir confirmación y conserva las indicaciones explícitas. El campo de confirmación del asistente sigue disponible para preguntas históricas pendientes de la migración 010.
+- `dispatch.operational` expone `{situation,pending,guidance,risks}` o `null`. La situación y lo pendiente se derivan de observaciones. `guidance` identifica el protocolo entregado, cuando corresponde. Cada riesgo referencia un mensaje y, si se originó en una respuesta breve, la secuencia de la pregunta. Los riesgos locales pueden producir `prioritySource: "LOCAL_RISK"` y `criticalEvidence.analysisSeq: null` antes del proveedor. El despacho conserva las revisiones humanas. Una señal crítica posterior a una revisión que descartó el riesgo abre una evaluación nueva.
 - `GET /events/:eventId/incidents/:id/dispatch` devuelve `{dispatch,reviews,transitions}` a guardias y organizadores miembros. Para guardias añade `zones`. El organizador puede consultar el resumen interno y la auditoría. El hilo de mensajes se sirve en las rutas del asistente y el guardia.
 - `POST /events/:eventId/incidents/:id/dispatch/reviews` acepta `{expectedRevision,operationId,humanPriority,confirmedLocation,dangerAssessment,reason}`. La revisión parte en 0. Prioridad y ubicación aceptan nulo. La ubicación no nula exige `{zoneId,text}` con al menos un dato y referencia de hasta 160 caracteres. El peligro acepta `UNCHANGED`, `CONFIRMED` o `CLEARED`. El motivo requiere 1–240 caracteres. El guardia asignado en estado activo recibe `{review,dispatch,replayed}`. La revisión obsoleta devuelve `409 DISPATCH_CONFLICT` con la revisión vigente.
 
@@ -106,3 +151,12 @@ El retiro administrativo usa `/withdraw` y conserva incidente, chat y auditoría
 | `POST /events/:eventId/incidents/demo-purge` | `{incidentId?,operationId,selectionHash,confirmation:"ELIMINAR"}`. | 200 `{count,backupName,backupSha256,replayed}`. Una selección vacía u obsoleta devuelve `PURGE_SELECTION_CHANGED`. |
 
 Fastify verifica el respaldo antes de borrar y conserva la auditoría de purga. El UUID de operación permite recuperar el recibo. El reenvío de la creación original devuelve `REQUEST_PURGED` por su tombstone. [Flujo de administración](current-workflow.md#5-administración-de-incidentes)
+
+## Recinto y zonas
+
+- `GET /events/:eventId/venue` devuelve `{eventId,venue,zones,points}`. Para `ORGANIZER` agrega la versión y devuelve también registros inactivos. Para `STAFF` devuelve zonas activas y puntos activos en zonas activas. `ATTENDEE` recibe 403 en esta ruta y conserva el catálogo básico de zonas activas.
+- `venue` contiene `{name,venue,description,accessNotes,responseNotes}`. Nombre de evento y recinto admiten hasta 160 caracteres. Descripción admite hasta 600 y las dos referencias hasta 300 cada una. Los tres campos operativos admiten `null`.
+- La escritura de zonas usa `{name,description,active,version}`. El nombre es el lugar que reconoce el personal y admite hasta 160 caracteres. La descripción reúne objetos y señas visibles, admite hasta 240 caracteres y puede ser `null`. Se conserva el ID estable. La lectura mantiene `kind` y `reference` por compatibilidad y los cuerpos antiguos aún pueden incluirlos. Al omitirlos en una edición se preservan sus valores existentes. Para una zona nueva se guardan `OTHER` y `null`.
+- Punto `{id,name,kind,zoneId,zoneName,reference,active}`. El cuerpo de escritura omite el ID y `zoneName` y agrega `version`. `kind` admite `MEDICAL`, `SECURITY`, `ENTRANCE`, `EXIT` o `MEETING`. Nombre y referencia obligatorios de hasta 160 caracteres. La zona asociada debe pertenecer al mismo evento.
+- La versión corresponde al conjunto de configuración. Una escritura exitosa la incrementa en uno y registra entidad, acción, autor y fecha. Una versión obsoleta devuelve 409 `VENUE_CONFLICT` con `details.currentVersion`. El cuerpo histórico de edición de evento actualiza solo nombre y recinto y también incrementa la versión.
+- Desactivar preserva el ID y las referencias históricas. Crear una solicitud con una zona inactiva devuelve 400 `INVALID_INPUT`. Una repetición exacta de una creación ya confirmada sigue devolviendo su recibo. Los puntos de una zona desactivada quedan fuera de las vistas operativas hasta que la zona se reactive.

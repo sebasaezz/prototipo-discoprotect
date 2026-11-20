@@ -69,6 +69,19 @@ internal data class IncidentCommand(val incidentId: String, val action: Incident
 )
 @Serializable internal data class ReviewReply(val review: TriageReview, val triage: IncidentTriage, val replayed: Boolean)
 @Serializable internal data class DispatchZone(val id: String, val name: String)
+@Serializable internal data class VenueInfo(
+    val name: String, val venue: String, val description: String?, val accessNotes: String?, val responseNotes: String?,
+)
+@Serializable internal data class VenueZone(val id: String, val name: String, val description: String?, val reference: String?)
+@Serializable internal enum class PointKind(val label: String) {
+    MEDICAL("Puesto médico"), SECURITY("Puesto de seguridad"), ENTRANCE("Entrada"), EXIT("Salida"), MEETING("Punto de encuentro"),
+}
+@Serializable internal data class VenuePoint(
+    val name: String, val kind: PointKind, val zoneId: String, val zoneName: String, val reference: String,
+)
+@Serializable internal data class StaffVenue(
+    val eventId: String, val venue: VenueInfo, val zones: List<VenueZone>, val points: List<VenuePoint>,
+)
 @Serializable internal data class DispatchLocationInput(val zoneId: String?, val text: String?)
 @Serializable internal data class DispatchReviewBody(
     val expectedRevision: Long, val operationId: String, val humanPriority: DispatchPriority?,
@@ -77,9 +90,23 @@ internal data class IncidentCommand(val incidentId: String, val action: Incident
 @Serializable internal data class DispatchDetail(val dispatch: IncidentDispatch, val zones: List<DispatchZone>)
 @Serializable internal data class DispatchReview(val revision: Long, val operationId: String)
 @Serializable internal data class DispatchReply(val review: DispatchReview, val dispatch: IncidentDispatch, val replayed: Boolean)
+@Serializable internal data class TicketCheck(val code: String, val operationId: String)
+@Serializable internal enum class TicketResult(val label: String) {
+    VALID("Entrada válida. Ingreso registrado."), USED("Entrada ya utilizada."), REVOKED("Entrada revocada."),
+    EXPIRED("Entrada vencida."), OTHER_EVENT("Entrada de otro evento."), INVALID("Código inválido."),
+}
+@Serializable internal data class TicketResultReply(val result: TicketResult, val replayed: Boolean)
+@Serializable internal data class StaffSearchResult(val id: String, val name: String? = null, val status: IncidentStatus? = null)
+@Serializable internal data class StaffSearchReply(val results: List<StaffSearchResult>)
 
 internal interface StaffApi {
     suspend fun health()
+    suspend fun validateTicket(session: StaffSession, event: StaffEvent, check: TicketCheck): TicketResultReply =
+        throw ApiFailure(ApiProblem.Unavailable)
+    suspend fun search(session: StaffSession, event: StaffEvent, type: String, term: String, status: IncidentStatus?, offset: Int): StaffSearchReply =
+        throw ApiFailure(ApiProblem.Unavailable)
+    suspend fun companions(session: StaffSession, event: StaffEvent, id: String): EventCompanions =
+        throw ApiFailure(ApiProblem.Unavailable)
     suspend fun login(pin: String, account: StaffAccount = StaffAccount.First): StaffSession
     suspend fun events(session: StaffSession): List<StaffEvent>
     suspend fun incidents(session: StaffSession, event: StaffEvent): List<Incident>
@@ -97,6 +124,8 @@ internal interface StaffApi {
     suspend fun message(session: StaffSession, event: StaffEvent, id: String, draft: ChatDraft): ChatWrite =
         throw ApiFailure(ApiProblem.InvalidResponse)
     suspend fun dispatch(session: StaffSession, event: StaffEvent, id: String): DispatchDetail =
+        throw ApiFailure(ApiProblem.InvalidResponse)
+    suspend fun venue(session: StaffSession, event: StaffEvent): StaffVenue =
         throw ApiFailure(ApiProblem.InvalidResponse)
     suspend fun reviewDispatch(session: StaffSession, event: StaffEvent, id: String, body: DispatchReviewBody): DispatchReply =
         throw ApiFailure(ApiProblem.InvalidResponse)
@@ -138,11 +167,38 @@ internal class HttpStaffApi(private val address: HttpUrl, private val client: Ok
         }
     }
 
-    private fun incidentUrl(event: StaffEvent): HttpUrl.Builder {
+    private fun eventUrl(event: StaffEvent): HttpUrl.Builder {
         requireReply(event.id.isNotBlank() && event.id !in setOf(".", ".."))
         return address.newBuilder().addPathSegments("api/v1/events")
-            .addPathSegment(event.id).addPathSegment("incidents")
+            .addPathSegment(event.id)
     }
+
+    private fun incidentUrl(event: StaffEvent) = eventUrl(event).addPathSegment("incidents")
+
+    override suspend fun validateTicket(session: StaffSession, event: StaffEvent, check: TicketCheck): TicketResultReply =
+        exchange(eventUrl(event).addPathSegments("tickets/validate").build(), session, json.encodeToString(check))
+
+    override suspend fun search(session: StaffSession, event: StaffEvent, type: String, term: String, status: IncidentStatus?, offset: Int): StaffSearchReply {
+        val url = eventUrl(event).addPathSegment("search").addQueryParameter("type", type)
+            .addQueryParameter("offset", offset.toString()).apply {
+                if (term.isNotBlank()) addQueryParameter(if (type == "incidents") "id" else "text", term)
+                if (status != null) addQueryParameter("status", status.name)
+            }.build()
+        return exchange(url, session)
+    }
+
+    override suspend fun companions(session: StaffSession, event: StaffEvent, id: String): EventCompanions {
+        requireReply(isIncidentUuid(id), ApiProblem.InvalidInput)
+        return exchange(incidentUrl(event).addPathSegment(id).addPathSegment("companions").build(), session)
+    }
+
+    override suspend fun venue(session: StaffSession, event: StaffEvent): StaffVenue =
+        exchange<StaffVenue>(eventUrl(event).addPathSegment("venue").build(), session).also { context ->
+            val zoneIds = context.zones.map { it.id }.toSet()
+            requireReply(context.eventId == event.id && context.venue.venue.isNotBlank() &&
+                context.zones.all { it.id.isNotBlank() && it.name.isNotBlank() } &&
+                context.points.all { it.zoneId in zoneIds && it.name.isNotBlank() && it.reference.isNotBlank() })
+        }
 
     override suspend fun operate(session: StaffSession, event: StaffEvent, command: IncidentCommand): OperationReply {
         requireReply(isIncidentUuid(command.incidentId) && isIncidentUuid(command.body.operationId) && command.body.version > 0,

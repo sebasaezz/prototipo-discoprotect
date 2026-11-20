@@ -1,12 +1,14 @@
 # Discoprotect
 
-Prototipo universitario de seguridad para eventos masivos. AppAsistente crea un SOS con un botón y abre un chat. AppPersonal lee NFC, consulta fichas autorizadas y gestiona la atención. GestiónWeb ofrece al organizador un resumen operativo, la cola y el historial de su evento autorizado.
+Prototipo universitario de seguridad para eventos masivos. AppAsistente gestiona ficha, NFC, chat SOS, entrada QR, acompañantes y promociones. AppPersonal usa NFC, atiende y localiza incidentes, consulta el recinto y valida entradas. GestiónWeb administra la operación, el recinto, los guardias y los servicios de cada evento.
 
-**Estado.** H7–H7.3 se integraron a `main` por el PR #7 (merge `8f5439e`) con 6/6 comprobaciones físicas del flujo principal aprobadas. H8.1 incorpora el dashboard en `codex/discoprotect-h8`. [Flujo actual](docs/current-workflow.md) · [PR #7](https://github.com/sebasaezz/prototipo-discoprotect/pull/7) · [Checkpoint H7.3](docs/checkpoints/h7-3-2026-11-17.md)
+**Rama de revisión.** `codex/discoprotect-final-h10` integra H8.2 con el PR #8 y añade H8.3–H10. La evidencia de la rama y la aceptación física histórica están en [aceptación final](docs/checkpoints/final-acceptance.md) y [checkpoint H7.3](docs/checkpoints/h7-3-2026-11-17.md).
 
 ## Instalación rápida
 
 Usa Node.js **22.16.0 o posterior**, npm, JDK 21 y SDK Android 36. Configura `ANDROID_HOME` o `sdk.dir` en un `local.properties` local. Android usa Gradle Wrapper 8.13 y requiere API 26 o posterior en los teléfonos.
+
+Para una demo nueva en Windows, instala las dependencias de cada módulo con `npm ci`, configura los PIN en `backend/.env` y ejecuta `./scripts/demo-final.ps1` desde la raíz. El script crea una base nueva y levanta Fastify. Usa `-Lan` para teléfonos en la red privada y `-EnableAI` para habilitar el chat remoto. El [guion final](docs/demo-final.md) incluye instalación, roles, datos semilla y recuperación. `./scripts/validate-final.ps1` ejecuta las suites y genera el build web y ambos APK.
 
 ### Backend
 
@@ -25,6 +27,8 @@ npm start
 En otra terminal, desde `web/`, ejecuta `npm ci` y `npm run dev`. Abre `http://127.0.0.1:5173` e ingresa el PIN del organizador. Si cambiaste el puerto u origen de Fastify, define `DISCOPROTECT_API_ORIGIN` para Vite.
 
 El Dashboard usa las solicitudes del evento devueltas por Fastify y muestra cero cuando la cola activa está vacía. En **Incidentes** están la cola, el historial y las acciones de H7.3. [GestiónWeb H8.1](docs/current-workflow.md#gestiónweb-h81)
+
+En **Recinto y zonas** puedes editar el recinto, gestionar zonas y registrar puntos operativos. **Eventos**, **Personal**, **Estadísticas**, **Anuncios y promociones**, **Entradas** y **Búsqueda** operan sobre el evento seleccionado. [Flujo de trabajo](docs/current-workflow.md)
 
 ### Android
 

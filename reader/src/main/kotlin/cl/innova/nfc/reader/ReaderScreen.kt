@@ -38,12 +38,19 @@ internal fun ReaderScreen(state: ReaderUiState, nfc: NfcAvailability, actions: R
 private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     var confirmation by remember(state.event?.id, state.staffId) { mutableStateOf<Pair<Incident, IncidentAction>?>(null) }
     var selectedId by remember(state.event?.id, state.staffId) { mutableStateOf<String?>(null) }
+    var services by remember(state.event?.id, state.staffId) { mutableStateOf(false) }
     var chatVisible by remember(selectedId) { mutableStateOf(false) }
     val selected = state.incidents?.firstOrNull { it.id == selectedId }
     BackHandler(selected != null) {
         if (chatVisible) chatVisible = false else selectedId = null
     }
     var note by remember(confirmation) { mutableStateOf("") }
+    if (services && state.event != null) {
+        BackHandler { services = false }
+        TextButton(onClick = { services = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a incidentes") }
+        StaffServicesScreen(actions) { id -> services = false; selectedId = id }
+        return
+    }
     if (selected != null && chatVisible) {
         Heading("Conversación", selected.requesterName)
         TextButton(onClick = { chatVisible = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a los detalles") }
@@ -66,6 +73,9 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     } else {
         TextButton(onClick = { selectedId = null }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Volver a incidentes") }
         Heading("Detalle de la solicitud", selected.requesterName)
+        if (selected.status.active && selected.assignedStaff?.id == state.staffId && state.staffId != null) {
+            key(selected.id, state.staffId) { StaffCompanions(selected.id, actions) }
+        }
     }
     OutlinedButton(onClick = actions::refreshIncidents, enabled = !state.incidentsLoading && !state.incidentWriting,
         modifier = Modifier.heightIn(min = 48.dp)) {
@@ -91,6 +101,9 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
     }
     if (selected == null) {
         TextButton(onClick = actions::continueReading, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ir al lector NFC") }
+        if (state.event != null) TextButton(onClick = { services = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("Recinto, control de entradas y búsqueda")
+        }
         TextButton(onClick = actions::configure, modifier = Modifier.heightIn(min = 48.dp)) { Text("Configuración y evento") }
         state.incidents?.let { incidents ->
             val (active, history) = incidents.partition { it.status.active }
@@ -123,6 +136,9 @@ private fun IncidentsPage(state: ReaderUiState, actions: ReaderController) {
             }
         }
         selected.dispatch?.let { DispatchPanel(it, selected, actions, state.staffId) }
+        key(state.staffId, state.event?.id, selected.id) {
+            VenuePanel(selected.id, actions)
+        }
         if (selected.triage != null && !selected.hasConversation) {
             if (state.triageId == selected.id) TriagePanel(state, selected, actions)
             else TextButton(onClick = { actions.openTriage(selected.id) }, modifier = Modifier.heightIn(min = 48.dp)) {
@@ -178,15 +194,35 @@ private fun QueueCard(incident: Incident, label: String, open: () -> Unit) {
 
 @Composable
 private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, actions: ReaderController, staffId: String?) {
+    dispatch.operational?.let { report ->
+        Field("Situación reportada", report.situation)
+        Field("Por verificar", report.pending.joinToString(" · "))
+        if (report.guidance != null) Text("Orientación de emergencia registrada")
+        report.risks.forEach { risk ->
+            Field("Mensaje ${risk.messageSeq}", "«${risk.quote}»" + if (risk.uncertain) " · Reporte incierto" else "")
+        }
+    }
     val analysis = dispatch.analysis
     if (analysis != null) {
         Field("Resumen sugerido por IA", analysis.summary)
         Field("Categoría sugerida", analysis.category.label)
         if (analysis.uncertainty.isNotEmpty()) Field("Por verificar", analysis.uncertainty.joinToString(" · "))
     }
-    dispatch.inferredLocation?.let { Field("Ubicación inferida", it.label()) }
     dispatch.declaredLocation?.let { Field("Ubicación declarada", it.label()) }
-    dispatch.confirmedLocation?.let { Field("Ubicación confirmada", it.label()) }
+    dispatch.confirmedLocation?.let { Field("Ubicación confirmada por el guardia", it.label()) }
+    dispatch.attendeeLocation?.let { location ->
+        Field(location.source.label, location.zoneName)
+        Field("Evidencia original", "«${location.evidence.quote}»")
+        if (dispatch.confirmedLocation == null) Field("Estado de la ubicación", "Pendiente de verificación en terreno.")
+    }
+    dispatch.inferredLocation?.let {
+        Field("Ubicación probable", it.label())
+        (dispatch.locationEvidence ?: analysis?.locationEvidence)?.let { evidence ->
+            val feature = evidence.feature?.let { clue -> " En esta zona se describe «$clue»." }.orEmpty()
+            Field("Motivo", "El asistente dijo «${evidence.quote}».$feature")
+        }
+        Field("Estado de la inferencia", "Inferida por IA, pendiente de verificación en terreno.")
+    }
 
     if (incident.assignedStaff?.id == null || incident.assignedStaff.id != staffId ||
         incident.status !in setOf(IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS)) return
@@ -224,7 +260,9 @@ private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, action
         val editable = pending == null && !busy
         DispatchChoice(priority?.label ?: "Sin prioridad humana", editable, listOf(null) + DispatchPriority.entries,
             { it?.label ?: "Sin prioridad humana" }) { priority = it }
-        DispatchChoice(loaded.zones.firstOrNull { it.id == zone }?.name ?: "Zona por confirmar", editable,
+        val zoneName = loaded.zones.firstOrNull { it.id == zone }?.name
+            ?: current.confirmedLocation?.takeIf { it.zoneId == zone }?.zoneName
+        DispatchChoice(zoneName ?: "Zona por confirmar", editable,
             listOf(null) + loaded.zones, { it?.name ?: "Zona por confirmar" }) { zone = it?.id }
         OutlinedTextField(reference, { if (it.length <= 160) reference = it }, enabled = editable,
             label = { Text("Referencia confirmada") }, modifier = Modifier.fillMaxWidth())
@@ -261,6 +299,46 @@ private fun DispatchPanel(dispatch: IncidentDispatch, incident: Incident, action
         }, enabled = !busy && (pending != null || reason.isNotBlank()), modifier = Modifier.heightIn(min = 48.dp)) {
             Text(if (pending != null && !busy) "Reintentar revisión" else "Guardar revisión")
         }
+    }
+}
+
+@Composable
+private fun VenuePanel(id: String, actions: ReaderController) {
+    var context by remember { mutableStateOf<StaffVenue?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    TextButton(onClick = {
+        if (context != null) context = null
+        else {
+            loading = true
+            error = false
+            scope.launch {
+                try { context = actions.venue(id) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { error = true }
+                finally { loading = false }
+            }
+        }
+    }, enabled = !loading, modifier = Modifier.heightIn(min = 48.dp)) {
+        Text(if (context == null) "Ver recinto y puntos operativos" else "Cerrar información del recinto")
+    }
+    if (loading) Text("Consultando recinto…")
+    if (error) Text("No se pudo consultar el recinto. Vuelve a intentar.")
+    context?.let { info ->
+        Field("Recinto", info.venue.venue)
+        info.venue.description?.let { Field("Descripción operativa", it) }
+        info.venue.accessNotes?.let { Field("Referencias de acceso", it) }
+        info.venue.responseNotes?.let { Field("Referencias para emergencias", it) }
+        info.zones.forEach { zone ->
+            listOfNotNull(zone.description, zone.reference).takeIf { it.isNotEmpty() }?.let {
+                Field(zone.name, it.joinToString(" · "))
+            }
+        }
+        info.points.forEach { point ->
+            Field("${point.kind.label} · ${point.name}", "${point.zoneName} · ${point.reference}")
+        }
+        if (info.points.isEmpty()) Text("Sin puntos operativos activos registrados.")
     }
 }
 

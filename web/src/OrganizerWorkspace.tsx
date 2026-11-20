@@ -1,12 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ApiError, events, messageFor, type Event, type Session } from './api.js';
 import { DashboardOverview } from './DashboardOverview.js';
 import { IncidentSync } from './IncidentSync.js';
 import { IncidentAdministration } from './IncidentAdministration.js';
 import { OrganizerLayout } from './OrganizerLayout.js';
 import { resetSection, sectionForHash, type Section } from './organizerNavigation.js';
-import { PendingSection } from './PendingSection.js';
 import { useEventIncidents } from './useEventIncidents.js';
+import { VenuePage } from './VenuePage.js';
+import { StatisticsPage } from './StatisticsPage.js';
+import { StaffPage } from './StaffPage.js';
+import { EventAdministrationPage, PromotionsPage, SearchPage, TicketsPage } from './EventServicesPages.js';
 
 export function OrganizerWorkspace({ session, onExpiry, onSignOut }: {
   session: Session;
@@ -47,6 +50,9 @@ export function OrganizerWorkspace({ session, onExpiry, onSignOut }: {
 
   const event = available.find(option => option.id === selected);
   const section = sectionForHash(hash);
+  const updateEventLabel = useCallback((id: string, { name, venue }: { name: string; venue: string }) => {
+    setAvailable(current => current.map(option => option.id === id ? { ...option, name, venue } : option));
+  }, []);
 
   return <OrganizerLayout event={event} section={section} hash={hash} available={available}
     onSignOut={onSignOut} onSelect={id => {
@@ -54,7 +60,13 @@ export function OrganizerWorkspace({ session, onExpiry, onSignOut }: {
       setHash(window.location.hash);
       setSelected(id);
     }}>
-    {event ? <EventSections key={event.id} eventId={event.id} session={session} onExpiry={onExpiry} section={section} />
+    {section === 'eventos' ? <EventAdministrationPage key={event?.id} event={event} session={session} onExpiry={onExpiry}
+      onSaved={saved => {
+        setAvailable(current => current.some(item => item.id === saved.id)
+          ? current.map(item => item.id === saved.id ? saved : item) : [...current, saved]);
+        setSelected(saved.id);
+      }} /> : event ? <EventSections key={event.id} eventId={event.id} session={session} onExpiry={onExpiry}
+      section={section} onVenueRead={updateEventLabel} />
       : <section className="panel workspace-message" aria-label="Acceso al evento">
         {loading && <p role="status">Consultando eventos autorizados…</p>}
         {error && <>
@@ -72,11 +84,12 @@ export function OrganizerWorkspace({ session, onExpiry, onSignOut }: {
   </OrganizerLayout>;
 }
 
-function EventSections({ eventId, session, onExpiry, section }: {
+function EventSections({ eventId, session, onExpiry, section, onVenueRead }: {
   eventId: string;
   session: Session;
   onExpiry: () => void;
   section: Section;
+  onVenueRead: (id: string, venue: { name: string; venue: string }) => void;
 }) {
   const { items, lastRead, error, refresh, invalidate, onAccessLost } = useEventIncidents(session, eventId, onExpiry);
 
@@ -86,6 +99,11 @@ function EventSections({ eventId, session, onExpiry, section }: {
     {section === 'dashboard' && items && <DashboardOverview items={items} />}
     {items && <IncidentAdministration visible={section === 'incidentes'} items={items}
       session={session} event={eventId} onExpiry={onExpiry} onAccessLost={onAccessLost} refresh={invalidate} />}
-    {section !== 'dashboard' && section !== 'incidentes' && <PendingSection section={section} />}
+    {section === 'recinto' && <VenuePage eventId={eventId} session={session} onExpiry={onExpiry} onVenueRead={onVenueRead} />}
+    {section === 'estadisticas' && <StatisticsPage eventId={eventId} session={session} onExpiry={onExpiry} />}
+    {section === 'personal' && <StaffPage eventId={eventId} session={session} onExpiry={onExpiry} />}
+    {section === 'anuncios' && <PromotionsPage eventId={eventId} session={session} onExpiry={onExpiry} />}
+    {section === 'entradas' && <TicketsPage eventId={eventId} session={session} onExpiry={onExpiry} />}
+    {section === 'buscar' && <SearchPage eventId={eventId} session={session} onExpiry={onExpiry} />}
   </>;
 }

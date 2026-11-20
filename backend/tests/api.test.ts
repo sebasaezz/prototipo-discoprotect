@@ -311,8 +311,9 @@ test('SOS validates role, session, event and zone and limits the operational vie
   const headers = await login();
   const staff = await login('guardia', pins.STAFF);
   const organizer = await login('organizador', pins.ORGANIZER);
-  db.exec(`INSERT INTO events SELECT 'otro', name, venue, starts_at, ends_at, status FROM events WHERE id = 'demo-festival';
-    INSERT INTO zones VALUES ('otro', 'otra-zona', 'Otra zona');
+  db.exec(`INSERT INTO events (id, name, venue, starts_at, ends_at, status)
+    SELECT 'otro', name, venue, starts_at, ends_at, status FROM events WHERE id = 'demo-festival';
+    INSERT INTO zones (event_id, id, name) VALUES ('otro', 'otra-zona', 'Otra zona');
     INSERT INTO event_memberships VALUES ('other-attendee', 'otro', 'demo-antonia', 'ATTENDEE');`);
   const zones = prefix + '/events/' + eventId + '/zones';
   assert.equal((await app.inject({ url: zones, headers })).json().zones.length, 5);
@@ -381,7 +382,9 @@ test('two distinct guards compete and the winner can progress with durable exact
   const url = `${eventIncidents}/${id}`;
   const command = (version: number) => ({ version, operationId: randomUUID() });
   const claims = [command(1), command(1)];
-  assert.equal((await request(url + '/start', guards[0], command(1))).statusCode, 409);
+  const beforeClaim = await request(url + '/start', guards[0], command(1));
+  assert.equal(beforeClaim.statusCode, 403);
+  assert.equal(beforeClaim.json().error.code, 'FORBIDDEN');
   for (const token of [attendee, organizer]) assert.equal((await request(url + '/claim', token, command(1))).statusCode, 403);
   const outcomes = await Promise.all(guards.map((token, index) => request(url + '/claim', token, claims[index])));
   assert.deepEqual(outcomes.map(result => result.statusCode).sort(), [200, 409]);
@@ -393,6 +396,9 @@ test('two distinct guards compete and the winner can progress with durable exact
   assert.deepEqual(conflict.error.details, { currentStatus: 'ASSIGNED', currentVersion: 2 });
   assert.equal((await request(url + '/start', loser, command(2))).statusCode, 403);
   assert.equal((await request(url + '/start', winner, claims[index])).statusCode, 409);
+  const stale = await request(url + '/start', winner, command(1));
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.json().error.code, 'VERSION_CONFLICT');
   assert.equal((await request(url + '/start', winner, command(2))).statusCode, 200);
   assert.equal((await request(url + '/resolve', winner, { ...command(3), resolutionNote: 'x'.repeat(241) })).statusCode, 400);
   assert.equal((await request(url + '/resolve', winner, { ...command(3), resolutionNote: '  Atención completada ' })).statusCode, 200);

@@ -116,8 +116,7 @@ export function events(db: Db, personId: string) {
     WHERE m.person_id = ? ORDER BY e.starts_at, e.id`).all(personId);
 }
 
-export function updateEvent(db: Db, id: string, owner: string, value: z.infer<typeof eventEdit>) {
-  db.prepare('UPDATE events SET name = ?, venue = ? WHERE id = ?').run(value.name, value.venue, id);
+export function eventForMember(db: Db, id: string, owner: string) {
   return db.prepare(`SELECT ${eventFields} FROM events e JOIN event_memberships m ON m.event_id = e.id
     WHERE e.id = ? AND m.person_id = ?`).get(id, owner);
 }

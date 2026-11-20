@@ -12,9 +12,10 @@ export type WorkerOptions = {
   dailyLimit: number;
 };
 
-export function reserveDailyCall(db: Db, now: number, limit: number) {
-  return db.prepare(`INSERT INTO triage_daily_usage (day_utc, reserved) VALUES (?, 1)
-    ON CONFLICT(day_utc) DO UPDATE SET reserved = reserved + 1 WHERE reserved < ?`)
+export function reserveDailyCall(db: Db, now: number, limit: number, scope: 'triage' | 'chat' = 'triage') {
+  const [table, day] = scope === 'chat' ? ['chat_ai_daily_usage', 'day'] : ['triage_daily_usage', 'day_utc'];
+  return db.prepare(`INSERT INTO ${table} (${day}, reserved) VALUES (?, 1)
+    ON CONFLICT(${day}) DO UPDATE SET reserved = reserved + 1 WHERE reserved < ?`)
     .run(new Date(now).toISOString().slice(0, 10), limit).changes > 0;
 }
 

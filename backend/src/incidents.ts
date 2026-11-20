@@ -89,7 +89,7 @@ function findIncident(db: Db, id: string, scope: 'event' | 'owner', value: strin
 }
 
 export function zones(db: Db, eventId: string) {
-  return db.prepare('SELECT id, name FROM zones WHERE event_id = ? ORDER BY name, id').all(eventId);
+  return db.prepare('SELECT id, name FROM zones WHERE event_id = ? AND active = 1 ORDER BY name, id').all(eventId);
 }
 
 export function ownIncidents(db: Db, eventId: string, personId: string) {
@@ -99,11 +99,19 @@ export function ownIncidents(db: Db, eventId: string, personId: string) {
 }
 
 export function eventIncidents(db: Db, eventId: string, dispatch?: DispatchPolicy) {
+  if (dispatch) return eventDispatchIncidents(db, eventId, dispatch);
+  return eventIncidentRows(db, eventId).map(row => eventView(db, row));
+}
+
+function eventIncidentRows(db: Db, eventId: string) {
   const rows = db.prepare(`${selection} WHERE i.event_id = ? ORDER BY i.created_at DESC, i.id DESC`)
     .all(eventId) as Incident[];
-  if (!dispatch) return rows.map(row => eventView(db, row));
+  return rows;
+}
+
+export function eventDispatchIncidents(db: Db, eventId: string, dispatch: DispatchPolicy) {
   const now = Date.now();
-  return rows.map(row => {
+  return eventIncidentRows(db, eventId).map(row => {
     const item = eventView(db, row);
     return { ...item, dispatch: dispatchView(db, row, item.triage, dispatch, now) };
   }).sort(compareDispatch);
@@ -142,7 +150,7 @@ export function incidentDispatch(db: Db, eventId: string, id: string, policy: Di
 }
 
 export function createIncident(db: Db, session: Session, eventId: string, input: z.output<typeof createInput>,
-  triageEnabled: boolean) {
+  triageEnabled: boolean, firstAid = true) {
   return atomic(db, () => {
     requireMembership(db, session, eventId);
     if (db.prepare('SELECT 1 FROM incident_tombstones WHERE requester_person_id = ? AND client_request_id = ?')
@@ -163,8 +171,8 @@ export function createIncident(db: Db, session: Session, eventId: string, input:
       const receipt = creationReceipt(db, previous.id, session.personId, mode, first);
       return { created: false, body: receipt ? { incident, ...receipt } : incident };
     }
-    if (input.zoneId !== null && !db.prepare('SELECT 1 FROM zones WHERE event_id = ? AND id = ?').get(eventId, input.zoneId)) {
-      throw new ApiError(400, 'INVALID_INPUT', 'La zona no pertenece al evento');
+    if (input.zoneId !== null && !db.prepare('SELECT 1 FROM zones WHERE event_id = ? AND id = ? AND active = 1').get(eventId, input.zoneId)) {
+      throw new ApiError(400, 'INVALID_INPUT', 'Selecciona una zona activa de este evento');
     }
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -173,7 +181,7 @@ export function createIncident(db: Db, session: Session, eventId: string, input:
       .run(id, eventId, session.personId, input.zoneId, input.locationText, input.clientRequestId, now, now,
         input.reasonCode, description);
     initializeTriage(db, id, Date.parse(now), !mode && triageEnabled, input.reasonCode, description);
-    const receipt = mode ? createConversation(db, id, mode, session.personId, first, now) : undefined;
+    const receipt = mode ? createConversation(db, id, mode, session.personId, first, now, firstAid) : undefined;
     const incident = ownView(findIncident(db, id, 'owner', session.personId));
     return { created: true, body: receipt ? { incident, ...receipt } : incident };
   });

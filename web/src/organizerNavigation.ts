@@ -2,9 +2,12 @@ export const sectionLabels = {
   dashboard: 'Dashboard',
   incidentes: 'Incidentes',
   recinto: 'Recinto y zonas',
+  eventos: 'Eventos',
   personal: 'Personal',
   estadisticas: 'Estadísticas',
   anuncios: 'Anuncios y promociones',
+  entradas: 'Entradas',
+  buscar: 'Búsqueda',
 } as const;
 
 export type Section = keyof typeof sectionLabels;

@@ -40,7 +40,10 @@ test('003 preserves H5 data, indexes and keys and can be run repeatedly', t => {
   assert.deepEqual(db.prepare(`SELECT ${legacyFields} FROM incidents ORDER BY id`).all(), rows);
   assert.deepEqual(snapshot(), before);
   assert.equal(db.prepare("SELECT count(*) AS count FROM people WHERE demo_key = 'guardia2'").get()?.count, 1);
-  assert.deepEqual(indexes.all(), beforeIndexes);
+  const finalIndexes = indexes.all();
+  assert.deepEqual(finalIndexes.filter(index => index.name !== 'incidents_one_active_per_guard'), beforeIndexes);
+  assert.match(String(finalIndexes.find(index => index.name === 'incidents_one_active_per_guard')?.sql),
+    /CREATE UNIQUE INDEX .* WHERE status IN \('ASSIGNED', 'IN_PROGRESS'\)/s);
   assert.equal(db.prepare('SELECT count(*) AS count FROM incidents WHERE version = 1 AND assigned_staff_id IS NULL').get()?.count, 2);
   assert.equal(db.prepare('PRAGMA foreign_keys').get()?.foreign_keys, 1);
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);

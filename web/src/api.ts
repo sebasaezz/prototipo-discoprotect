@@ -19,7 +19,13 @@ export type Dispatch = {
   effectivePriority: Priority; prioritySource: string; priorityReasons: string[];
   elapsedSeconds: number; evaluatedAt: string; revision: number; humanPriority: Priority | null;
   confirmedLocation: Location | null; declaredLocation: Location | null; inferredLocation: Location | null;
-  analysis: { summary: string; uncertainty: string[]; observedAt: string } | null;
+  locationEvidence?: { messageSeq: number; quote: string; feature: string | null } | null;
+  attendeeLocation?: { zoneId: string; zoneName: string; source: 'CONFIRMED_AI' | 'INDICATED'; messageSeq: number;
+    evidence: { messageSeq: number; quote: string; feature: string | null } } | null;
+  operational?: { situation: string; pending: string[]; guidance: string | null;
+    risks: { kind: string; messageSeq: number; quote: string; uncertain: boolean }[] } | null;
+  analysis: { summary: string; uncertainty: string[]; observedAt: string;
+    locationEvidence?: { messageSeq: number; quote: string; feature: string | null } } | null;
 };
 type DispatchAudit = {
   dispatch: Dispatch;
@@ -80,23 +86,27 @@ export const purgeDemo = (session: Session, event: string, command: PurgeCommand
 export const withdrawIncident = (session: Session, incident: Incident, command: Withdrawal) =>
   incidentCommand(session, eventIncidentsPath(incident.eventId) + '/' + encodeURIComponent(incident.id) + '/withdraw', command);
 
-async function request<T>(path: string, signal: AbortSignal, session?: Session, pin?: string): Promise<T> {
+export async function request<T>(path: string, signal: AbortSignal, session?: Session,
+  command?: { method: 'POST' | 'PATCH'; body: unknown }): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (session) headers.Authorization = `Bearer ${session.token}`;
-  if (pin !== undefined) headers['Content-Type'] = 'application/json';
+  if (command) headers['Content-Type'] = 'application/json';
   const response = await fetch(`/api/v1/${path}`, {
-    method: pin === undefined ? 'GET' : 'POST',
+    method: command?.method ?? 'GET',
     headers,
     signal,
     cache: 'no-store',
     redirect: 'error',
-    body: pin === undefined ? undefined : JSON.stringify({ account: 'organizador', pin }),
+    body: command ? JSON.stringify(command.body) : undefined,
   });
   if (!response.ok) {
     const message = response.status === 401
-      ? pin === undefined ? 'La sesión venció. Vuelve a iniciar sesión.' : 'El servidor rechazó el PIN de organizador.'
+      ? session ? 'La sesión venció. Vuelve a iniciar sesión.' : 'El servidor rechazó el PIN de organizador.'
       : response.status === 403 ? 'La cuenta no está autorizada para este evento.'
-        : 'El servidor no pudo completar la consulta.';
+        : response.status === 409 ? 'La configuración cambió. Revisa la versión vigente.'
+          : response.status === 400 ? 'Revisa los campos enviados.'
+            : response.status === 404 ? 'El elemento solicitado ya no está disponible.'
+              : 'El servidor no pudo completar la consulta.';
     throw new ApiError(response.status, message);
   }
   if (!response.headers.get('content-type')?.startsWith('application/json')) {
@@ -106,7 +116,8 @@ async function request<T>(path: string, signal: AbortSignal, session?: Session, 
 }
 
 export async function login(pin: string, signal: AbortSignal): Promise<Session> {
-  const result = await request<Session & { role: string }>('demo/sessions', signal, undefined, pin);
+  const result = await request<Session & { role: string }>('demo/sessions', signal, undefined,
+    { method: 'POST', body: { account: 'organizador', pin } });
   if (result.role !== 'ORGANIZER' || !/^[\w-]{43}$/.test(result.token)
       || !Number.isFinite(Date.parse(result.expiresAt)) || Date.parse(result.expiresAt) <= Date.now()) {
     throw new ApiError(403, 'El servidor no confirmó una sesión de organizador vigente.');

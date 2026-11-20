@@ -12,7 +12,7 @@ try {
   migrate(db);
   const { key, ...options } = readTriageConfig(process.env);
   const provider = key ? openAi(options.model, key) : null;
-  const app = createApp(db, config.pins, true, provider !== null, config.dispatchThresholds, config.demoPurgeEnabled);
+  const app = createApp(db, config.pins, true, provider !== null, config.dispatchThresholds, config.demoPurgeEnabled, config.firstAid);
   const { key: chatKey, ...chatOptions } = readChatConfig(process.env);
   const chatWorker = createChatWorker(db, { ...chatOptions, provider: chatKey ? openAiChat(chatOptions.model, chatKey) : null },
     event => app.log.info(event, 'Interpretación del chat'));

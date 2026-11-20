@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { requireMembership, type Session } from './auth.js';
+import { attendeeChatLocation, catalogLocation } from './chat-location.js';
+import { readIncidentMemory } from './chat-risk.js';
+import { operationalSummary } from './chat-response.js';
 import { priority, type Analysis, type Priority } from './chat-analysis.js';
 import { atomic, type Db } from './db.js';
 import { ApiError } from './errors.js';
@@ -102,12 +105,21 @@ export function evaluatePriority(
 
 export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof triageView>, policy: DispatchPolicy, now: number) {
   const row = db.prepare(`${reviews} ORDER BY r.revision DESC LIMIT 1`).get(source.id) as ReviewRow | undefined;
-  const assessmentRow = db.prepare(`SELECT danger_assessment AS value FROM incident_dispatch_reviews
+  const assessmentRow = db.prepare(`SELECT danger_assessment AS value, observed_attendee_seq AS observedSeq, reviewed_at AS reviewedAt
+    FROM incident_dispatch_reviews
     WHERE incident_id = ? AND danger_assessment <> 'UNCHANGED' ORDER BY revision DESC LIMIT 1`).get(source.id);
-  const danger = (assessmentRow?.value ?? 'UNCHANGED') as Assessment;
-  const results = db.prepare(`SELECT input_seq AS seq, result_json AS json, finished_at AS finishedAt
-    FROM incident_chat_ai_runs WHERE incident_id = ? AND status = 'COMPLETE' ORDER BY input_seq`).all(source.id) as
-    { seq: number; json: string; finishedAt: number }[];
+  const memory = readIncidentMemory(db, source.id);
+  const localRisk = memory.risks.at(-1);
+  const observedAfterReview = localRisk && assessmentRow && (typeof assessmentRow.observedSeq === 'number'
+    ? localRisk.messageSeq > assessmentRow.observedSeq
+    : String(db.prepare('SELECT created_at FROM incident_messages WHERE incident_id = ? AND seq = ?')
+      .get(source.id, localRisk.messageSeq)?.created_at ?? '') > String(assessmentRow.reviewedAt));
+  const danger = (assessmentRow?.value === 'CLEARED' && observedAfterReview ? 'UNCHANGED'
+    : assessmentRow?.value ?? 'UNCHANGED') as Assessment;
+  const results = db.prepare(`SELECT input_seq AS seq, result_json AS json, finished_at AS finishedAt, inferred_zone_name AS zoneName
+    FROM incident_chat_ai_runs WHERE incident_id = ? AND status = 'COMPLETE' AND reason IS NOT 'LOCAL_LOCATION'
+    ORDER BY input_seq`).all(source.id) as
+    { seq: number; json: string; finishedAt: number; zoneName: string | null }[];
   const analyses = results.map(result => ({ ...result, analysis: JSON.parse(result.json) as Analysis }));
   const latest = analyses.at(-1);
   const analysis = latest?.analysis ?? null;
@@ -118,26 +130,39 @@ export function dispatchView(db: Db, source: Source, triage: ReturnType<typeof t
   const latestAiPriority = analysis?.severity ?? oldAiPriority;
   const humanPriority = row ? row.humanPriority : legacyPriority(triage.latestReview?.urgency);
   const elapsedSeconds = Math.max(0, Math.floor((now - Date.parse(source.createdAt)) / 1000));
+  const latestRisk = localRisk && (!evidence || localRisk.messageSeq > evidence.evidence.seq) ? localRisk : null;
+  const provisional = memory.consciousness?.value === 'ALTERED' && latestAiPriority !== 'P0' ? 'P1' : latestAiPriority;
   const { effectivePriority, prioritySource, priorityReasons } = evaluatePriority(
-    { ...source, elapsedSeconds }, humanPriority, latestAiPriority, Boolean(evidence), danger, policy,
+    { ...source, elapsedSeconds }, humanPriority, provisional,
+    Boolean(evidence || localRisk), danger, policy,
   );
-  const inferredZone = analysis?.zoneId ? db.prepare('SELECT name FROM zones WHERE event_id = ? AND id = ?')
-    .get(source.eventId, analysis.zoneId) : undefined;
-  const declared = source.zoneName || source.locationText || analysis?.location
-    ? { zoneId: source.zoneId, zoneName: source.zoneName, text: source.locationText ?? analysis?.location?.quote ?? null } : null;
-  const inferred = inferredZone && analysis?.zoneId
-    ? { zoneId: analysis.zoneId, zoneName: String(inferredZone.name), text: null } : null;
+  const localUrgent = prioritySource === 'AI' && effectivePriority === 'P1' && memory.consciousness?.value === 'ALTERED' &&
+    latestAiPriority !== 'P0' && latestAiPriority !== 'P1';
+  const locationRun = catalogLocation(db, source.id);
+  const location = locationRun?.location;
+  const declared = source.zoneName || source.locationText || location
+    ? { zoneId: source.zoneId, zoneName: source.zoneName, text: source.locationText ?? location?.quote ?? null } : null;
+  const inferred = locationRun?.inferred ?? null;
   return {
-    effectivePriority, prioritySource, priorityReasons, initialAiPriority, latestAiPriority, humanPriority,
+    effectivePriority,
+    prioritySource: prioritySource === 'AI_PROVISIONAL' && latestRisk ? 'LOCAL_RISK' : localUrgent ? 'LOCAL_URGENT' : prioritySource,
+    priorityReasons: prioritySource === 'AI_PROVISIONAL' && latestRisk
+      ? ['Señal crítica reportada en el chat, pendiente de verificación', ...priorityReasons.filter(reason => reason !== 'Peligro textual identificado por IA')]
+      : localUrgent ? ['Posible desmayo reportado, pendiente de verificación'] : priorityReasons,
+    initialAiPriority, latestAiPriority, humanPriority,
     policyVersion: policy.version, evaluatedAt: new Date(now).toISOString(), elapsedSeconds,
     revision: row?.revision ?? 0, confirmedLocation: confirmedLocation(row),
-    declaredLocation: declared, inferredLocation: inferred, dangerAssessment: danger,
-    criticalEvidence: critical && evidence ? {
+    declaredLocation: declared, inferredLocation: inferred, inferredAt: inferred ? locationRun?.observedAt ?? null : null,
+    locationEvidence: locationRun?.evidence ?? null,
+    attendeeLocation: attendeeChatLocation(db, source.id), dangerAssessment: danger,
+    operational: operationalSummary(memory),
+    criticalEvidence: latestRisk ? { kind: latestRisk.kind, messageSeq: latestRisk.messageSeq, analysisSeq: null } : critical && evidence ? {
       kind: evidence.kind, messageSeq: evidence.evidence.seq, analysisSeq: critical.seq,
     } : null,
     analysis: analysis && latest ? {
       category: analysis.category, summary: analysis.summary, uncertainty: analysis.uncertainty,
       observedAt: new Date(latest.finishedAt).toISOString(), inputSeq: latest.seq,
+      ...(inferred && locationRun?.evidence ? { locationEvidence: locationRun.evidence } : {}),
     } : null,
   };
 }
@@ -162,7 +187,7 @@ export function dispatchAudit(db: Db, id: string, eventId: string, staff: boolea
     JOIN people p ON p.id = t.actor_person_id WHERE t.incident_id = ? ORDER BY t.applied_version`).all(id);
   return {
     reviews: history.map(reviewView), transitions,
-    ...(staff ? { zones: db.prepare('SELECT id, name FROM zones WHERE event_id = ? ORDER BY name, id').all(eventId) } : {}),
+    ...(staff ? { zones: db.prepare('SELECT id, name FROM zones WHERE event_id = ? AND active = 1 ORDER BY name, id').all(eventId) } : {}),
   };
 }
 
@@ -191,9 +216,10 @@ export function reviewDispatch<T>(db: Db, session: Session, eventId: string, id:
     if (loc?.zoneId && !db.prepare('SELECT 1 FROM zones WHERE event_id = ? AND id = ?').get(eventId, loc.zoneId)) {
       throw new ApiError(400, 'INVALID_INPUT', 'La zona no pertenece al evento');
     }
-    db.prepare(`INSERT INTO incident_dispatch_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    const observedSeq = db.prepare('SELECT last_attendee_seq AS seq FROM incident_conversations WHERE incident_id = ?').get(id)?.seq;
+    db.prepare(`INSERT INTO incident_dispatch_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, eventId, revision + 1, operationId, hash, session.personId, new Date().toISOString(), humanPriority,
-      loc?.zoneId ?? null, loc?.text ?? null, dangerAssessment, reason);
+      loc?.zoneId ?? null, loc?.text ?? null, dangerAssessment, reason, observedSeq ?? null);
     const saved = db.prepare(`${reviews} AND r.revision = ?`).get(id, revision + 1) as ReviewRow;
     return { review: reviewView(saved), dispatch: current(), replayed: false };
   });

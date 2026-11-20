@@ -347,6 +347,36 @@ internal class ReaderController(
         remote.dispatch(active, event, id)
     }
 
+    suspend fun venue(id: String) = chatRequest(id) { remote, active, event ->
+        remote.venue(active, event)
+    }
+
+    suspend fun venue() = eventService { remote, active, event -> remote.venue(active, event) }
+    suspend fun validateTicket(check: TicketCheck) = eventService { remote, active, event ->
+        remote.validateTicket(active, event, check)
+    }
+    suspend fun search(type: String, term: String, status: IncidentStatus?, offset: Int) = eventService { remote, active, event ->
+        remote.search(active, event, type, term, status, offset).results
+    }
+    suspend fun companions(id: String) = chatRequest(id) { remote, active, event ->
+        remote.companions(active, event, id).companions
+    }
+
+    private suspend fun <T> eventService(request: suspend (StaffApi, StaffSession, StaffEvent) -> T): T {
+        if (!checkExpiry()) throw ApiFailure(ApiProblem.Unauthorized)
+        val remote = api ?: throw ApiFailure(ApiProblem.Unavailable)
+        val active = session ?: throw ApiFailure(ApiProblem.Unauthorized)
+        val event = ui.event ?: throw ApiFailure(ApiProblem.Forbidden)
+        try {
+            return request(remote, active, event).also {
+                if (session !== active || api !== remote || ui.event?.id != event.id) throw CancellationException()
+            }
+        } catch (failure: ApiFailure) {
+            if (failure.problem == ApiProblem.Unauthorized && session === active) expire()
+            throw failure
+        }
+    }
+
     suspend fun reviewDispatch(id: String, body: DispatchReviewBody) = chatRequest(id) { remote, active, event ->
         remote.reviewDispatch(active, event, id, body)
     }.also { refreshIncidents() }
